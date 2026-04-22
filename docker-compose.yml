@@ -1,0 +1,20 @@
+services:
+  horygon-crm:
+    build: .
+    container_name: horygon-crm
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./horygon.db:/app/horygon.db
+    environment:
+      - PORT=3001
+      - DB_PATH=/app/horygon.db
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - BASE_URL=${BASE_URL}
+      - NODE_ENV=production
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}

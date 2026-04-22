@@ -1,0 +1,80 @@
+<!-- ═══════════════════════════════════════ -->
+<!-- SEZIONE CIG - aggiungere in index.html dopo section-mepa -->
+<!-- Aggiungere anche nella nav:
+<a class="nav-item" data-section="cig"><span class="nav-icon">📉</span> Stagionalità CIG</a>
+-->
+<!-- Aggiungere in navigateTo map:
+cig: loadCIG,
+-->
+<!-- Aggiungere script prima di </body>:
+<script src="/js/cig.js"></script>
+-->
+<!-- ═══════════════════════════════════════ -->
+
+    <section id="section-cig" class="section">
+      <div class="page-header">
+        <h1>📉 Stagionalità Bandi — ANAC CIG</h1>
+        <div class="header-actions">
+          <span id="cig-info" style="font-size:12px;color:var(--text-muted)"></span>
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('cig-upload-input').click()">↑ Upload CIG CSV</button>
+          <button class="btn btn-accent btn-sm" id="btn-sync-cig" onclick="syncCIG()">🔄 Scan CIG</button>
+        </div>
+      </div>
+      <input type="file" id="cig-upload-input" accept=".csv,.tsv" style="display:none" onchange="uploadCIG(this)">
+
+      <!-- NO DATA -->
+      <div id="cig-no-data" style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:48px;text-align:center">
+        <div style="font-size:56px;margin-bottom:16px">📅</div>
+        <h2 style="margin-bottom:12px">Nessun dato CIG disponibile</h2>
+        <p style="color:var(--text-muted);margin-bottom:24px;max-width:500px;margin-left:auto;margin-right:auto;line-height:1.6">
+          Carica il file CSV ANAC BandiCIG (117MB) per vedere la <strong>stagionalità mensile</strong> dei bandi —
+          quando le PA pubblicano di più, quando ordinare le scorte, mesi di picco per ogni prodotto.
+        </p>
+        <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+          <button class="btn btn-accent" onclick="document.getElementById('cig-upload-input').click()">↑ Carica CSV CIG</button>
+          <button class="btn btn-outline" onclick="syncCIG()">🔄 Scan data/cig/</button>
+        </div>
+        <div id="cig-upload-result" style="display:none;margin-top:16px;padding:12px;border-radius:8px;background:var(--bg-input);font-size:13px"></div>
+      </div>
+
+      <!-- DATI -->
+      <div id="cig-data" style="display:none">
+
+        <!-- Consigli operativi -->
+        <div class="dash-card" style="margin-bottom:16px">
+          <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">🧠 Consigli Operativi — Quando comprare e vendere</h3>
+          <div id="cig-consigli"></div>
+        </div>
+
+        <!-- Radar + Serie mensile -->
+        <div style="display:grid;grid-template-columns:1fr 2fr;gap:16px;margin-bottom:16px">
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">🕐 Stagionalità media</h3>
+            <canvas id="cig-radar" height="260"></canvas>
+          </div>
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">📈 Bandi per mese — confronto anni</h3>
+            <canvas id="cig-serie" height="200"></canvas>
+          </div>
+        </div>
+
+        <!-- Heatmap mese × prodotto -->
+        <div class="dash-card" style="margin-bottom:16px">
+          <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">🗓️ Heatmap — Bandi per prodotto e mese <span style="font-size:11px;font-weight:400">(più scuro = più bandi)</span></h3>
+          <div id="cig-heatmap"></div>
+        </div>
+
+        <!-- Province + Picchi -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">🗺️ Top Province <span style="font-size:11px;color:#f59e0b">🟡 Liguria</span> <span style="font-size:11px;color:#10b981">🟢 Lazio</span></h3>
+            <canvas id="cig-province" height="320"></canvas>
+          </div>
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">🏆 Mese di picco per prodotto</h3>
+            <div id="cig-picchi"></div>
+          </div>
+        </div>
+
+      </div>
+    </section>

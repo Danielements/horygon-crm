@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Horygon CRM</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body class="theme-dark">
+
+<!-- LOGIN -->
+<div id="login-screen">
+  <div class="login-box">
+    <div class="login-logo">H</div>
+    <h2>Horygon CRM</h2>
+    <p class="sub">Accedi al tuo gestionale</p>
+    <input type="email" id="login-email" placeholder="Email" autocomplete="email">
+    <input type="password" id="login-password" placeholder="Password" autocomplete="current-password">
+    <button class="btn-primary" onclick="doLogin()">Accedi</button>
+    <div class="login-sep">oppure</div>
+    <button class="btn-primary btn-google" onclick="window.location='/api/auth/google'">
+      <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+      Accedi con Google
+    </button>
+    <div id="setup-link" style="display:none;text-align:center;margin-top:8px">
+      <a href="#" onclick="showSetup()" style="color:var(--accent);font-size:13px">Prima configurazione →</a>
+    </div>
+    <p id="login-error" class="error-msg"></p>
+  </div>
+</div>
+
+<!-- SETUP -->
+<div id="setup-screen" style="display:none">
+  <div class="login-box">
+    <div class="login-logo">H</div>
+    <h2>Primo Accesso</h2>
+    <p class="sub">Crea il tuo account amministratore</p>
+    <input type="text" id="setup-nome" placeholder="Nome completo">
+    <input type="email" id="setup-email" placeholder="Email">
+    <input type="password" id="setup-password" placeholder="Password">
+    <button class="btn-primary" onclick="doSetup()">Crea Admin</button>
+    <a href="#" onclick="showLogin()" style="color:var(--text-muted);font-size:13px;text-align:center">← Torna al login</a>
+    <p id="setup-error" class="error-msg"></p>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app" style="display:none">
+
+  <aside id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-h">H</div>
+      <span class="logo-text">HORYGON</span>
+    </div>
+    <nav>
+      <div class="nav-group-label">Principale</div>
+      <a class="nav-item active" data-section="dashboard"><span class="nav-icon">◈</span> Dashboard</a>
+
+      <div class="nav-group-label">Gestione</div>
+      <a class="nav-item" data-section="clienti"><span class="nav-icon">👥</span> Clienti</a>
+      <a class="nav-item" data-section="fornitori"><span class="nav-icon">🏭</span> Fornitori</a>
+      <a class="nav-item" data-section="prodotti"><span class="nav-icon">📦</span> Prodotti</a>
+      <a class="nav-item" data-section="magazzino"><span class="nav-icon">🏪</span> Magazzino</a>
+
+      <div class="nav-group-label">Commerciale</div>
+      <a class="nav-item" data-section="ordini"><span class="nav-icon">📋</span> Ordini</a>
+      <a class="nav-item" data-section="ddt"><span class="nav-icon">🚚</span> DDT</a>
+      <a class="nav-item" data-section="container"><span class="nav-icon">🚢</span> Container CN</a>
+      <a class="nav-item" data-section="fatture"><span class="nav-icon">🧾</span> Fatture</a>
+
+      <div class="nav-group-label">Intelligence</div>
+      <a class="nav-item" data-section="cig"><span class="nav-icon">📉</span> Stagionalità CIG</a>
+
+      <a class="nav-item" data-section="mepa"><span class="nav-icon">📊</span> Analisi MEPA</a>
+      <a class="nav-item" data-section="analytics"><span class="nav-icon">🔬</span> Analisi Incrociata</a>
+      <a class="nav-item" data-section="attivita"><span class="nav-icon">📅</span> Attività CRM</a>
+      <a class="nav-item" data-section="documenti"><span class="nav-icon">📁</span> Documenti</a>
+      <a class="nav-item" data-section="mappa"><span class="nav-icon">🗺️</span> Mappa PA</a>
+      <a class="nav-item" id="nav-utenti" data-section="utenti" style="display:none"><span class="nav-icon">⚙️</span> Utenti</a>
+    </nav>
+
+    <div class="sidebar-bottom">
+      <div class="sidebar-user">
+        <div class="user-avatar" id="user-avatar">H</div>
+        <div class="user-info">
+          <div class="user-name" id="user-name">—</div>
+          <div class="user-role" id="user-role">—</div>
+        </div>
+      </div>
+      <div class="sidebar-actions">
+        <button class="btn-icon" onclick="toggleTema()" title="Cambia tema" id="btn-tema">🌙</button>
+        <button class="btn-icon" onclick="connectGoogle()" title="Connetti Google" id="btn-google">🔗</button>
+        <button class="btn-icon" onclick="logout()" title="Esci">🚪</button>
+      </div>
+    </div>
+  </aside>
+
+  <main id="main-content">
+
+    <!-- DASHBOARD -->
+    <section id="section-dashboard" class="section active">
+      <div class="page-header">
+        <h1>Dashboard</h1>
+        <button class="btn btn-accent btn-sm" onclick="openModal('modal-evento')">+ Evento Calendario</button>
+      </div>
+      <div class="kpi-grid">
+        <div class="kpi-card"><div class="kpi-val" id="kpi-ordini">—</div><div class="kpi-label">Ordini aperti</div></div>
+        <div class="kpi-card"><div class="kpi-val" id="kpi-prodotti">—</div><div class="kpi-label">Prodotti attivi</div></div>
+        <div class="kpi-card"><div class="kpi-val" id="kpi-clienti">—</div><div class="kpi-label">Clienti PA</div></div>
+        <div class="kpi-card"><div class="kpi-val" id="kpi-container">—</div><div class="kpi-label">Container in transito</div></div>
+      </div>
+      <div id="calendar-container">
+        <div class="cal-header">
+          <div class="cal-nav">
+            <button onclick="calPrev()">‹</button>
+            <button class="cal-today-btn" onclick="calToday()">Oggi</button>
+            <button onclick="calNext()">›</button>
+            <h2 id="cal-title">—</h2>
+          </div>
+          <div class="cal-views">
+            <button class="cal-view-btn active" onclick="calSetView('month')">Mese</button>
+            <button class="cal-view-btn" onclick="calSetView('week')">Settimana</button>
+          </div>
+        </div>
+        <div id="cal-body"></div>
+        <div id="cal-no-google" style="display:none;text-align:center;padding:40px;color:var(--text-muted)">
+          <div style="font-size:40px;margin-bottom:12px">📅</div>
+          <p>Connetti Google Calendar per vedere i tuoi eventi</p>
+          <button class="btn btn-accent" style="margin-top:16px" onclick="connectGoogle()">Connetti Google</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- CLIENTI -->
+    <section id="section-clienti" class="section">
+      <div class="page-header">
+        <h1>Clienti</h1>
+        <div class="header-actions">
+          <input type="text" id="search-clienti" placeholder="Cerca..." oninput="loadAnagrafiche('cliente')">
+          <button class="btn btn-accent" onclick="openModalAnagrafica('cliente')">+ Nuovo Cliente</button>
+        </div>
+      </div>
+      <div class="table-wrapper">
+        <table class="data-table"><thead><tr><th>Ragione Sociale</th><th>Città</th><th>P.IVA</th><th>Telefono</th><th>Email</th><th>Azioni</th></tr></thead>
+        <tbody id="clienti-body"></tbody></table>
+      </div>
+    </section>
+
+    <!-- FORNITORI -->
+    <section id="section-fornitori" class="section">
+      <div class="page-header">
+        <h1>Fornitori</h1>
+        <div class="header-actions">
+          <input type="text" id="search-fornitori" placeholder="Cerca..." oninput="loadAnagrafiche('fornitore')">
+          <button class="btn btn-accent" onclick="openModalAnagrafica('fornitore')">+ Nuovo Fornitore</button>
+        </div>
+      </div>
+      <div class="table-wrapper">
+        <table class="data-table"><thead><tr><th>Ragione Sociale</th><th>Paese</th><th>P.IVA</th><th>Telefono</th><th>Email</th><th>Azioni</th></tr></thead>
+        <tbody id="fornitori-body"></tbody></table>
+      </div>
+    </section>
+
+    <!-- PRODOTTI -->
+    <section id="section-prodotti" class="section">
+      <div class="page-header">
+        <h1>Prodotti</h1>
+        <div class="header-actions">
+          <input type="text" id="search-prod" placeholder="Cerca..." oninput="loadProdotti()">
+          <button class="btn btn-accent" onclick="openModal('modal-prodotto')">+ Nuovo Prodotto</button>
+        </div>
+      </div>
+      <div class="table-wrapper">
+        <table class="data-table"><thead><tr><th>Codice</th><th>Nome</th><th>Categoria</th><th>Giacenza</th><th>Prezzo MEPA</th><th>Margine</th><th>Azioni</th></tr></thead>
+        <tbody id="prod-body"></tbody></table>
+      </div>
+    </section>
+
+    <!-- MAGAZZINO -->
+    <section id="section-magazzino" class="section">
+      <div class="page-header">
+        <h1>Magazzino</h1>
+        <button class="btn btn-accent" onclick="openModal('modal-movimento')">+ Movimento</button>
+      </div>
+      <div class="table-wrapper">
+        <table class="data-table"><thead><tr><th>Codice</th><th>Prodotto</th><th>Categoria</th><th>Giacenza</th></tr></thead>
+        <tbody id="mag-body"></tbody></table>
+      </div>
+    </section>
+
+    <!-- ORDINI -->
+    <section id="section-ordini" class="section">
+      <div class="page-header">
+        <h1>Ordini</h1>
+        <div class="header-actions">
+          <select id="filter-tipo-ordine" onchange="loadOrdini()">
+            <option value="">Tutti</option><option value="vendita">Vendita</option><option value="acquisto">Acquisto</option>
+          </select>
+          <button class="btn btn-accent" onclick="openModal('modal-ordine')">+ Nuovo Ordine</button>
+        </div>
+      </div>
+      <div class="table-wrapper">
+        <table class="data-table"><thead><tr><th>Codice</th><th>Tipo</th><th>Cliente/Fornitore</th><th>Data</th><th>Totale</th><th>Stato</th><th>Azioni</th></tr></thead>
+        <tbody id="ordini-body"></tbody></table>
+      </div>
+    </section>
+
+    <!-- DDT -->
+    <section id="section-ddt" class="section">
+      <div class="page-header"><h1>DDT</h1><button class="btn btn-accent" onclick="openModal('modal-ddt')">+ Nuovo DDT</button></div>
+      <div class="table-wrapper">
+        <table class="data-table"><thead><tr><th>Numero</th><th>Tipo</th><th>Destinatario</th><th>Data</th><th>Firmato</th></tr></thead>
+        <tbody id="ddt-body"></tbody></table>
+      </div>
+    </section>
+
+    <!-- CONTAINER -->
+    <section id="section-container" class="section">
+      <div class="page-header"><h1>Container CN</h1><button class="btn btn-accent" onclick="openModal('modal-container')">+ Nuovo Container</button></div>
+      <div class="table-wrapper">
+        <table class="data-table"><thead><tr><th>BL</th><th>Fornitore</th><th>Partenza</th><th>Arrivo Previsto</th><th>Stato</th><th>Costo Totale</th><th></th></tr></thead>
+        <tbody id="container-body"></tbody></table>
+      </div>
+    </section>
+
+    <!-- FATTURE -->
+    <section id="section-fatture" class="section">
+      <div class="page-header">
+        <h1>Fatture</h1>
+        <div class="header-actions">
+          <select id="filter-tipo-fattura" onchange="loadFatture()">
+            <option value="">Tutte</option><option value="ricevuta">Ricevute</option><option value="emessa">Emesse</option>
+          </select>
+          <button class="btn btn-outline btn-sm" onclick="openModal('modal-import-xml')">↑ Import XML</button>
+          <button class="btn btn-accent" onclick="openModal('modal-fattura')">+ Nuova Fattura</button>
+        </div>
+      </div>
+      <div class="table-wrapper">
+        <table class="data-table"><thead><tr><th>Numero</th><th>Tipo</th><th>Fornitore/Cliente</th><th>Data</th><th>Totale</th><th>Stato</th><th></th></tr></thead>
+        <tbody id="fatture-body"></tbody></table>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════ -->
+    <!-- ANALISI MEPA                           -->
+    <!-- ═══════════════════════════════════════ -->
+    <section id="section-mepa" class="section">
+      <div class="page-header">
+        <h1>📊 Analisi MEPA & Trend CPV</h1>
+        <div class="header-actions">
+          <span id="mepa-last-sync" style="font-size:12px;color:var(--text-muted)"></span>
+          <button class="btn btn-outline btn-sm" onclick="openModal('modal-import-anac')">↑ Upload CSV</button>
+          <button class="btn btn-accent btn-sm" id="btn-sync-anac" onclick="syncAnac()">🔄 Scan MEPA</button>
+        </div>
+      </div>
+
+      <!-- NO DATA -->
+      <div id="mepa-no-data" style="display:none;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:48px;text-align:center;margin-top:8px">
+        <div style="font-size:56px;margin-bottom:16px">📦</div>
+        <h2 style="margin-bottom:12px;font-size:20px">Nessun dato ANAC disponibile</h2>
+        <p style="color:var(--text-muted);margin-bottom:24px;max-width:500px;margin-left:auto;margin-right:auto;line-height:1.6">
+          Per popolare la dashboard sincronizza i dati ANAC oppure importa un file CSV.
+        </p>
+        <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+          <button class="btn btn-accent" onclick="syncAnac()">🔄 Sincronizza automaticamente</button>
+          <button class="btn btn-outline" onclick="openModal('modal-import-anac')">↑ Upload CSV manuale</button>
+          <a href="https://dati.anticorruzione.it/opendata/dataset/ocds-appalti-ordinari-2024" target="_blank" class="btn btn-outline">📥 Scarica da ANAC →</a>
+        </div>
+      </div>
+
+      <!-- SYNC IN CORSO -->
+      <div id="mepa-sync-progress" style="display:none;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:32px;text-align:center;margin-top:8px">
+        <div style="font-size:40px;margin-bottom:12px">⏳</div>
+        <h3 style="margin-bottom:8px">Sincronizzazione in corso...</h3>
+        <p style="color:var(--text-muted);font-size:13px">Il server sta scaricando e processando i dati ANAC in background.<br>Puoi continuare a usare il CRM — ricontrolla tra qualche minuto.</p>
+        <button class="btn btn-outline" style="margin-top:16px" onclick="checkSyncStatus()">Controlla stato</button>
+      </div>
+
+      <!-- DATI -->
+      <div id="mepa-data" style="display:none">
+
+        <!-- KPI -->
+        <div class="kpi-grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:20px">
+          <div class="kpi-card"><div class="kpi-val" id="mk-gare">—</div><div class="kpi-label">Ordini totali</div></div>
+          <div class="kpi-card"><div class="kpi-val" id="mk-importo">—</div><div class="kpi-label">Valore mercato</div></div>
+          <div class="kpi-card"><div class="kpi-val" id="mk-cpv">—</div><div class="kpi-label">CPV attivi</div></div>
+          <div class="kpi-card"><div class="kpi-val" id="mk-trend">—</div><div class="kpi-label">Crescita YoY</div></div>
+          <div class="kpi-card"><div class="kpi-val" id="mk-anni">—</div><div class="kpi-label">Anni analizzati</div></div>
+        </div>
+
+        <!-- Trend anni + Categorie -->
+        <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-bottom:16px">
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">📈 Valore mercato per anno</h3>
+            <canvas id="chart-serie" height="160"></canvas>
+          </div>
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">🗂️ Categorie MEPA</h3>
+            <canvas id="chart-categorie" height="200"></canvas>
+          </div>
+        </div>
+
+        <!-- CPV trend 3 anni -->
+        <div class="dash-card" style="margin-bottom:16px">
+          <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">📊 Top prodotti — confronto 3 anni</h3>
+          <canvas id="chart-cpv-trend" height="200"></canvas>
+        </div>
+
+        <!-- Opportunità + Declino -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:#10b981;margin-bottom:16px">🚀 COSA COMPRARE — Prodotti in crescita</h3>
+            <div id="opp-list"></div>
+          </div>
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:#ef4444;margin-bottom:16px">⚠️ Prodotti in declino — Attenzione</h3>
+            <div id="declino-list"></div>
+          </div>
+        </div>
+
+        <!-- Regioni + Tipologie PA -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">🗺️ Regioni — Valore & Trend YoY</h3>
+            <canvas id="chart-regioni" height="280"></canvas>
+          </div>
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">🎯 Regioni target</h3>
+            <div id="regioni-focus"></div>
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin:16px 0 12px">🏛️ Tipologie PA per valore</h3>
+            <table class="data-table">
+              <thead><tr><th>#</th><th>Tipologia</th><th style="text-align:right">Ultimo anno</th><th style="text-align:right">Totale</th></tr></thead>
+              <tbody id="tipologie-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Predizioni -->
+        <div class="dash-card" style="margin-bottom:16px">
+          <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">🔮 Predizione anno prossimo</h3>
+          <div style="overflow-x:auto">
+            <table class="data-table">
+              <thead><tr><th>CPV</th><th>Prodotto</th><th style="text-align:right">Corrente</th><th style="text-align:right">Predizione</th><th style="text-align:right">Delta</th></tr></thead>
+              <tbody id="pred-table-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Tabella completa -->
+        <div class="dash-card">
+          <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">📋 Tutti i CPV — dettaglio completo</h3>
+          <div style="overflow-x:auto">
+            <table class="data-table">
+              <thead><tr><th>CPV</th><th>Descrizione</th><th>Cat.</th><th style="text-align:right">2023</th><th style="text-align:right">2024</th><th style="text-align:right">2025</th><th style="text-align:right">YoY%</th><th>Prio.</th></tr></thead>
+              <tbody id="cpv-table-body"></tbody>
+            </table>
+          </div>
+        </div>
+        </div>
+      </section>
+
+    <!-- ATTIVITA -->
+    <section id="section-attivita" class="section">
+      <div class="page-header">
+        <h1>Attività CRM</h1>
+        <button class="btn btn-accent" onclick="openModal('modal-attivita')">+ Nuova Attività</button>
+      </div>
+      <div id="attivita-list"></div>
+    </section>
+     <section id="section-cig" class="section">
+      <div class="page-header">
+        <h1>📉 Stagionalità Bandi — ANAC CIG</h1>
+        <div class="header-actions">
+          <span id="cig-info" style="font-size:12px;color:var(--text-muted)"></span>
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('cig-upload-input').click()">↑ Upload CIG CSV</button>
+          <button class="btn btn-accent btn-sm" id="btn-sync-cig" onclick="syncCIG()">🔄 Scan CIG</button>
+        </div>
+      </div>
+      <input type="file" id="cig-upload-input" accept=".csv,.tsv" style="display:none" onchange="uploadCIG(this)">
+
+      <!-- NO DATA -->
+      <div id="cig-no-data" style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:48px;text-align:center">
+        <div style="font-size:56px;margin-bottom:16px">📅</div>
+        <h2 style="margin-bottom:12px">Nessun dato CIG disponibile</h2>
+        <p style="color:var(--text-muted);margin-bottom:24px;max-width:500px;margin-left:auto;margin-right:auto;line-height:1.6">
+          Carica il file CSV ANAC BandiCIG (117MB) per vedere la <strong>stagionalità mensile</strong> dei bandi —
+          quando le PA pubblicano di più, quando ordinare le scorte, mesi di picco per ogni prodotto.
+        </p>
+        <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+          <button class="btn btn-accent" onclick="document.getElementById('cig-upload-input').click()">↑ Carica CSV CIG</button>
+          <button class="btn btn-outline" onclick="syncCIG()">🔄 Scan data/cig/</button>
+        </div>
+        <div id="cig-upload-result" style="display:none;margin-top:16px;padding:12px;border-radius:8px;background:var(--bg-input);font-size:13px"></div>
+      </div>
+
+      <!-- DATI -->
+      <div id="cig-data" style="display:none">
+
+        <!-- Consigli operativi -->
+        <div class="dash-card" style="margin-bottom:16px">
+          <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">🧠 Consigli Operativi — Quando comprare e vendere</h3>
+          <div id="cig-consigli"></div>
+        </div>
+
+        <!-- Radar + Serie mensile -->
+        <div style="display:grid;grid-template-columns:1fr 2fr;gap:16px;margin-bottom:16px">
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">🕐 Stagionalità media</h3>
+            <canvas id="cig-radar" height="260"></canvas>
+          </div>
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">📈 Bandi per mese — confronto anni</h3>
+            <canvas id="cig-serie" height="200"></canvas>
+          </div>
+        </div>
+
+        <!-- Heatmap mese × prodotto -->
+        <div class="dash-card" style="margin-bottom:16px">
+          <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">🗓️ Heatmap — Bandi per prodotto e mese <span style="font-size:11px;font-weight:400">(più scuro = più bandi)</span></h3>
+          <div id="cig-heatmap"></div>
+        </div>
+
+        <!-- Province + Picchi -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">🗺️ Top Province <span style="font-size:11px;color:#f59e0b">🟡 Liguria</span> <span style="font-size:11px;color:#10b981">🟢 Lazio</span></h3>
+            <canvas id="cig-province" height="320"></canvas>
+          </div>
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">🏆 Mese di picco per prodotto</h3>
+            <div id="cig-picchi"></div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+     <section id="section-analytics" class="section">
+      <div class="page-header">
+        <h1>🔬 Analisi Incrociata MEPA × CIG</h1>
+        <span style="font-size:12px;color:var(--text-muted)">Acquistato (MEPA) vs Bandito (CIG) — Gap, Penetrazione, Stagionalità</span>
+      </div>
+
+      <!-- NO DATA -->
+      <div id="analytics-no-data" style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:48px;text-align:center">
+        <div style="font-size:56px;margin-bottom:16px">🔬</div>
+        <h2 style="margin-bottom:12px">Dati insufficienti per l'analisi incrociata</h2>
+        <p id="analytics-missing" style="color:var(--text-muted);margin-bottom:24px;max-width:500px;margin-left:auto;margin-right:auto"></p>
+      </div>
+
+      <!-- DATI -->
+      <div id="analytics-data" style="display:none">
+
+        <!-- KPI -->
+        <div class="kpi-grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:20px">
+          <div class="kpi-card">
+            <div class="kpi-val" id="an-mepa">—</div>
+            <div class="kpi-label">MEPA acquistato</div>
+            <div style="font-size:10px;color:#0057ff;margin-top:4px">Cosa è stato comprato</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" id="an-cig">—</div>
+            <div class="kpi-label">CIG bandito</div>
+            <div style="font-size:10px;color:#f59e0b;margin-top:4px">Mercato potenziale</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" id="an-penet">—</div>
+            <div class="kpi-label">Penetrazione</div>
+            <div style="font-size:10px;color:var(--text-muted);margin-top:4px">MEPA / CIG</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" id="an-gap">—</div>
+            <div class="kpi-label">Gap opportunità</div>
+            <div style="font-size:10px;color:#10b981;margin-top:4px">Mercato non coperto</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" id="an-crescita">—</div>
+            <div class="kpi-label">Crescita CIG</div>
+            <div style="font-size:10px;color:var(--text-muted);margin-top:4px">YoY bandi</div>
+          </div>
+        </div>
+
+        <!-- Confronto annuale + Penetrazione -->
+        <div style="display:grid;grid-template-columns:3fr 2fr;gap:16px;margin-bottom:16px">
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">
+              📊 MEPA acquistato vs CIG bandito — per anno
+            </h3>
+            <canvas id="an-bar" height="200"></canvas>
+          </div>
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">
+              📈 Penetrazione MEPA su mercato CIG (%)
+            </h3>
+            <canvas id="an-penet-line" height="200"></canvas>
+          </div>
+        </div>
+
+        <!-- GAP ANALYSIS -->
+        <div class="dash-card" style="margin-bottom:16px">
+          <h3 style="font-size:14px;font-weight:600;color:#f59e0b;margin-bottom:16px">
+            🎯 Gap Analysis — Prodotti banditi ma poco su MEPA
+          </h3>
+          <div id="an-gap-list"></div>
+        </div>
+
+        <!-- Stagionalità incrociata -->
+        <div class="dash-card" style="margin-bottom:16px">
+          <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">
+            📅 Stagionalità — Bandi CIG (🟡) vs Acquisti MEPA stimati (🔵)
+          </h3>
+          <canvas id="an-stagionale" height="200"></canvas>
+        </div>
+
+        <!-- Calendario vendita -->
+        <div class="dash-card" style="margin-bottom:16px">
+          <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">
+            🗓️ Calendario Vendita — Intensità mensile
+          </h3>
+          <div id="an-calendario"></div>
+        </div>
+
+        <!-- Bubble chart CPV -->
+        <div class="dash-card" style="margin-bottom:16px">
+          <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">
+            🫧 Posizionamento prodotti — CIG vs MEPA
+            <span style="font-size:11px;font-weight:400"> · 🟢 alta penetrazione · 🟡 media · 🔴 bassa</span>
+          </h3>
+          <canvas id="an-bubble" height="280"></canvas>
+        </div>
+
+        <!-- Regioni -->
+        <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-bottom:16px">
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">🗺️ Regioni — MEPA vs CIG</h3>
+            <canvas id="an-regioni" height="300"></canvas>
+          </div>
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">📋 Penetrazione per Regione</h3>
+            <div style="overflow-y:auto;max-height:320px">
+              <table class="data-table">
+                <thead><tr><th>Regione</th><th style="text-align:right">MEPA</th><th style="text-align:right">CIG</th><th style="text-align:right">%</th></tr></thead>
+                <tbody id="an-regioni-table"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Dettaglio CPV con stagionalità mensile CIG -->
+        <div class="dash-card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin:0">📦 Stagionalità mensile CIG per prodotto</h3>
+            <select id="an-cpv-sel" style="background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 12px;color:var(--text);font-size:12px"></select>
+          </div>
+          <canvas id="an-cpv-detail" height="180"></canvas>
+        </div>
+
+<div class="dash-card" style="margin-top:16px">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+    <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin:0">📆 Storico CPV — Andamento annuale</h3>
+    <select id="stor-cpv-sel" onchange="loadStoricoCPV()"
+      style="background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 12px;color:var(--text);font-size:12px">
+      <option value="tutti">Tutti i prodotti</option>
+    </select>
+    <select id="stor-anni-sel" onchange="loadStoricoCPV()"
+      style="background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 12px;color:var(--text);font-size:12px">
+      <option value="1">Ultimo anno</option>
+      <option value="2">Ultimi 2 anni</option>
+      <option value="3" selected>Ultimi 3 anni</option>
+    </select>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+    <div>
+      <h4 style="font-size:12px;color:var(--text-muted);margin-bottom:10px">📦 MEPA — Valore acquistato per anno</h4>
+      <canvas id="stor-mepa-bar" height="180"></canvas>
+    </div>
+    <div>
+      <h4 style="font-size:12px;color:var(--text-muted);margin-bottom:10px">📋 CIG — Bandi mensili per anno</h4>
+      <canvas id="stor-cig-line" height="180"></canvas>
+    </div>
+  </div>
+  <h4 style="font-size:12px;color:var(--text-muted);margin-bottom:10px">📊 Variazione Year-over-Year</h4>
+  <table class="data-table">
+    <thead><tr><th>Periodo</th><th style="text-align:right">Anno prec.</th><th style="text-align:right">Anno curr.</th><th style="text-align:right">Var. %</th><th style="text-align:right">Delta €</th></tr></thead>
+    <tbody id="stor-yoy"></tbody>
+  </table>
+</div>
+      </div>
+    </section>
+    <!-- DOCUMENTI -->
+    <section id="section-documenti" class="section">
+      <div class="page-header">
+        <h1>Documenti</h1>
+        <span style="color:var(--text-muted);font-size:13px">📁 Google Drive / documenti_crm</span>
+      </div>
+      <div class="upload-zone" id="upload-zone" onclick="document.getElementById('drive-upload-input').click()">
+        <div style="font-size:32px;margin-bottom:8px">☁️</div>
+        <p>Clicca o trascina file per caricare su Google Drive</p>
+      </div>
+      <input type="file" id="drive-upload-input" style="display:none" multiple onchange="uploadDriveFiles(this.files)">
+      <div id="drive-files" class="drive-grid"></div>
+    </section>
+
+    <!-- MAPPA PA -->
+    <section id="section-mappa" class="section">
+      <div class="page-header"><h1>Mappa PA</h1></div>
+      <div id="mappa-container"></div>
+    </section>
+
+    <!-- UTENTI -->
+    <section id="section-utenti" class="section">
+      <div class="page-header">
+        <h1>Gestione Utenti</h1>
+        <button class="btn btn-accent" onclick="openModal('modal-utente')">+ Nuovo Utente</button>
+      </div>
+      <div class="table-wrapper" style="margin-bottom:24px">
+        <table class="data-table"><thead><tr><th>Nome</th><th>Email</th><th>Ruolo</th><th>Tema</th><th>Stato</th><th>Azioni</th></tr></thead>
+        <tbody id="utenti-body"></tbody></table>
+      </div>
+      <h2 style="margin-bottom:16px;font-size:16px">Permessi per Ruolo</h2>
+      <div class="dash-card">
+        <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center">
+          <select id="sel-ruolo-perm" onchange="loadPermessi(this.value)">
+            <option value="1">Read Only</option>
+            <option value="2">Editor</option>
+            <option value="3">Can Delete</option>
+          </select>
+          <button class="btn btn-accent btn-sm" onclick="salvaPermessi()">Salva Permessi</button>
+        </div>
+        <table class="perm-table" id="perm-table"></table>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- TOAST -->
+<div id="toast-container"></div>
+
+<!-- OVERLAY -->
+<div id="overlay" onclick="closeAllModals()"></div>
+
+<!-- MODAL EVENTO CALENDARIO -->
+<div id="modal-evento" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">📅 Evento Calendario</div>
+    <input type="hidden" id="evento-id">
+    <div class="form-group"><label>Titolo *</label><input type="text" id="evento-title"></div>
+    <div class="form-row">
+      <div class="form-group"><label>Inizio *</label><input type="datetime-local" id="evento-start"></div>
+      <div class="form-group"><label>Fine</label><input type="datetime-local" id="evento-end"></div>
+    </div>
+    <div class="form-group"><label>Descrizione</label><textarea id="evento-desc" rows="3" style="width:100%;background:var(--bg-input);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:6px;font-family:inherit;font-size:14px"></textarea></div>
+    <div class="form-group"><label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="evento-allday"> Tutto il giorno</label></div>
+    <div class="modal-actions">
+      <button class="btn btn-danger btn-sm" id="btn-del-evento" style="display:none" onclick="deleteEvento()">Elimina</button>
+      <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
+      <button class="btn btn-accent" onclick="salvaEvento()">Salva</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL ANAGRAFICA -->
+<div id="modal-anagrafica" class="modal">
+  <div class="modal-box">
+    <div class="modal-title" id="modal-anag-title">Anagrafica</div>
+    <input type="hidden" id="anag-id">
+    <input type="hidden" id="anag-tipo">
+    <div class="form-group"><label>Ragione Sociale *</label><input type="text" id="anag-ragione"></div>
+    <div class="form-row">
+      <div class="form-group"><label>P.IVA</label><input type="text" id="anag-piva"></div>
+      <div class="form-group"><label>C.F.</label><input type="text" id="anag-cf"></div>
+    </div>
+    <div class="form-group"><label>Indirizzo</label><input type="text" id="anag-indirizzo"></div>
+    <div class="form-row">
+      <div class="form-group"><label>CAP</label><input type="text" id="anag-cap"></div>
+      <div class="form-group"><label>Città</label><input type="text" id="anag-citta"></div>
+      <div class="form-group"><label>Prov.</label><input type="text" id="anag-prov" maxlength="2"></div>
+      <div class="form-group"><label>Paese</label><input type="text" id="anag-paese" value="IT" maxlength="2"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Email</label><input type="email" id="anag-email"></div>
+      <div class="form-group"><label>Telefono</label><input type="tel" id="anag-tel"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Lat</label><input type="number" step="any" id="anag-lat"></div>
+      <div class="form-group"><label>Lng</label><input type="number" step="any" id="anag-lng"></div>
+    </div>
+    <div class="form-group"><label>Note</label><input type="text" id="anag-note"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
+      <button class="btn btn-accent" onclick="salvaAnagrafica()">Salva</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL PRODOTTO -->
+<div id="modal-prodotto" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">📦 Prodotto</div>
+    <input type="hidden" id="prod-id">
+    <div class="form-row">
+      <div class="form-group"><label>Codice Interno *</label><input type="text" id="prod-codice"></div>
+      <div class="form-group"><label>Barcode</label><input type="text" id="prod-barcode"></div>
+    </div>
+    <div class="form-group"><label>Nome *</label><input type="text" id="prod-nome"></div>
+    <div class="form-group"><label>Descrizione</label><input type="text" id="prod-desc"></div>
+    <div class="form-row">
+      <div class="form-group"><label>Categoria</label><select id="prod-categoria"></select></div>
+      <div class="form-group"><label>U.M.</label><input type="text" id="prod-um" value="pz"></div>
+      <div class="form-group"><label>Peso (kg)</label><input type="number" step="0.01" id="prod-peso"></div>
+    </div>
+    <div id="prod-tabs" style="display:none">
+      <div style="display:flex;gap:12px;margin:16px 0 12px;border-bottom:1px solid var(--border)">
+        <button class="btn btn-sm btn-outline prod-tab active" onclick="showProdTab('fornitori')">Fornitori</button>
+        <button class="btn btn-sm btn-outline prod-tab" onclick="showProdTab('fatture')">Fatture</button>
+        <button class="btn btn-sm btn-outline prod-tab" onclick="showProdTab('listini')">Listini</button>
+      </div>
+      <div id="prod-tab-fornitori"></div>
+      <div id="prod-tab-fatture" style="display:none"></div>
+      <div id="prod-tab-listini" style="display:none"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
+      <button class="btn btn-accent" onclick="salvaProdotto()">Salva</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL ORDINE -->
+<div id="modal-ordine" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">📋 Ordine</div>
+    <div class="form-row">
+      <div class="form-group"><label>Codice Ordine *</label><input type="text" id="ord-codice"></div>
+      <div class="form-group"><label>Tipo</label><select id="ord-tipo"><option value="vendita">Vendita</option><option value="acquisto">Acquisto</option></select></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Cliente/Fornitore</label><select id="ord-anagrafica"><option value="">Seleziona...</option></select></div>
+      <div class="form-group"><label>Canale</label><select id="ord-canale"><option value="mepa">MEPA</option><option value="diretto">Diretto</option></select></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Data Ordine</label><input type="date" id="ord-data"></div>
+      <div class="form-group"><label>Consegna Prevista</label><input type="date" id="ord-consegna"></div>
+    </div>
+    <div class="form-group"><label>Totale (€)</label><input type="number" step="0.01" id="ord-totale"></div>
+    <div class="form-group"><label>Note</label><input type="text" id="ord-note"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
+      <button class="btn btn-accent" onclick="salvaOrdine()">Salva</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL ATTIVITA -->
+<div id="modal-attivita" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">📅 Attività CRM</div>
+    <div class="form-row">
+      <div class="form-group"><label>Tipo</label>
+        <select id="att-tipo">
+          <option value="telefonata">📞 Telefonata</option>
+          <option value="appuntamento">📅 Appuntamento</option>
+          <option value="email">✉️ Email</option>
+          <option value="visita">🤝 Visita</option>
+          <option value="nota">📝 Nota</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Anagrafica</label><select id="att-anagrafica"><option value="">Seleziona...</option></select></div>
+    </div>
+    <div class="form-group"><label>Oggetto</label><input type="text" id="att-oggetto"></div>
+    <div class="form-row">
+      <div class="form-group"><label>Data e Ora</label><input type="datetime-local" id="att-data"></div>
+      <div class="form-group"><label>Durata (min)</label><input type="number" id="att-durata" value="30"></div>
+    </div>
+    <div class="form-group"><label>Note</label><textarea id="att-note" rows="3" style="width:100%;background:var(--bg-input);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:6px;font-family:inherit;font-size:14px"></textarea></div>
+    <div class="form-group"><label>Promemoria</label><input type="datetime-local" id="att-promemoria"></div>
+    <div class="form-group"><label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="att-sync-google"> Sincronizza su Google Calendar</label></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
+      <button class="btn btn-accent" onclick="salvaAttivita()">Salva</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL UTENTE -->
+<div id="modal-utente" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">⚙️ Utente</div>
+    <input type="hidden" id="utente-id">
+    <div class="form-row">
+      <div class="form-group"><label>Nome</label><input type="text" id="utente-nome"></div>
+      <div class="form-group"><label>Email</label><input type="email" id="utente-email"></div>
+    </div>
+    <div class="form-group"><label>Password <span style="color:var(--text-muted)">(vuoto = non cambia)</span></label><input type="password" id="utente-password"></div>
+    <div class="form-row">
+      <div class="form-group"><label>Ruolo</label>
+        <select id="utente-ruolo">
+          <option value="1">Read Only</option><option value="2">Editor</option>
+          <option value="3">Can Delete</option><option value="4">Superuser</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Tema</label>
+        <select id="utente-tema"><option value="dark">Scuro</option><option value="light">Chiaro</option></select>
+      </div>
+      <div class="form-group"><label>Stato</label>
+        <select id="utente-attivo"><option value="1">Attivo</option><option value="0">Disabilitato</option></select>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
+      <button class="btn btn-accent" onclick="salvaUtente()">Salva</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL IMPORT XML FATTURA -->
+<div id="modal-import-xml" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">📄 Import Fattura XML (FatturaPA)</div>
+    <div class="upload-zone" onclick="document.getElementById('xml-input').click()">
+      <div style="font-size:32px;margin-bottom:8px">📄</div>
+      <p>Clicca per selezionare file XML FatturaPA</p>
+    </div>
+    <input type="file" id="xml-input" accept=".xml,.zip" style="display:none" onchange="importXML(this)">
+    <div id="xml-preview" style="display:none">
+      <h4 style="margin-bottom:12px">Dati estratti:</h4>
+      <div id="xml-data" style="background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:14px;font-size:13px"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAllModals()">Chiudi</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL IMPORT CSV ANAC -->
+<div id="modal-import-anac" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">📥 Upload CSV MEPA (multi-anno)</div>
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px">
+      Carica i file CSV MEPA per gli anni che hai (es. ordini-mepa-2023.csv, ordini-mepa-2024.csv, ordini-mepa-2025.csv). Puoi selezionare più file insieme.
+    </p>
+    <div class="form-row">
+      <div class="form-group"><label>Anno</label><input type="number" id="anac-anno" value="2024" min="2018" max="2026"></div>
+      <div class="form-group"><label>Mese</label>
+        <select id="anac-mese">
+          <option value="1">Gennaio</option><option value="2">Febbraio</option><option value="3">Marzo</option>
+          <option value="4">Aprile</option><option value="5">Maggio</option><option value="6">Giugno</option>
+          <option value="7">Luglio</option><option value="8">Agosto</option><option value="9">Settembre</option>
+          <option value="10">Ottobre</option><option value="11">Novembre</option><option value="12">Dicembre</option>
+        </select>
+      </div>
+    </div>
+    <div class="upload-zone" onclick="document.getElementById('anac-csv-input').click()">
+      <div style="font-size:32px;margin-bottom:8px">📄</div>
+      <p>Clicca per selezionare file CSV ANAC</p>
+      <p style="font-size:11px;margin-top:4px;color:var(--text-muted)">File BandiCIG o OCDS in formato CSV</p>
+    </div>
+    <input type="file" id="anac-csv-input" accept=".csv" style="display:none" multiple onchange="importAnacCSV(this)">
+    <div id="anac-import-result" style="display:none;margin-top:12px;padding:12px;border-radius:6px;background:var(--bg-input);font-size:13px"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAllModals()">Chiudi</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL MOVIMENTO -->
+<div id="modal-movimento" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">🏪 Movimento Magazzino</div>
+    <div class="form-group"><label>Prodotto</label><select id="mov-prodotto"><option value="">Seleziona...</option></select></div>
+    <div class="form-row">
+      <div class="form-group"><label>Tipo</label>
+        <select id="mov-tipo"><option value="carico">Carico</option><option value="scarico">Scarico</option><option value="rettifica">Rettifica</option></select>
+      </div>
+      <div class="form-group"><label>Quantità</label><input type="number" id="mov-quantita" min="1"></div>
+    </div>
+    <div class="form-group"><label>Note</label><input type="text" id="mov-note"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
+      <button class="btn btn-accent" onclick="salvaMovimento()">Salva</button>
+    </div>
+  </div>
+</div>
+<div id="modal-tracking" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">🚚 Tracking Spedizione</div>
+    <input type="hidden" id="tracking-ordine-id">
+    <div class="form-row">
+      <div class="form-group">
+        <label>Numero Spedizione</label>
+        <input type="text" id="ord-tracking-num" placeholder="es. 1234567890">
+      </div>
+      <div class="form-group">
+        <label>Corriere</label>
+        <select id="ord-tracking-corriere">
+          <option value="">Seleziona...</option>
+          <option value="gls">GLS</option>
+          <option value="brt">BRT / Bartolini</option>
+          <option value="sda">SDA</option>
+          <option value="poste">Poste Italiane</option>
+          <option value="dhl">DHL</option>
+          <option value="fedex">FedEx</option>
+          <option value="ups">UPS</option>
+          <option value="tnt">TNT</option>
+          <option value="nexive">Nexive</option>
+          <option value="altro">Altro</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAllModals()">Chiudi</button>
+      <button class="btn btn-outline" onclick="apriTracking(document.getElementById('tracking-ordine-id').value)">🔍 Controlla</button>
+      <button class="btn btn-accent" onclick="salvaTracking(document.getElementById('tracking-ordine-id').value)">Salva</button>
+    </div>
+  </div>
+</div>
+<script src="/js/patches.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="/js/cig.js"></script>
+<script src="/js/analytics.js"></script>
+<script src="/js/mepa.js"></script>
+<script src="/js/app.js"></script>
+
+</body>
+</html>
