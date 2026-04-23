@@ -60,6 +60,7 @@
       <div class="nav-group-label">Gestione</div>
       <a class="nav-item" data-section="clienti"><span class="nav-icon">👥</span> Clienti</a>
       <a class="nav-item" data-section="fornitori"><span class="nav-icon">🏭</span> Fornitori</a>
+      <a class="nav-item" data-section="contatti"><span class="nav-icon">📇</span> Contatti</a>
       <a class="nav-item" data-section="prodotti"><span class="nav-icon">📦</span> Prodotti</a>
       <a class="nav-item" data-section="magazzino"><span class="nav-icon">🏪</span> Magazzino</a>
 
@@ -76,8 +77,10 @@
       <a class="nav-item" data-section="analytics"><span class="nav-icon">🔬</span> Analisi Incrociata</a>
       <a class="nav-item" data-section="attivita"><span class="nav-icon">📅</span> Attività CRM</a>
       <a class="nav-item" data-section="documenti"><span class="nav-icon">📁</span> Documenti</a>
+      <a class="nav-item" data-section="statistics"><span class="nav-icon">📈</span> Statistics</a>
+      <a class="nav-item" data-section="settings"><span class="nav-icon">🛠️</span> Impostazioni</a>
       <a class="nav-item" data-section="mappa"><span class="nav-icon">🗺️</span> Mappa PA</a>
-      <a class="nav-item" id="nav-utenti" data-section="utenti" style="display:none"><span class="nav-icon">⚙️</span> Utenti</a>
+      <a class="nav-item" id="nav-utenti" data-section="utenti"><span class="nav-icon">⚙️</span> Utenti</a>
     </nav>
 
     <div class="sidebar-bottom">
@@ -89,6 +92,7 @@
         </div>
       </div>
       <div class="sidebar-actions">
+        <button class="btn-icon" onclick="openModal('modal-password')" title="Cambia password">🔐</button>
         <button class="btn-icon" onclick="toggleTema()" title="Cambia tema" id="btn-tema">🌙</button>
         <button class="btn-icon" onclick="connectGoogle()" title="Connetti Google" id="btn-google">🔗</button>
         <button class="btn-icon" onclick="logout()" title="Esci">🚪</button>
@@ -109,6 +113,13 @@
         <div class="kpi-card"><div class="kpi-val" id="kpi-prodotti">—</div><div class="kpi-label">Prodotti attivi</div></div>
         <div class="kpi-card"><div class="kpi-val" id="kpi-clienti">—</div><div class="kpi-label">Clienti PA</div></div>
         <div class="kpi-card"><div class="kpi-val" id="kpi-container">—</div><div class="kpi-label">Container in transito</div></div>
+      </div>
+      <div class="dash-card" style="margin-bottom:18px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+          <h3 style="margin:0;font-size:16px">Notifiche</h3>
+          <button class="btn btn-outline btn-sm" onclick="loadNotifications()">Aggiorna</button>
+        </div>
+        <div id="dashboard-notifications" style="margin-top:12px"></div>
       </div>
       <div id="calendar-container">
         <div class="cal-header">
@@ -168,7 +179,7 @@
         <h1>Prodotti</h1>
         <div class="header-actions">
           <input type="text" id="search-prod" placeholder="Cerca..." oninput="loadProdotti()">
-          <button class="btn btn-accent" onclick="openModal('modal-prodotto')">+ Nuovo Prodotto</button>
+          <button class="btn btn-accent" onclick="nuovoProdotto()">+ Nuovo Prodotto</button>
         </div>
       </div>
       <div class="table-wrapper">
@@ -364,7 +375,7 @@
     <section id="section-attivita" class="section">
       <div class="page-header">
         <h1>Attività CRM</h1>
-        <button class="btn btn-accent" onclick="openModal('modal-attivita')">+ Nuova Attività</button>
+        <button class="btn btn-accent" onclick="openAttivitaModal()">+ Nuova Attività</button>
       </div>
       <div id="attivita-list"></div>
     </section>
@@ -594,13 +605,76 @@
         <h1>Documenti</h1>
         <span style="color:var(--text-muted);font-size:13px">📁 Google Drive / documenti_crm</span>
       </div>
-      <div class="upload-zone" id="upload-zone" onclick="document.getElementById('drive-upload-input').click()">
-        <div style="font-size:32px;margin-bottom:8px">☁️</div>
-        <p>Clicca o trascina file per caricare su Google Drive</p>
+    <div class="upload-zone" id="upload-zone" onclick="document.getElementById('drive-upload-input').click()">
+      <div style="font-size:32px;margin-bottom:8px">☁️</div>
+      <p>Clicca o trascina file per caricare su Google Drive</p>
+    </div>
+    <input type="file" id="drive-upload-input" style="display:none" multiple onchange="uploadDriveFiles(this.files)">
+    <div class="dash-card" style="margin:18px 0">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
+        <div>
+          <h3 style="margin:0 0 4px;font-size:16px">Monitor mail MEPA</h3>
+          <div style="font-size:12px;color:var(--text-muted)">Riconosce le comunicazioni da comunicazioni@acquistinretepa.it</div>
+        </div>
+        <button class="btn btn-outline btn-sm" onclick="syncMepaMail()">Sincronizza mail MEPA</button>
       </div>
-      <input type="file" id="drive-upload-input" style="display:none" multiple onchange="uploadDriveFiles(this.files)">
-      <div id="drive-files" class="drive-grid"></div>
-    </section>
+      <div id="mepa-mail-list"></div>
+    </div>
+    <div id="drive-files" class="drive-grid"></div>
+  </section>
+
+  <section id="section-contatti" class="section">
+    <div class="page-header">
+      <h1>Contatti / Rubrica</h1>
+      <div class="header-actions">
+        <input type="text" id="search-contatti" placeholder="Cerca contatto..." oninput="loadContacts()">
+        <button class="btn btn-outline btn-sm" onclick="loadContacts()">Aggiorna</button>
+        <button class="btn btn-accent btn-sm" onclick="syncContactsToGoogle()">Sincronizza contatti locali su Google</button>
+        <button class="btn btn-accent" onclick="openContattoModal()">+ Nuovo Contatto</button>
+      </div>
+    </div>
+    <div class="dash-card" style="margin-bottom:18px">
+      <p style="margin:0;font-size:13px;color:var(--text-muted)">Qui teniamo la rubrica operativa del CRM. Un contatto non è per forza un utente: può essere un referente commerciale, un buyer PA o un contatto esterno, e solo più avanti potrà eventualmente avere accesso alla piattaforma.</p>
+    </div>
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr><th>Contatto</th><th>Organizzazione</th><th>Ruolo</th><th>Email</th><th>Telefono</th><th>Google</th><th>Azioni</th></tr>
+        </thead>
+        <tbody id="contacts-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="section-statistics" class="section">
+    <div class="page-header"><h1>Statistics</h1></div>
+    <div class="kpi-grid">
+      <div class="kpi-card"><div class="kpi-val" id="stat-mail-ricevute">—</div><div class="kpi-label">Mail ricevute</div></div>
+      <div class="kpi-card"><div class="kpi-val" id="stat-mail-nuove">—</div><div class="kpi-label">Mail nuove</div></div>
+      <div class="kpi-card"><div class="kpi-val" id="stat-scadenze">—</div><div class="kpi-label">Scadenze 7 giorni</div></div>
+      <div class="kpi-card"><div class="kpi-val" id="stat-notifiche">—</div><div class="kpi-label">Notifiche aperte</div></div>
+    </div>
+    <div class="dash-card" style="margin-bottom:18px">
+      <h3 style="margin-top:0;font-size:16px">CPV attivi e copertura prodotto</h3>
+      <div id="stats-cpv-operativi"></div>
+    </div>
+    <div class="dash-card">
+      <h3 style="margin-top:0;font-size:16px">Timeline piattaforma</h3>
+      <div id="stats-recenti"></div>
+    </div>
+  </section>
+
+  <section id="section-settings" class="section">
+    <div class="page-header"><h1>Impostazioni</h1></div>
+    <div class="dash-card">
+      <h3 style="margin-top:0;font-size:16px">Configurazione sistema</h3>
+      <p style="font-size:12px;color:var(--text-muted)">Queste impostazioni servono per attivare comportamenti senza cambiare il database ogni volta.</p>
+      <div id="settings-list"></div>
+      <div class="modal-actions" style="margin-top:14px">
+        <button class="btn btn-accent" onclick="saveSettingsPage()">Salva impostazioni</button>
+      </div>
+    </div>
+  </section>
 
     <!-- MAPPA PA -->
     <section id="section-mappa" class="section">
@@ -612,7 +686,13 @@
     <section id="section-utenti" class="section">
       <div class="page-header">
         <h1>Gestione Utenti</h1>
-        <button class="btn btn-accent" onclick="openModal('modal-utente')">+ Nuovo Utente</button>
+        <button class="btn btn-accent" onclick="nuovoUtente()">+ Nuovo Utente</button>
+      </div>
+      <div class="dash-card" style="margin-bottom:18px">
+        <div style="font-size:13px;color:var(--text-muted);line-height:1.5">
+          Ruoli disponibili: <strong>SuperAdmin</strong>, <strong>Admin</strong>, <strong>Editor</strong>, <strong>Read Only</strong>.
+          Qui decidiamo sia il ruolo dell’utente sia quali pagine del CRM può vedere o modificare.
+        </div>
       </div>
       <div class="table-wrapper" style="margin-bottom:24px">
         <table class="data-table"><thead><tr><th>Nome</th><th>Email</th><th>Ruolo</th><th>Tema</th><th>Stato</th><th>Azioni</th></tr></thead>
@@ -622,12 +702,10 @@
       <div class="dash-card">
         <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center">
           <select id="sel-ruolo-perm" onchange="loadPermessi(this.value)">
-            <option value="1">Read Only</option>
-            <option value="2">Editor</option>
-            <option value="3">Can Delete</option>
           </select>
-          <button class="btn btn-accent btn-sm" onclick="salvaPermessi()">Salva Permessi</button>
+          <button class="btn btn-accent btn-sm" id="btn-save-perms" onclick="salvaPermessi()">Salva Permessi</button>
         </div>
+        <div id="perm-role-help" style="font-size:12px;color:var(--text-muted);margin-bottom:12px"></div>
         <table class="perm-table" id="perm-table"></table>
       </div>
     </section>
@@ -657,6 +735,19 @@
       <button class="btn btn-danger btn-sm" id="btn-del-evento" style="display:none" onclick="deleteEvento()">Elimina</button>
       <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
       <button class="btn btn-accent" onclick="salvaEvento()">Salva</button>
+    </div>
+  </div>
+</div>
+
+<div id="modal-password" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">🔐 Cambia Password</div>
+    <div class="form-group"><label>Password attuale</label><input type="password" id="pwd-current" autocomplete="current-password"></div>
+    <div class="form-group"><label>Nuova password</label><input type="password" id="pwd-new" autocomplete="new-password"></div>
+    <div class="form-group"><label>Conferma nuova password</label><input type="password" id="pwd-confirm" autocomplete="new-password"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
+      <button class="btn btn-accent" onclick="changeMyPassword()">Aggiorna password</button>
     </div>
   </div>
 </div>
@@ -710,6 +801,20 @@
       <div class="form-group"><label>Categoria</label><select id="prod-categoria"></select></div>
       <div class="form-group"><label>U.M.</label><input type="text" id="prod-um" value="pz"></div>
       <div class="form-group"><label>Peso (kg)</label><input type="number" step="0.01" id="prod-peso"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Foto prodotto</label>
+        <input type="file" id="prod-upload-foto" accept="image/*" multiple>
+      </div>
+      <div class="form-group">
+        <label>Fatture PDF</label>
+        <input type="file" id="prod-upload-fatture" accept=".pdf" multiple>
+      </div>
+      <div class="form-group">
+        <label>Bolle PDF</label>
+        <input type="file" id="prod-upload-bolle" accept=".pdf" multiple>
+      </div>
     </div>
     <div id="prod-tabs" style="display:none">
       <div style="display:flex;gap:12px;margin:16px 0 12px;border-bottom:1px solid var(--border)">
@@ -769,6 +874,17 @@
       </div>
       <div class="form-group"><label>Anagrafica</label><select id="att-anagrafica"><option value="">Seleziona...</option></select></div>
     </div>
+    <div class="form-row">
+      <div class="form-group"><label>Assegna a</label><select id="att-assegnato"><option value="">Nessuno</option></select></div>
+      <div class="form-group"><label>Stato</label>
+        <select id="att-stato">
+          <option value="aperta">Aperta</option>
+          <option value="in_corso">In corso</option>
+          <option value="completata">Completata</option>
+          <option value="archiviata">Archiviata</option>
+        </select>
+      </div>
+    </div>
     <div class="form-group"><label>Oggetto</label><input type="text" id="att-oggetto"></div>
     <div class="form-row">
       <div class="form-group"><label>Data e Ora</label><input type="datetime-local" id="att-data"></div>
@@ -784,6 +900,41 @@
   </div>
 </div>
 
+<div id="modal-contatto" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">📇 Contatto</div>
+    <input type="hidden" id="contatto-id">
+    <div class="form-row">
+      <div class="form-group"><label>Nome *</label><input type="text" id="contatto-nome"></div>
+      <div class="form-group"><label>Cognome</label><input type="text" id="contatto-cognome"></div>
+      <div class="form-group"><label>Ruolo</label><input type="text" id="contatto-ruolo" placeholder="Es. Ufficio acquisti"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Avatar / Foto</label>
+        <input type="file" id="contatto-avatar" accept="image/*">
+      </div>
+      <div class="form-group" style="display:flex;align-items:flex-end">
+        <div id="contatto-avatar-preview" style="width:68px;height:68px;border-radius:50%;overflow:hidden;border:1px solid var(--border);background:var(--bg-input);display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:12px">N/A</div>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Email</label><input type="email" id="contatto-email"></div>
+      <div class="form-group"><label>Telefono</label><input type="text" id="contatto-telefono"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Anagrafica collegata</label><select id="contatto-anagrafica"><option value="">Nessuna</option></select></div>
+      <div class="form-group"><label>Utente collegato</label><select id="contatto-utente"><option value="">Nessuno</option></select></div>
+    </div>
+    <div class="form-group"><label>Note</label><textarea id="contatto-note" rows="3" style="width:100%;background:var(--bg-input);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:6px;font-family:inherit;font-size:14px"></textarea></div>
+    <div class="form-group"><label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="contatto-esterno"> Visibile per futuro accesso esterno / catalogo</label></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
+      <button class="btn btn-accent" onclick="salvaContatto()">Salva</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL UTENTE -->
 <div id="modal-utente" class="modal">
   <div class="modal-box">
@@ -793,12 +944,19 @@
       <div class="form-group"><label>Nome</label><input type="text" id="utente-nome"></div>
       <div class="form-group"><label>Email</label><input type="email" id="utente-email"></div>
     </div>
+    <div class="form-row">
+      <div class="form-group"><label>Telefono</label><input type="text" id="utente-telefono"></div>
+      <div class="form-group"><label>Qualifica</label><input type="text" id="utente-qualifica" placeholder="Es. Sales manager"></div>
+      <div class="form-group"><label>Reparto</label><input type="text" id="utente-reparto"></div>
+    </div>
+    <div class="form-group"><label>LinkedIn / sito</label><input type="text" id="utente-linkedin"></div>
+    <div class="form-group"><label>Note biglietto</label><input type="text" id="utente-note-biglietto"></div>
     <div class="form-group"><label>Password <span style="color:var(--text-muted)">(vuoto = non cambia)</span></label><input type="password" id="utente-password"></div>
     <div class="form-row">
       <div class="form-group"><label>Ruolo</label>
         <select id="utente-ruolo">
           <option value="1">Read Only</option><option value="2">Editor</option>
-          <option value="3">Can Delete</option><option value="4">Superuser</option>
+          <option value="3">Admin</option><option value="4">SuperAdmin</option>
         </select>
       </div>
       <div class="form-group"><label>Tema</label>
@@ -872,9 +1030,9 @@
     <div class="form-group"><label>Prodotto</label><select id="mov-prodotto"><option value="">Seleziona...</option></select></div>
     <div class="form-row">
       <div class="form-group"><label>Tipo</label>
-        <select id="mov-tipo"><option value="carico">Carico</option><option value="scarico">Scarico</option><option value="rettifica">Rettifica</option></select>
+        <select id="mov-tipo"><option value="carico">Carico</option><option value="scarico">Scarico</option><option value="rettifica">Rettifica a giacenza</option></select>
       </div>
-      <div class="form-group"><label>Quantità</label><input type="number" id="mov-quantita" min="1"></div>
+      <div class="form-group"><label>Quantità</label><input type="number" id="mov-quantita" min="0"></div>
     </div>
     <div class="form-group"><label>Note</label><input type="text" id="mov-note"></div>
     <div class="modal-actions">

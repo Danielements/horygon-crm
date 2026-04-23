@@ -57,6 +57,8 @@ app.use('/api/prodotti',    require('./routes/prodotti'));
 app.use('/api/ordini',      require('./routes/ordini'));
 app.use('/api/fatture',     require('./routes/fatture'));
 app.use('/api/google',      require('./routes/google'));
+app.use('/api/contatti',    require('./routes/contatti'));
+app.use('/api/system',      require('./routes/system'));
 app.use('/api',             require('./routes/operativo'));
 
 // Error handler

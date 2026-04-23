@@ -57,7 +57,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS anagrafiche_contatti (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    anagrafica_id INTEGER NOT NULL,
+    anagrafica_id INTEGER,
     nome TEXT NOT NULL, ruolo TEXT, telefono TEXT, email TEXT, note TEXT,
     FOREIGN KEY (anagrafica_id) REFERENCES anagrafiche(id) ON DELETE CASCADE
   );
@@ -257,40 +257,45 @@ db.exec(`
   INSERT OR IGNORE INTO categorie (nome) VALUES
     ('Pulizia'),('Cancelleria'),('Elettrico'),('Ufficio'),('Altro');
 
-  INSERT OR IGNORE INTO ruoli (id, nome, descrizione) VALUES
-    (1, 'readonly',   'Solo lettura'),
-    (2, 'editor',     'Lettura e modifica'),
-    (3, 'candelete',  'Lettura, modifica ed eliminazione'),
-    (4, 'superuser',  'Accesso completo');
-
-  -- Permessi readonly
-  INSERT OR IGNORE INTO permessi (ruolo_id, sezione, can_read, can_edit, can_delete, can_admin) VALUES
-    (1,'clienti',1,0,0,0),(1,'fornitori',1,0,0,0),(1,'prodotti',1,0,0,0),
-    (1,'magazzino',1,0,0,0),(1,'ordini',1,0,0,0),(1,'ddt',1,0,0,0),
-    (1,'container',1,0,0,0),(1,'fatture',1,0,0,0),(1,'attivita',1,0,0,0),
-    (1,'documenti',1,0,0,0),(1,'utenti',0,0,0,0);
-
-  -- Permessi editor
-  INSERT OR IGNORE INTO permessi (ruolo_id, sezione, can_read, can_edit, can_delete, can_admin) VALUES
-    (2,'clienti',1,1,0,0),(2,'fornitori',1,1,0,0),(2,'prodotti',1,1,0,0),
-    (2,'magazzino',1,1,0,0),(2,'ordini',1,1,0,0),(2,'ddt',1,1,0,0),
-    (2,'container',1,1,0,0),(2,'fatture',1,1,0,0),(2,'attivita',1,1,0,0),
-    (2,'documenti',1,1,0,0),(2,'utenti',0,0,0,0);
-
-  -- Permessi candelete
-  INSERT OR IGNORE INTO permessi (ruolo_id, sezione, can_read, can_edit, can_delete, can_admin) VALUES
-    (3,'clienti',1,1,1,0),(3,'fornitori',1,1,1,0),(3,'prodotti',1,1,1,0),
-    (3,'magazzino',1,1,1,0),(3,'ordini',1,1,1,0),(3,'ddt',1,1,1,0),
-    (3,'container',1,1,1,0),(3,'fatture',1,1,1,0),(3,'attivita',1,1,1,0),
-    (3,'documenti',1,1,1,0),(3,'utenti',0,0,0,0);
-
-  -- Permessi superuser (tutto)
-  INSERT OR IGNORE INTO permessi (ruolo_id, sezione, can_read, can_edit, can_delete, can_admin) VALUES
-    (4,'clienti',1,1,1,1),(4,'fornitori',1,1,1,1),(4,'prodotti',1,1,1,1),
-    (4,'magazzino',1,1,1,1),(4,'ordini',1,1,1,1),(4,'ddt',1,1,1,1),
-    (4,'container',1,1,1,1),(4,'fatture',1,1,1,1),(4,'attivita',1,1,1,1),
-    (4,'documenti',1,1,1,1),(4,'utenti',1,1,1,1);
-
 `);
+
+const ROLE_DEFS = [
+  { id: 1, nome: 'readonly', descrizione: 'Solo lettura' },
+  { id: 2, nome: 'editor', descrizione: 'Lettura e modifica operativa' },
+  { id: 3, nome: 'admin', descrizione: 'Gestione piattaforma e utenti' },
+  { id: 4, nome: 'superadmin', descrizione: 'Accesso completo e governo totale' },
+];
+
+const APP_SECTIONS = [
+  'clienti', 'fornitori', 'contatti', 'prodotti', 'magazzino', 'ordini', 'ddt',
+  'container', 'fatture', 'attivita', 'documenti', 'mepa', 'cig', 'analytics',
+  'statistics', 'settings', 'mappa', 'utenti'
+];
+
+const upsertRole = db.prepare(`
+  INSERT INTO ruoli (id, nome, descrizione)
+  VALUES (?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET nome = excluded.nome, descrizione = excluded.descrizione
+`);
+
+ROLE_DEFS.forEach(role => upsertRole.run(role.id, role.nome, role.descrizione));
+try { db.prepare(`DELETE FROM ruoli WHERE nome = 'candelete' AND id NOT IN (1,2,3,4)`).run(); } catch {}
+
+const upsertPerm = db.prepare(`
+  INSERT INTO permessi (ruolo_id, sezione, can_read, can_edit, can_delete, can_admin)
+  VALUES (?, ?, ?, ?, ?, ?)
+  ON CONFLICT(ruolo_id, sezione) DO UPDATE SET
+    can_read = excluded.can_read,
+    can_edit = excluded.can_edit,
+    can_delete = excluded.can_delete,
+    can_admin = excluded.can_admin
+`);
+
+APP_SECTIONS.forEach(section => {
+  upsertPerm.run(1, section, section === 'utenti' || section === 'settings' ? 0 : 1, 0, 0, 0);
+  upsertPerm.run(2, section, section === 'utenti' || section === 'settings' ? 0 : 1, section === 'utenti' || section === 'settings' ? 0 : 1, 0, 0);
+  upsertPerm.run(3, section, 1, 1, section === 'settings' ? 0 : 1, section === 'utenti' || section === 'settings' ? 1 : 0);
+  upsertPerm.run(4, section, 1, 1, 1, 1);
+});
 
 module.exports = db;

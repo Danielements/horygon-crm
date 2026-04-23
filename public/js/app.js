@@ -67,18 +67,66 @@ async function init() {
     document.getElementById('btn-tema').textContent = USER.tema === 'light' ? '🌙' : '☀️';
     // UI utente
     document.getElementById('user-name').textContent = USER.nome;
-    document.getElementById('user-role').textContent = ['','Read Only','Editor','Can Delete','Superuser'][USER.ruolo_id] || '';
+    document.getElementById('user-role').textContent = ['','Read Only','Editor','Admin','SuperAdmin'][USER.ruolo_id] || '';
     document.getElementById('user-avatar').textContent = USER.nome[0].toUpperCase();
     // Google status
     document.getElementById('btn-google').textContent = USER.hasGoogle ? '✅' : '🔗';
     // Permessi
     PERMS = {};
     (USER.permessi || []).forEach(p => { PERMS[p.sezione] = p; });
-    // Mostra sezione utenti solo a superuser
-    if (USER.ruolo_id === 4) document.getElementById('nav-utenti').style.display = 'flex';
+    applyNavigationPermissions();
     showScreen('app');
     navigateTo('dashboard');
-  } catch { logout(); }
+  } catch {
+    localStorage.removeItem('horygon_token');
+    TOKEN = null;
+    USER = null;
+    showScreen('login-screen');
+    document.getElementById('setup-link').style.display = 'block';
+  }
+}
+
+const NAV_PERMISSION_MAP = {
+  clienti: 'clienti',
+  fornitori: 'fornitori',
+  contatti: 'contatti',
+  prodotti: 'prodotti',
+  magazzino: 'magazzino',
+  ordini: 'ordini',
+  ddt: 'ddt',
+  container: 'container',
+  fatture: 'fatture',
+  cig: 'cig',
+  mepa: 'mepa',
+  analytics: 'analytics',
+  attivita: 'attivita',
+  documenti: 'documenti',
+  statistics: 'statistics',
+  settings: 'settings',
+  mappa: 'mappa',
+  utenti: 'utenti'
+};
+
+function canReadSection(section) {
+  if (USER?.ruolo_id === 4) return true;
+  return !!PERMS?.[section]?.can_read;
+}
+
+function canEditSection(section) {
+  if (USER?.ruolo_id === 4) return true;
+  return !!PERMS?.[section]?.can_edit;
+}
+
+function applyNavigationPermissions() {
+  document.querySelectorAll('.nav-item[data-section]').forEach(item => {
+    const section = item.dataset.section;
+    const permSection = NAV_PERMISSION_MAP[section];
+    if (!permSection || section === 'dashboard') {
+      item.style.display = 'flex';
+      return;
+    }
+    item.style.display = canReadSection(permSection) ? 'flex' : 'none';
+  });
 }
 
 async function doLogin() {
@@ -112,6 +160,31 @@ function showLogin() { showScreen('login-screen'); }
 function logout() { localStorage.removeItem('horygon_token'); TOKEN = null; USER = null; showScreen('login-screen'); }
 function connectGoogle() { window.location = '/api/auth/google'; }
 
+async function changeMyPassword() {
+  const current_password = document.getElementById('pwd-current')?.value || '';
+  const new_password = document.getElementById('pwd-new')?.value || '';
+  const confirm = document.getElementById('pwd-confirm')?.value || '';
+  if (!current_password || !new_password) {
+    toast('Compila password attuale e nuova password', 'error');
+    return;
+  }
+  if (new_password !== confirm) {
+    toast('La conferma password non coincide', 'error');
+    return;
+  }
+  try {
+    await api('POST', '/auth/change-password', { current_password, new_password });
+    ['pwd-current','pwd-new','pwd-confirm'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+    closeAllModals();
+    toast('Password aggiornata', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
 async function toggleTema() {
   const newTema = USER.tema === 'dark' ? 'light' : 'dark';
   try {
@@ -132,17 +205,31 @@ function showScreen(id) {
 }
 
 function ensureAnagraficaLogisticaFields() {
-  if (document.getElementById('anag-canale-cliente')) return;
+  if (document.getElementById('anag-tipologia-cliente')) return;
   const note = document.getElementById('anag-note');
   if (!note || !note.parentElement) return;
   const wrap = document.createElement('div');
-  wrap.className = 'form-group';
-  wrap.innerHTML = `<label>Canale cliente</label>
-    <select id="anag-canale-cliente">
-      <option value="privato">Privato / Diretto</option>
-      <option value="mepa">MEPA</option>
-    </select>`;
+  wrap.innerHTML = `
+    <div class="form-group">
+      <label>Tipologia cliente</label>
+      <select id="anag-tipologia-cliente" onchange="toggleAnagraficaPaFields()">
+        <option value="privato">Privato</option>
+        <option value="pa">PA</option>
+      </select>
+    </div>
+    <div id="anag-pa-flags" style="display:none;margin-bottom:14px;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input)">
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Canali PA</div>
+      <label style="display:inline-flex;align-items:center;gap:6px;margin-right:14px"><input type="checkbox" id="anag-pa-mepa"> MEPA</label>
+      <label style="display:inline-flex;align-items:center;gap:6px;margin-right:14px"><input type="checkbox" id="anag-pa-sda"> SDA</label>
+      <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="anag-pa-rdo"> RdO</label>
+    </div>`;
   note.parentElement.insertAdjacentElement('beforebegin', wrap);
+}
+
+function toggleAnagraficaPaFields() {
+  const tipo = document.getElementById('anag-tipologia-cliente')?.value || 'privato';
+  const box = document.getElementById('anag-pa-flags');
+  if (box) box.style.display = tipo === 'pa' ? 'block' : 'none';
 }
 
 // ═══════════════════════════════
@@ -153,15 +240,21 @@ document.querySelectorAll('.nav-item').forEach(a => {
 });
 
 function navigateTo(section) {
+  const permSection = NAV_PERMISSION_MAP[section];
+  if (permSection && !canReadSection(permSection)) {
+    toast('Non hai accesso a questa sezione', 'error');
+    section = 'dashboard';
+  }
   document.querySelectorAll('.nav-item').forEach(a => a.classList.toggle('active', a.dataset.section === section));
   document.querySelectorAll('.section').forEach(s => s.classList.toggle('active', s.id === `section-${section}`));
   document.getElementById('main-content').scrollTop = 0;
   const map = {
     dashboard: loadDashboard, clienti: () => loadAnagrafiche('cliente'),
-    fornitori: () => loadAnagrafiche('fornitore'), prodotti: loadProdotti,
+    fornitori: () => loadAnagrafiche('fornitore'), contatti: loadContacts, prodotti: loadProdotti,
     magazzino: loadMagazzino, ordini: loadOrdini, ddt: loadDdt,
     container: loadContainer, fatture: loadFatture,
     attivita: loadAttivita, documenti: loadDocumenti,
+    statistics: loadStatistics, settings: loadSettingsPage,
     mappa: loadMappa, utenti: loadUtenti, mepa: loadMepa, 'opportunita-cpv': loadOpportunityCpv, cig: loadCIG, analytics: loadAnalytics,
   };
   if (map[section]) map[section]();
@@ -170,15 +263,16 @@ function navigateTo(section) {
 // DASHBOARD
 // ═══════════════════════════════
 async function loadDashboard() {
-  const [ordini, prodotti, pa, container] = await Promise.all([
+  const [ordini, prodotti, clienti, container] = await Promise.all([
     api('GET', '/ordini?stato=ricevuto'), api('GET', '/prodotti'),
-    api('GET', '/anagrafiche?tipo=pa'), api('GET', '/container'),
+    api('GET', '/anagrafiche?tipo=cliente'), api('GET', '/container'),
   ]);
   document.getElementById('kpi-ordini').textContent = ordini?.length || 0;
   document.getElementById('kpi-prodotti').textContent = prodotti?.length || 0;
-  document.getElementById('kpi-clienti').textContent = pa?.length || 0;
+  document.getElementById('kpi-clienti').textContent = (clienti || []).filter(c => c.tipologia_cliente === 'pa').length || 0;
   document.getElementById('kpi-container').textContent = container?.filter(c => c.stato === 'in_transito').length || 0;
   loadCalendar();
+  loadNotifications();
 }
 
 // ═══════════════════════════════
@@ -219,6 +313,51 @@ function getWeekStart(d) {
   return new Date(d.getFullYear(), d.getMonth(), diff);
 }
 
+function pad2(v) { return String(v).padStart(2, '0'); }
+function fmt(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
+function toDateTimeLocalValue(d) { return `${fmt(d)}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`; }
+
+function parseCalendarEventDate(value) {
+  if (!value) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [y, m, day] = value.split('-').map(Number);
+    return new Date(y, m - 1, day, 12, 0, 0);
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function getCalendarEventStart(evento) {
+  return parseCalendarEventDate(evento?.start?.dateTime || evento?.start?.date);
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function normalizeMailBody(value) {
+  return String(value || '')
+    .replace(/body\{[\s\S]*?(?=COMUNICAZIONE|Categorie di riferimento:|Identificativo Numerico Gara:)/i, '')
+    .replace(/@[a-z-]+[^{]*\{[\s\S]*?\}/gi, ' ')
+    .replace(/[A-Za-z0-9_-]+\{[^}]+\}/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/(COMUNICAZIONE\s+RDO)/i, '\n$1\n')
+    .replace(/(Categorie di riferimento:|Identificativo Numerico Gara:|Nome Gara:|Data pubblicazione:|Data ultima per la presentazione delle offerte:|Data termine richiesta chiarimenti:)/gi, '\n$1 ')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+}
+
+function compactText(value, max = 180) {
+  const text = normalizeMailBody(value);
+  if (text.length <= max) return text;
+  return `${text.slice(0, max).trim()}…`;
+}
+
 function renderMonthView() {
   const year = calDate.getFullYear(), month = calDate.getMonth();
   const firstDay = new Date(year, month, 1);
@@ -238,8 +377,8 @@ function renderMonthView() {
     const isToday = date.toDateString() === today.toDateString();
     const dayStr = fmt(date);
     const dayEvents = calEvents.filter(e => {
-      const es = e.start?.dateTime ? e.start.dateTime.substring(0,10) : e.start?.date;
-      return es === dayStr;
+      const start = getCalendarEventStart(e);
+      return start && fmt(start) === dayStr;
     });
     let evHtml = dayEvents.slice(0,3).map(e => {
       const color = e.colorId ? '' : '';
@@ -273,9 +412,8 @@ function renderWeekView() {
       const d = new Date(start); d.setDate(d.getDate() + i);
       const dayStr = fmt(d);
       const slotEvents = calEvents.filter(e => {
-        if (!e.start?.dateTime) return false;
-        const es = new Date(e.start.dateTime);
-        return fmt(es) === dayStr && es.getHours() === h;
+        const es = getCalendarEventStart(e);
+        return es && !!e.start?.dateTime && fmt(es) === dayStr && es.getHours() === h;
       });
       html += `<div class="cal-week-cell" onclick="calDayClick('${dayStr}T${String(h).padStart(2,'0')}:00')">
         ${slotEvents.map(e => `<div class="cal-event" onclick="editEvento(event,'${e.id}')">${e.summary||''}</div>`).join('')}
@@ -285,8 +423,6 @@ function renderWeekView() {
   html += '</div>';
   document.getElementById('cal-body').innerHTML = html;
 }
-
-function fmt(d) { return d.toISOString().substring(0,10); }
 function calPrev() { if (calView==='month') calDate.setMonth(calDate.getMonth()-1); else calDate.setDate(calDate.getDate()-7); loadCalendar(); }
 function calNext() { if (calView==='month') calDate.setMonth(calDate.getMonth()+1); else calDate.setDate(calDate.getDate()+7); loadCalendar(); }
 function calToday() { calDate = new Date(); loadCalendar(); }
@@ -302,7 +438,7 @@ function calDayClick(dateStr) {
   if (dateStr.includes('T')) {
     document.getElementById('evento-start').value = dateStr;
     const end = new Date(dateStr); end.setHours(end.getHours()+1);
-    document.getElementById('evento-end').value = end.toISOString().substring(0,16);
+    document.getElementById('evento-end').value = toDateTimeLocalValue(end);
     document.getElementById('evento-allday').checked = false;
   } else {
     document.getElementById('evento-start').value = dateStr + 'T09:00';
@@ -326,8 +462,10 @@ function editEvento(e, eventId) {
     document.getElementById('evento-start').value = ev.start.date;
     document.getElementById('evento-end').value = ev.end?.date || ev.start.date;
   } else {
-    document.getElementById('evento-start').value = ev.start?.dateTime?.substring(0,16) || '';
-    document.getElementById('evento-end').value = ev.end?.dateTime?.substring(0,16) || '';
+    const start = parseCalendarEventDate(ev.start?.dateTime);
+    const end = parseCalendarEventDate(ev.end?.dateTime);
+    document.getElementById('evento-start').value = start ? toDateTimeLocalValue(start) : '';
+    document.getElementById('evento-end').value = end ? toDateTimeLocalValue(end) : '';
   }
   openModal('modal-evento');
 }
@@ -373,8 +511,13 @@ function openModalAnagrafica(tipo) {
     const el = document.getElementById(`anag-${f}`);
     if (el) el.value = f === 'paese' ? 'IT' : '';
   });
-  const canale = document.getElementById('anag-canale-cliente');
-  if (canale) canale.value = tipo === 'pa' ? 'mepa' : 'privato';
+  const tipologia = document.getElementById('anag-tipologia-cliente');
+  if (tipologia) tipologia.value = 'privato';
+  ['anag-pa-mepa','anag-pa-sda','anag-pa-rdo'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.checked = false;
+  });
+  toggleAnagraficaPaFields();
   openModal('modal-anagrafica');
 }
 
@@ -384,7 +527,7 @@ async function loadAnagrafiche(tipo) {
   const tbody = document.getElementById(`${tipo === 'cliente' ? 'clienti' : 'fornitori'}-body`);
   tbody.innerHTML = (rows || []).map(a => `
     <tr>
-      <td><strong>${a.ragione_sociale}</strong>${a.tipo === 'cliente' ? `<div style="font-size:11px;color:var(--text-muted)">Canale: ${a.canale_cliente || 'privato'}</div>` : ''}</td>
+      <td><strong>${a.ragione_sociale}</strong>${a.tipo === 'cliente' ? `<div style="font-size:11px;color:var(--text-muted)">Tipologia: ${a.tipologia_cliente || 'privato'}${a.tipologia_cliente === 'pa' ? ` | ${[a.pa_mepa ? 'MEPA' : '', a.pa_sda ? 'SDA' : '', a.pa_rdo ? 'RdO' : ''].filter(Boolean).join(', ') || 'nessun canale'}` : ''}</div>` : ''}</td>
       <td>${a.citta || '—'}</td>
       <td>${a.piva || '—'}</td>
       <td>${a.telefono || '—'}</td>
@@ -411,8 +554,12 @@ async function editAnagrafica(id) {
   document.getElementById('anag-lat').value = a.lat || '';
   document.getElementById('anag-lng').value = a.lng || '';
   document.getElementById('anag-note').value = a.note || '';
-  const canale = document.getElementById('anag-canale-cliente');
-  if (canale) canale.value = a.canale_cliente || 'privato';
+  const tipologia = document.getElementById('anag-tipologia-cliente');
+  if (tipologia) tipologia.value = a.tipologia_cliente || 'privato';
+  document.getElementById('anag-pa-mepa').checked = !!a.pa_mepa;
+  document.getElementById('anag-pa-sda').checked = !!a.pa_sda;
+  document.getElementById('anag-pa-rdo').checked = !!a.pa_rdo;
+  toggleAnagraficaPaFields();
   openModal('modal-anagrafica');
 }
 
@@ -434,7 +581,11 @@ async function salvaAnagrafica() {
     lat:      parseFloat(document.getElementById('anag-lat')?.value) || null,
     lng:      parseFloat(document.getElementById('anag-lng')?.value) || null,
     note:     document.getElementById('anag-note')?.value   || null,
-    canale_cliente: document.getElementById('anag-canale-cliente')?.value || 'privato',
+    tipologia_cliente: document.getElementById('anag-tipologia-cliente')?.value || 'privato',
+    pa_mepa: document.getElementById('anag-pa-mepa')?.checked ? 1 : 0,
+    pa_sda: document.getElementById('anag-pa-sda')?.checked ? 1 : 0,
+    pa_rdo: document.getElementById('anag-pa-rdo')?.checked ? 1 : 0,
+    canale_cliente: document.getElementById('anag-tipologia-cliente')?.value === 'pa' ? 'mepa' : 'privato',
     attivo: 1,
   };
   try {
@@ -469,6 +620,7 @@ async function loadProdotti() {
       <td>
         <button class="btn btn-outline btn-sm" onclick="editProdotto(${p.id})">Modifica</button>
         <button class="btn btn-outline btn-sm" onclick="getQR(${p.id})">QR</button>
+        <button class="btn btn-danger btn-sm" onclick="eliminaProdotto(${p.id}, '${String(p.nome || '').replace(/'/g, "\\'")}')">Elimina</button>
       </td>
     </tr>`;
   }).join('');
@@ -483,6 +635,10 @@ async function editProdotto(id) {
   document.getElementById('prod-desc').value = p.descrizione || '';
   document.getElementById('prod-um').value = p.unita_misura || 'pz';
   document.getElementById('prod-peso').value = p.peso_kg || '';
+  ['prod-upload-foto','prod-upload-fatture','prod-upload-bolle'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
   await loadCategorie();
   document.getElementById('prod-categoria').value = p.categoria_id || '';
   // Tab fornitori
@@ -564,9 +720,51 @@ async function salvaProdotto() {
     attivo: 1,
   };
   try {
+    let prodottoId = id;
     if (id) await api('PUT', `/prodotti/${id}`, body);
-    else await api('POST', '/prodotti', body);
+    else {
+      const created = await api('POST', '/prodotti', body);
+      prodottoId = created?.id;
+    }
+    await uploadProdottoFiles(prodottoId || id);
     closeAllModals(); toast('Prodotto salvato', 'success'); loadProdotti();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function uploadProdottoFiles(prodottoId) {
+  if (!prodottoId || typeof uploadFotoProdotto !== 'function') return;
+  const foto = document.getElementById('prod-upload-foto')?.files;
+  const fatture = document.getElementById('prod-upload-fatture')?.files;
+  const bolle = document.getElementById('prod-upload-bolle')?.files;
+  if (foto?.length) await uploadFotoProdotto(prodottoId, foto, 'immagine');
+  if (fatture?.length) await uploadFotoProdotto(prodottoId, fatture, 'pdf');
+  if (bolle?.length) await uploadFotoProdotto(prodottoId, bolle, 'pdf');
+}
+
+function nuovoProdotto() {
+  document.getElementById('prod-id').value = '';
+  document.getElementById('prod-codice').value = '';
+  document.getElementById('prod-barcode').value = '';
+  document.getElementById('prod-nome').value = '';
+  document.getElementById('prod-desc').value = '';
+  document.getElementById('prod-um').value = 'pz';
+  document.getElementById('prod-peso').value = '';
+  document.getElementById('prod-tabs').style.display = 'none';
+  ['prod-upload-foto','prod-upload-fatture','prod-upload-bolle'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  loadCategorie();
+  openModal('modal-prodotto');
+}
+
+async function eliminaProdotto(id, nome) {
+  if (!confirm(`Archiviare il prodotto "${nome}"? Lo storico resta salvato, ma non comparira piu in magazzino.`)) return;
+  try {
+    await api('DELETE', `/prodotti/${id}`);
+    toast('Prodotto archiviato', 'success');
+    loadProdotti();
+    loadMagazzino();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -646,9 +844,8 @@ async function salvaOrdine() {
 // ═══════════════════════════════
 // DDT
 // ═══════════════════════════════
-// ═══════════════════════════════
-// CONTAINER
-// ═══════════════════════════════
+let ddtProdottiCache = [];
+
 function ensureDdtModal() {
   if (document.getElementById('modal-ddt')) return;
   const modal = document.createElement('div');
@@ -669,15 +866,26 @@ function ensureDdtModal() {
         <div class="form-group"><label>Fattura associata (opzionale)</label><select id="ddt-fattura"><option value="">Nessuna</option></select></div>
         <div class="form-group"><label>Vettore / note corriere</label><input type="text" id="ddt-vettore"></div>
       </div>
+      <div class="form-row">
+        <div class="form-group"><label>Causale</label><input type="text" id="ddt-causale" placeholder="Vendita, reso, trasferimento..."></div>
+        <div class="form-group"><label>Porto</label><select id="ddt-porto"><option value="">Non indicato</option><option value="Porto Franco">Porto Franco</option><option value="Porto Assegnato">Porto Assegnato</option><option value="Franco destino">Franco destino</option><option value="Franco partenza">Franco partenza</option></select></div>
+        <div class="form-group"><label>Resa</label><input type="text" id="ddt-resa" placeholder="Es. DAP, EXW, franco magazzino"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Colli</label><input type="number" min="0" id="ddt-colli"></div>
+        <div class="form-group"><label>Peso totale kg</label><input type="number" min="0" step="0.01" id="ddt-peso"></div>
+        <div class="form-group"><label>Aspetto beni</label><input type="text" id="ddt-aspetto" placeholder="Cartoni, pallet, sfuso..."></div>
+      </div>
       <div class="form-group"><label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ddt-spedizione"> Associa spedizione</label></div>
       <div class="form-row">
         <div class="form-group"><label>Corriere</label><select id="ddt-corriere"><option value="">Seleziona...</option><option value="dhl">DHL</option><option value="fedex">FedEx</option><option value="sda">SDA</option><option value="mailboxes">Mail Boxes</option><option value="gls">GLS</option><option value="brt">BRT</option><option value="altro">Altro</option></select></div>
         <div class="form-group"><label>Tracking</label><input type="text" id="ddt-tracking"></div>
+        <div class="form-group"><label>Data/ora trasporto</label><input type="datetime-local" id="ddt-data-trasporto"></div>
       </div>
-      <div class="form-row">
-        <div class="form-group"><label>Prodotto (opzionale)</label><select id="ddt-prodotto"><option value="">Nessuno</option></select></div>
-        <div class="form-group"><label>Quantita</label><input type="number" min="1" id="ddt-quantita"></div>
-        <div class="form-group"><label>Lotto</label><input type="text" id="ddt-lotto"></div>
+      <div class="form-group">
+        <label>Articoli</label>
+        <div id="ddt-righe"></div>
+        <button type="button" class="btn btn-outline btn-sm" onclick="aggiungiRigaDdt()">+ Aggiungi articolo</button>
       </div>
       <div class="form-group"><label>Note</label><textarea id="ddt-note" rows="3" style="width:100%;background:var(--bg-input);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:6px;font-family:inherit;font-size:14px"></textarea></div>
       <div class="form-group"><label>Note spedizione</label><input type="text" id="ddt-note-spedizione"></div>
@@ -694,17 +902,37 @@ async function preparaDdtModal() {
   const today = new Date().toISOString().slice(0, 10);
   document.getElementById('ddt-data').value = today;
   document.getElementById('ddt-numero').value = 'DDT-' + today.replaceAll('-', '') + '-' + Math.floor(Math.random() * 1000);
-  ['ddt-vettore','ddt-tracking','ddt-quantita','ddt-lotto','ddt-note','ddt-note-spedizione'].forEach(id => {
+  ['ddt-vettore','ddt-tracking','ddt-note','ddt-note-spedizione','ddt-causale','ddt-resa','ddt-colli','ddt-peso','ddt-aspetto','ddt-data-trasporto'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
   document.getElementById('ddt-tipo').value = 'uscita';
+  document.getElementById('ddt-porto').value = '';
   document.getElementById('ddt-spedizione').checked = false;
   document.getElementById('ddt-corriere').value = '';
   const [anag, prodotti, fatture] = await Promise.all([api('GET', '/anagrafiche'), api('GET', '/prodotti'), api('GET', '/fatture')]);
+  ddtProdottiCache = prodotti || [];
   document.getElementById('ddt-destinatario').innerHTML = '<option value="">Seleziona...</option>' + (anag||[]).map(a=>`<option value="${a.id}">${a.ragione_sociale}</option>`).join('');
-  document.getElementById('ddt-prodotto').innerHTML = '<option value="">Nessuno</option>' + (prodotti||[]).map(p=>`<option value="${p.id}">${p.codice_interno} - ${p.nome}</option>`).join('');
   document.getElementById('ddt-fattura').innerHTML = '<option value="">Nessuna</option>' + (fatture||[]).map(f=>`<option value="${f.id}">${f.numero} - ${f.ragione_sociale || ''}</option>`).join('');
+  document.getElementById('ddt-righe').innerHTML = '';
+  aggiungiRigaDdt();
+}
+
+function aggiungiRigaDdt() {
+  const wrap = document.getElementById('ddt-righe');
+  if (!wrap) return;
+  const row = document.createElement('div');
+  row.className = 'form-row ddt-riga';
+  row.style.alignItems = 'end';
+  row.style.marginBottom = '8px';
+  row.innerHTML = `
+    <div class="form-group"><label>Prodotto</label><select class="ddt-riga-prodotto">
+      <option value="">Seleziona...</option>${ddtProdottiCache.map(p=>`<option value="${p.id}" data-giacenza="${p.giacenza || 0}">${p.codice_interno} - ${p.nome} (${p.giacenza || 0})</option>`).join('')}
+    </select></div>
+    <div class="form-group"><label>Quantita</label><input class="ddt-riga-quantita" type="number" min="1"></div>
+    <div class="form-group"><label>Lotto</label><input class="ddt-riga-lotto" type="text"></div>
+    <button type="button" class="btn btn-danger btn-sm" onclick="this.closest('.ddt-riga').remove()">Rimuovi</button>`;
+  wrap.appendChild(row);
 }
 
 async function loadDdt() {
@@ -733,9 +961,11 @@ async function openApiPdf(path) {
 }
 
 async function salvaDdt() {
-  const prodottoId = document.getElementById('ddt-prodotto').value;
-  const quantita = parseInt(document.getElementById('ddt-quantita').value) || null;
-  const righe = prodottoId && quantita ? [{ prodotto_id: prodottoId, quantita, lotto: document.getElementById('ddt-lotto').value || null }] : [];
+  const righe = [...document.querySelectorAll('.ddt-riga')].map(row => ({
+    prodotto_id: row.querySelector('.ddt-riga-prodotto')?.value || null,
+    quantita: parseInt(row.querySelector('.ddt-riga-quantita')?.value) || null,
+    lotto: row.querySelector('.ddt-riga-lotto')?.value || null,
+  })).filter(r => r.prodotto_id && r.quantita);
   const body = {
     numero_ddt: document.getElementById('ddt-numero').value,
     tipo: document.getElementById('ddt-tipo').value,
@@ -746,6 +976,13 @@ async function salvaDdt() {
     spedizione_attiva: document.getElementById('ddt-spedizione').checked ? 1 : 0,
     corriere: document.getElementById('ddt-corriere').value || null,
     numero_spedizione: document.getElementById('ddt-tracking').value || null,
+    causale: document.getElementById('ddt-causale').value || null,
+    porto: document.getElementById('ddt-porto').value || null,
+    resa: document.getElementById('ddt-resa').value || null,
+    colli: parseInt(document.getElementById('ddt-colli').value) || null,
+    peso_totale: parseFloat(document.getElementById('ddt-peso').value) || null,
+    aspetto_beni: document.getElementById('ddt-aspetto').value || null,
+    data_ora_trasporto: document.getElementById('ddt-data-trasporto').value || null,
     note: document.getElementById('ddt-note').value || null,
     note_spedizione: document.getElementById('ddt-note-spedizione').value || null,
     righe,
@@ -815,30 +1052,65 @@ async function importXML(input) {
 // ═══════════════════════════════
 const ICONE = { telefonata:'📞', appuntamento:'📅', email:'✉️', visita:'🤝', nota:'📝' };
 async function loadAttivita() {
-  const rows = await api('GET', '/attivita');
-  document.getElementById('attivita-list').innerHTML = (rows||[]).map(a=>`
+  const [rows, meta] = await Promise.all([
+    api('GET', '/attivita'),
+    api('GET', '/attivita/meta')
+  ]);
+  document.getElementById('attivita-list').innerHTML = (rows || []).map(a => {
+    const noteFull = normalizeMailBody(a.note || '');
+    const notePreview = compactText(noteFull, 220);
+    return `
     <div class="attivita-item">
-      <div class="att-icon att-${a.tipo}">${ICONE[a.tipo]||'◎'}</div>
-      <div>
-        <strong>${a.oggetto||a.tipo}</strong>
-        ${a.ragione_sociale ? `<span style="color:var(--text-muted)"> — ${a.ragione_sociale}</span>` : ''}
-        <div style="font-size:12px;color:var(--text-muted);margin-top:4px">
-          ${a.data_ora ? new Date(a.data_ora).toLocaleString('it') : ''}
-          ${a.durata_minuti ? ` · ${a.durata_minuti} min` : ''}
-          ${a.google_event_id ? ' · <span style="color:var(--accent)">📅 Google Cal</span>' : ''}
+      <div class="att-icon att-${a.tipo}">${ICONE[a.tipo] || '◎'}</div>
+      <div style="min-width:0;flex:1">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+          <div>
+            <strong>${escapeHtml(a.oggetto || a.tipo)}</strong>
+            ${a.ragione_sociale ? `<span style="color:var(--text-muted)"> — ${escapeHtml(a.ragione_sociale)}</span>` : ''}
+          </div>
+          <span class="badge">${escapeHtml(a.stato || 'aperta')}</span>
         </div>
-        ${a.note ? `<div style="font-size:13px;margin-top:6px;color:var(--text-muted)">${a.note}</div>` : ''}
+        <div style="font-size:12px;color:var(--text-muted);margin-top:4px">
+          ${a.data_ora ? new Date(a.data_ora).toLocaleString('it-IT') : ''}
+          ${a.durata_minuti ? ` · ${a.durata_minuti} min` : ''}
+          ${a.assegnato_nome ? ` · Assegnata a ${escapeHtml(a.assegnato_nome)}` : ''}
+          ${a.google_event_id ? ' · <span style="color:var(--accent)">Google Cal</span>' : ''}
+        </div>
+        ${noteFull ? `
+          <details style="margin-top:8px">
+            <summary style="cursor:pointer;color:var(--text-muted);font-size:13px">${escapeHtml(notePreview)}</summary>
+            <div style="font-size:13px;margin-top:8px;color:var(--text-muted);white-space:pre-wrap;line-height:1.45">${escapeHtml(noteFull)}</div>
+          </details>` : ''}
       </div>
-    </div>`).join('') || '<p style="color:var(--text-muted)">Nessuna attività</p>';
-  const anag = await api('GET', '/anagrafiche');
-  const sel = document.getElementById('att-anagrafica');
-  sel.innerHTML = '<option value="">Seleziona...</option>' + (anag||[]).map(a=>`<option value="${a.id}">${a.ragione_sociale}</option>`).join('');
+    </div>`;
+  }).join('') || '<p style="color:var(--text-muted)">Nessuna attività</p>';
+  const anag = meta?.anagrafiche || [];
+  const utenti = meta?.utenti || [];
+  document.getElementById('att-anagrafica').innerHTML = '<option value="">Seleziona...</option>' + anag.map(a => `<option value="${a.id}">${escapeHtml(a.ragione_sociale)}</option>`).join('');
+  document.getElementById('att-assegnato').innerHTML = '<option value="">Nessuno</option>' + utenti.map(u => `<option value="${u.id}">${escapeHtml(u.nome)}</option>`).join('');
+}
+
+async function openAttivitaModal() {
+  await loadAttivita();
+  document.getElementById('att-tipo').value = 'nota';
+  document.getElementById('att-anagrafica').value = '';
+  document.getElementById('att-assegnato').value = '';
+  document.getElementById('att-stato').value = 'aperta';
+  document.getElementById('att-oggetto').value = '';
+  document.getElementById('att-data').value = '';
+  document.getElementById('att-durata').value = 30;
+  document.getElementById('att-note').value = '';
+  document.getElementById('att-promemoria').value = '';
+  document.getElementById('att-sync-google').checked = false;
+  openModal('modal-attivita');
 }
 
 async function salvaAttivita() {
   const body = {
     tipo: document.getElementById('att-tipo').value,
     anagrafica_id: document.getElementById('att-anagrafica').value || null,
+    assegnato_a: document.getElementById('att-assegnato').value || null,
+    stato: document.getElementById('att-stato').value || 'aperta',
     data_ora: document.getElementById('att-data').value,
     durata_minuti: parseInt(document.getElementById('att-durata').value)||null,
     oggetto: document.getElementById('att-oggetto').value,
@@ -846,9 +1118,17 @@ async function salvaAttivita() {
     promemoria_il: document.getElementById('att-promemoria').value || null,
   };
   try {
-    const r = await api('POST', '/attivita', body);
+    await api('POST', '/attivita', body);
     if (document.getElementById('att-sync-google').checked && USER.hasGoogle) {
-      const ev = { summary: body.oggetto||body.tipo, description: body.note||'', start: { dateTime: new Date(body.data_ora).toISOString(), timeZone: 'Europe/Rome' }, end: { dateTime: new Date(new Date(body.data_ora).getTime()+(body.durata_minuti||60)*60000).toISOString(), timeZone: 'Europe/Rome' } };
+      const start = body.data_ora ? new Date(body.data_ora) : new Date();
+      const end = new Date(start.getTime() + (body.durata_minuti || 60) * 60000);
+      const ev = {
+        title: body.oggetto || body.tipo,
+        description: body.note || '',
+        start: toDateTimeLocalValue(start),
+        end: toDateTimeLocalValue(end),
+        allDay: false
+      };
       await api('POST', '/google/calendar/events', ev);
     }
     closeAllModals(); toast('Attività salvata', 'success'); loadAttivita();
@@ -861,6 +1141,8 @@ async function salvaAttivita() {
 async function loadDocumenti() {
   if (!USER?.hasGoogle) {
     document.getElementById('drive-files').innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)"><div style="font-size:40px">📁</div><p>Connetti Google per accedere ai documenti</p><button class="btn btn-accent" style="margin-top:16px" onclick="connectGoogle()">Connetti Google</button></div>';
+    const mepa = document.getElementById('mepa-mail-list');
+    if (mepa) mepa.innerHTML = '<p style="color:var(--text-muted)">Connetti Google per leggere le mail MEPA.</p>';
     return;
   }
   document.getElementById('drive-files').innerHTML = '<p style="color:var(--text-muted)">Caricamento...</p>';
@@ -884,6 +1166,7 @@ async function loadDocumenti() {
   zone.ondragover = e => { e.preventDefault(); zone.classList.add('dragover'); };
   zone.ondragleave = () => zone.classList.remove('dragover');
   zone.ondrop = e => { e.preventDefault(); zone.classList.remove('dragover'); uploadDriveFiles(e.dataTransfer.files); };
+  loadMepaMailList();
 }
 
 async function uploadDriveFiles(files) {
@@ -901,6 +1184,317 @@ async function deleteDriveFile(fileId, btn) {
   if (!confirm('Eliminare questo file da Google Drive?')) return;
   try { await api('DELETE', `/google/drive/files/${fileId}`); toast('File eliminato', 'success'); loadDocumenti(); }
   catch (e) { toast(e.message, 'error'); }
+}
+
+async function syncMepaMail() {
+  try {
+    const r = await api('POST', '/google/gmail/mepa/sync');
+    toast(`Mail MEPA sincronizzate: ${r?.inserted || 0} nuove`, 'success');
+    loadMepaMailList();
+    loadNotifications();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+let CONTATTI_META = { anagrafiche: [], utenti: [] };
+
+async function loadContacts() {
+  const box = document.getElementById('contacts-body');
+  if (!box) return;
+  const q = document.getElementById('search-contatti')?.value || '';
+  box.innerHTML = '<tr><td colspan="7" style="color:var(--text-muted);text-align:center;padding:20px">Caricamento contatti...</td></tr>';
+  try {
+    const [rows, meta] = await Promise.all([
+      api('GET', `/contatti?q=${encodeURIComponent(q)}`),
+      api('GET', '/contatti/meta')
+    ]);
+    CONTATTI_META = meta || { anagrafiche: [], utenti: [] };
+    box.innerHTML = (rows || []).length
+      ? rows.map(c => `<tr>
+          <td>
+            <div style="display:flex;align-items:center;gap:10px">
+              ${renderContactAvatar(c)}
+              <div>
+                <strong>${escapeHtml([c.nome, c.cognome].filter(Boolean).join(' ') || '-')}</strong>
+                <div style="font-size:12px;color:var(--text-muted)">${escapeHtml(c.linked_user_nome || '')}</div>
+              </div>
+            </div>
+          </td>
+          <td>${escapeHtml(c.organizzazione || '-')}</td>
+          <td>${escapeHtml(c.ruolo || '-')}</td>
+          <td>${escapeHtml(c.email || '-')}</td>
+          <td>${escapeHtml(c.telefono || '-')}</td>
+          <td>${c.google_resource_name ? '<span style="color:var(--success)">Sincronizzato</span>' : '<span style="color:var(--text-muted)">Locale</span>'}</td>
+          <td>
+            <button class="btn btn-outline btn-sm" onclick="editContatto(${c.id})">Modifica</button>
+            <button class="btn btn-outline btn-sm" onclick="syncContattoToGoogle(${c.id})">Google</button>
+          </td>
+        </tr>`).join('')
+      : '<tr><td colspan="7" style="color:var(--text-muted);text-align:center;padding:20px">Nessun contatto disponibile.</td></tr>';
+  } catch (e) {
+    box.innerHTML = `<tr><td colspan="7" style="color:var(--danger);text-align:center;padding:20px">${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+function getContactInitials(c) {
+  const parts = [c.nome, c.cognome].filter(Boolean).join(' ').trim().split(/\s+/).filter(Boolean);
+  return parts.slice(0, 2).map(p => p[0]?.toUpperCase() || '').join('') || 'CT';
+}
+
+function renderContactAvatar(c) {
+  if (c.avatar_path) {
+    return `<img src="${c.avatar_path}" alt="${escapeHtml([c.nome, c.cognome].filter(Boolean).join(' '))}" style="width:42px;height:42px;border-radius:50%;object-fit:cover;border:1px solid var(--border)">`;
+  }
+  return `<div style="width:42px;height:42px;border-radius:50%;background:#dbeafe;color:#1d4ed8;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;border:1px solid #bfdbfe">${escapeHtml(getContactInitials(c))}</div>`;
+}
+
+function setContattoAvatarPreview(src, fallback = 'N/A') {
+  const box = document.getElementById('contatto-avatar-preview');
+  if (!box) return;
+  if (src) {
+    box.innerHTML = `<img src="${src}" alt="Avatar contatto" style="width:100%;height:100%;object-fit:cover">`;
+  } else {
+    box.textContent = fallback;
+  }
+}
+
+async function syncContactsToGoogle() {
+  try {
+    const result = await api('POST', '/google/contacts/sync');
+    toast(`Contatti sincronizzati: ${result?.created || 0} creati, ${result?.updated || 0} aggiornati`, 'success');
+    loadContacts();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+function populateContattiMeta() {
+  document.getElementById('contatto-anagrafica').innerHTML =
+    '<option value="">Nessuna</option>' +
+    (CONTATTI_META.anagrafiche || []).map(a => `<option value="${a.id}">${escapeHtml(a.ragione_sociale)}</option>`).join('');
+  document.getElementById('contatto-utente').innerHTML =
+    '<option value="">Nessuno</option>' +
+    (CONTATTI_META.utenti || []).map(u => `<option value="${u.id}">${escapeHtml(u.nome)}</option>`).join('');
+}
+
+async function openContattoModal() {
+  if (!CONTATTI_META.anagrafiche?.length && !CONTATTI_META.utenti?.length) {
+    CONTATTI_META = await api('GET', '/contatti/meta') || { anagrafiche: [], utenti: [] };
+  }
+  populateContattiMeta();
+  document.getElementById('contatto-id').value = '';
+  document.getElementById('contatto-nome').value = '';
+  document.getElementById('contatto-cognome').value = '';
+  document.getElementById('contatto-ruolo').value = '';
+  document.getElementById('contatto-email').value = '';
+  document.getElementById('contatto-telefono').value = '';
+  document.getElementById('contatto-anagrafica').value = '';
+  document.getElementById('contatto-utente').value = '';
+  document.getElementById('contatto-note').value = '';
+  document.getElementById('contatto-esterno').checked = false;
+  document.getElementById('contatto-avatar').value = '';
+  setContattoAvatarPreview('', 'N/A');
+  openModal('modal-contatto');
+}
+
+async function editContatto(id) {
+  if (!CONTATTI_META.anagrafiche?.length && !CONTATTI_META.utenti?.length) {
+    CONTATTI_META = await api('GET', '/contatti/meta') || { anagrafiche: [], utenti: [] };
+  }
+  populateContattiMeta();
+  const c = await api('GET', `/contatti/${id}`);
+  document.getElementById('contatto-id').value = c.id;
+  document.getElementById('contatto-nome').value = c.nome || '';
+  document.getElementById('contatto-cognome').value = c.cognome || '';
+  document.getElementById('contatto-ruolo').value = c.ruolo || '';
+  document.getElementById('contatto-email').value = c.email || '';
+  document.getElementById('contatto-telefono').value = c.telefono || '';
+  document.getElementById('contatto-anagrafica').value = c.anagrafica_id || '';
+  document.getElementById('contatto-utente').value = c.linked_user_id || '';
+  document.getElementById('contatto-note').value = c.note || '';
+  document.getElementById('contatto-esterno').checked = !!c.visibile_esterno;
+  document.getElementById('contatto-avatar').value = '';
+  setContattoAvatarPreview(c.avatar_path || '', getContactInitials(c));
+  openModal('modal-contatto');
+}
+
+async function salvaContatto() {
+  const id = document.getElementById('contatto-id').value;
+  const body = {
+    nome: document.getElementById('contatto-nome').value,
+    cognome: document.getElementById('contatto-cognome').value,
+    ruolo: document.getElementById('contatto-ruolo').value,
+    email: document.getElementById('contatto-email').value,
+    telefono: document.getElementById('contatto-telefono').value,
+    anagrafica_id: document.getElementById('contatto-anagrafica').value || null,
+    linked_user_id: document.getElementById('contatto-utente').value || null,
+    note: document.getElementById('contatto-note').value,
+    visibile_esterno: document.getElementById('contatto-esterno').checked ? 1 : 0
+  };
+  try {
+    const saved = id ? await api('PUT', `/contatti/${id}`, body) : await api('POST', '/contatti', body);
+    const contattoId = id || saved?.id;
+    const avatar = document.getElementById('contatto-avatar')?.files?.[0];
+    if (contattoId && avatar) {
+      const fd = new FormData();
+      fd.append('avatar', avatar);
+      await apiForm('POST', `/contatti/${contattoId}/avatar`, fd);
+    }
+    closeAllModals();
+    toast('Contatto salvato', 'success');
+    loadContacts();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function syncContattoToGoogle(id) {
+  if (!USER?.hasGoogle) {
+    toast('Connetti Google per sincronizzare il contatto', 'error');
+    return;
+  }
+  try {
+    const result = await api('POST', `/contatti/${id}/sync-google`);
+    toast(result?.skipped ? 'Contatto già collegato a Google' : 'Contatto sincronizzato su Google', 'success');
+    loadContacts();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function loadMepaMailList() {
+  const box = document.getElementById('mepa-mail-list');
+  if (!box || !USER?.hasGoogle) return;
+  box.innerHTML = '<p style="color:var(--text-muted)">Caricamento comunicazioni...</p>';
+  const rows = await api('GET', '/google/gmail/mepa/messages');
+  box.innerHTML = (rows||[]).length ? `<table class="data-table">
+    <thead><tr><th>Ente</th><th>Gara</th><th>Categoria</th><th>Pubblicazione</th><th>Scadenza</th><th>Stato</th><th>Azioni</th></tr></thead>
+    <tbody>${rows.map(r => `<tr>
+      <td>${r.ente || '-'}</td>
+      <td><strong>${r.gara_id || '-'}</strong><div style="font-size:12px;color:var(--text-muted)">${r.nome_gara || r.oggetto || ''}</div></td>
+      <td>${r.categoria || '-'}</td>
+      <td>${r.data_pubblicazione || '-'}</td>
+      <td style="color:${getDeadlineColor(r.scadenza_offerte)}">${r.scadenza_offerte || '-'}</td>
+      <td>
+        <select onchange="updateMepaMailStatus(${r.id}, this.value)" class="btn btn-outline btn-sm">
+          ${['nuova','in_valutazione','offerta_in_preparazione','offerta_inviata','archiviata','scaduta','eliminata'].map(s => `<option value="${s}"${r.stato===s?' selected':''}>${s}</option>`).join('')}
+        </select>
+      </td>
+      <td>
+        <button class="btn btn-danger btn-sm" onclick="removeMepaMail(${r.id})">Escludi</button>
+      </td>
+    </tr>`).join('')}</tbody></table>`
+    : '<p style="color:var(--text-muted)">Nessuna comunicazione MEPA acquisita.</p>';
+}
+
+function getDeadlineColor(value) {
+  if (!value) return 'var(--text)';
+  const m = String(value).match(/(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?/);
+  const d = m ? new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4] || '9'), Number(m[5] || '0'), 0) : new Date(String(value).replace(' ', 'T'));
+  if (Number.isNaN(d.getTime())) return 'var(--text)';
+  const diff = Math.ceil((d.getTime() - Date.now()) / 86400000);
+  if (diff <= 1) return 'var(--danger)';
+  if (diff <= 3) return '#d97706';
+  return 'var(--success)';
+}
+
+async function updateMepaMailStatus(id, stato) {
+  try {
+    const body = { stato };
+    if (stato === 'eliminata') body.sync_attiva = 0;
+    await api('PATCH', `/google/gmail/mepa/messages/${id}`, body);
+    toast('Stato aggiornato', 'success');
+    loadMepaMailList();
+    loadNotifications();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function removeMepaMail(id) {
+  if (!confirm('Escludere questa mail dalle sincronizzazioni future?')) return;
+  await updateMepaMailStatus(id, 'eliminata');
+}
+
+async function loadNotifications() {
+  const box = document.getElementById('dashboard-notifications');
+  if (!box) return;
+  const rows = await api('GET', '/google/notifications');
+  box.innerHTML = (rows || []).length
+    ? rows.slice(0, 8).map(n => `<div style="padding:10px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+        <div>
+          <div style="font-weight:600;display:flex;align-items:center;gap:8px">
+            <button class="btn btn-sm ${n.pinned ? 'btn-danger' : 'btn-outline'}" onclick="toggleNotificationPinned(${n.id}, ${n.pinned ? 1 : 0})" title="Metti in evidenza">🚩</button>
+            <span>${escapeHtml(n.titolo || '')}</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-muted)">${escapeHtml(compactText(n.messaggio || '', 180))}</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-outline btn-sm" onclick="markNotificationRead(${n.id})">${n.letta ? 'Letta' : 'Segna letta'}</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteNotification(${n.id})">Elimina</button>
+        </div>
+      </div>`).join('')
+    : '<p style="color:var(--text-muted)">Nessuna notifica.</p>';
+}
+
+async function markNotificationRead(id) {
+  await api('PATCH', `/google/notifications/${id}`, { letta: 1 });
+  loadNotifications();
+}
+
+async function toggleNotificationPinned(id, pinned) {
+  await api('PATCH', `/google/notifications/${id}`, { pinned: pinned ? 0 : 1 });
+  loadNotifications();
+}
+
+async function deleteNotification(id) {
+  if (!confirm('Eliminare questa notifica dal dashboard?')) return;
+  await api('PATCH', `/google/notifications/${id}`, { eliminata: 1 });
+  loadNotifications();
+}
+
+async function loadStatistics() {
+  const stats = await api('GET', '/system/stats/overview');
+  const cpv = await api('GET', '/mepa/cpv-operativi');
+  document.getElementById('stat-mail-ricevute').textContent = stats?.kpi?.mailRicevute || 0;
+  document.getElementById('stat-mail-nuove').textContent = stats?.kpi?.mailNuove || 0;
+  document.getElementById('stat-scadenze').textContent = stats?.kpi?.scadenze || 0;
+  document.getElementById('stat-notifiche').textContent = stats?.kpi?.notificheDaLeggere || 0;
+  document.getElementById('stats-recenti').innerHTML = (stats?.recenti || []).length
+    ? (stats.recenti || []).map(r => `<div style="padding:10px 0;border-bottom:1px solid var(--border)">
+        <strong>${r.tipo}</strong> - ${r.titolo || '-'}
+        <div style="font-size:12px;color:var(--text-muted)">${r.data || ''} ${r.stato ? `| ${r.stato}` : ''}</div>
+      </div>`).join('')
+    : '<p style="color:var(--text-muted)">Nessun evento recente.</p>';
+  document.getElementById('stats-cpv-operativi').innerHTML = (cpv || []).map(c => `<div style="padding:10px 0;border-bottom:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+        <div>
+          <strong>${c.codice_cpv}</strong> - ${c.desc || ''}
+          <div style="font-size:12px;color:var(--text-muted)">Mercato: EUR ${(c.valore_mercato || 0).toLocaleString('it-IT')}</div>
+        </div>
+        <span class="badge">${c.stato_operativo}</span>
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:6px">
+        Prodotto: ${c.prodotti_count ? 'si' : 'no'} | Scorta: ${c.giacenza_totale || 0}
+        ${c.prodotti_count ? `| ${c.prodotti.map(p => `${p.codice_interno} (${p.giacenza || 0})`).join(', ')}` : '| da attivare/acquistare'}
+      </div>
+    </div>`).join('') || '<p style="color:var(--text-muted)">Nessun CPV attivo trovato.</p>';
+}
+
+async function loadSettingsPage() {
+  const rows = await api('GET', '/system/settings');
+  const box = document.getElementById('settings-list');
+  box.innerHTML = (rows || []).map(r => `<div style="display:grid;grid-template-columns:220px 1fr;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)">
+      <div><strong>${r.key}</strong><div style="font-size:12px;color:var(--text-muted)">${r.type}</div></div>
+      <input type="text" data-setting-key="${r.key}" data-setting-type="${r.type}" value="${String(r.value || '').replace(/"/g, '&quot;')}">
+    </div>`).join('');
+}
+
+async function saveSettingsPage() {
+  const items = [...document.querySelectorAll('[data-setting-key]')].map(el => ({
+    key: el.dataset.settingKey,
+    type: el.dataset.settingType || 'string',
+    value: el.value
+  }));
+  await api('PUT', '/system/settings', { items });
+  toast('Impostazioni salvate', 'success');
 }
 
 function driveIcon(mime) {
@@ -938,16 +1532,51 @@ async function loadMappa() {
 // ═══════════════════════════════
 // UTENTI
 // ═══════════════════════════════
-const RUOLI_NOMI = {1:'readonly',2:'editor',3:'candelete',4:'superuser'};
+const RUOLI_NOMI = {1:'readonly',2:'editor',3:'admin',4:'superadmin'};
+const RUOLI_LABEL = {1:'Read Only',2:'Editor',3:'Admin',4:'SuperAdmin'};
+const SEZIONI = ['clienti','fornitori','contatti','prodotti','magazzino','ordini','ddt','container','fatture','attivita','documenti','mepa','cig','analytics','statistics','settings','mappa','utenti'];
+const SEZIONI_LABEL = {
+  clienti: 'Clienti',
+  fornitori: 'Fornitori',
+  contatti: 'Contatti',
+  prodotti: 'Prodotti',
+  magazzino: 'Magazzino',
+  ordini: 'Ordini',
+  ddt: 'DDT',
+  container: 'Container',
+  fatture: 'Fatture',
+  attivita: 'Attività CRM',
+  documenti: 'Documenti',
+  mepa: 'Analisi MEPA',
+  cig: 'Stagionalità CIG',
+  analytics: 'Analisi Incrociata',
+  statistics: 'Statistics',
+  settings: 'Impostazioni',
+  mappa: 'Mappa',
+  utenti: 'Utenti'
+};
 async function loadUtenti() {
-  const rows = await api('GET', '/utenti');
+  const [rows, roles] = await Promise.all([
+    api('GET', '/utenti'),
+    api('GET', '/utenti/ruoli')
+  ]);
   document.getElementById('utenti-body').innerHTML = (rows||[]).map(u=>`
     <tr><td>${u.nome}</td><td>${u.email}</td>
     <td><span class="badge badge-${RUOLI_NOMI[u.ruolo_id]||''}">${u.ruolo_nome||'—'}</span></td>
     <td>${u.tema==='light'?'☀️ Chiaro':'🌙 Scuro'}</td>
     <td>${u.attivo?'✅':'❌'}</td>
-    <td><button class="btn btn-outline btn-sm" onclick="editUtente(${u.id})">Modifica</button></td></tr>`).join('');
+    <td>
+      <button class="btn btn-outline btn-sm" onclick="editUtente(${u.id})">Modifica</button>
+      <button class="btn btn-outline btn-sm" onclick="mostraBigliettoUtente(${u.id})">Biglietto</button>
+    </td></tr>`).join('');
+  const roleOptions = (roles || []).sort((a,b) => a.id - b.id).map(r => `<option value="${r.id}">${RUOLI_LABEL[r.id] || r.nome}</option>`).join('');
+  document.getElementById('utente-ruolo').innerHTML = roleOptions;
+  document.getElementById('sel-ruolo-perm').innerHTML = roleOptions;
+  if (!document.getElementById('sel-ruolo-perm').value) document.getElementById('sel-ruolo-perm').value = '1';
   loadPermessi(document.getElementById('sel-ruolo-perm').value);
+  const page = document.getElementById('section-utenti');
+  const addBtn = page?.querySelector('.page-header .btn.btn-accent');
+  if (addBtn) addBtn.style.display = USER?.ruolo_id === 4 || PERMS?.utenti?.can_admin ? 'inline-flex' : 'none';
 }
 
 async function editUtente(id) {
@@ -957,6 +1586,11 @@ async function editUtente(id) {
   document.getElementById('utente-id').value = u.id;
   document.getElementById('utente-nome').value = u.nome;
   document.getElementById('utente-email').value = u.email;
+  document.getElementById('utente-telefono').value = u.telefono || '';
+  document.getElementById('utente-qualifica').value = u.qualifica || '';
+  document.getElementById('utente-reparto').value = u.reparto || '';
+  document.getElementById('utente-linkedin').value = u.linkedin || '';
+  document.getElementById('utente-note-biglietto').value = u.note_biglietto || '';
   document.getElementById('utente-password').value = '';
   document.getElementById('utente-ruolo').value = u.ruolo_id;
   document.getElementById('utente-tema').value = u.tema || 'dark';
@@ -964,9 +1598,32 @@ async function editUtente(id) {
   openModal('modal-utente');
 }
 
+function nuovoUtente() {
+  ['id','nome','email','telefono','qualifica','reparto','linkedin','note-biglietto','password'].forEach(k => {
+    const el = document.getElementById(`utente-${k}`);
+    if (el) el.value = '';
+  });
+  document.getElementById('utente-ruolo').value = '1';
+  document.getElementById('utente-tema').value = 'dark';
+  document.getElementById('utente-attivo').value = '1';
+  openModal('modal-utente');
+}
+
 async function salvaUtente() {
   const id = document.getElementById('utente-id').value;
-  const body = { nome: document.getElementById('utente-nome').value, email: document.getElementById('utente-email').value, password: document.getElementById('utente-password').value, ruolo_id: parseInt(document.getElementById('utente-ruolo').value), tema: document.getElementById('utente-tema').value, attivo: parseInt(document.getElementById('utente-attivo').value) };
+  const body = {
+    nome: document.getElementById('utente-nome').value,
+    email: document.getElementById('utente-email').value,
+    telefono: document.getElementById('utente-telefono').value,
+    qualifica: document.getElementById('utente-qualifica').value,
+    reparto: document.getElementById('utente-reparto').value,
+    linkedin: document.getElementById('utente-linkedin').value,
+    note_biglietto: document.getElementById('utente-note-biglietto').value,
+    password: document.getElementById('utente-password').value,
+    ruolo_id: parseInt(document.getElementById('utente-ruolo').value),
+    tema: document.getElementById('utente-tema').value,
+    attivo: parseInt(document.getElementById('utente-attivo').value)
+  };
   if (!body.password) delete body.password;
   try {
     if (id) await api('PUT', `/utenti/${id}`, body);
@@ -975,21 +1632,53 @@ async function salvaUtente() {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-const SEZIONI = ['clienti','fornitori','prodotti','magazzino','ordini','ddt','container','fatture','attivita','documenti'];
+async function mostraBigliettoUtente(id) {
+  const u = await api('GET', `/utenti/${id}/biglietto`);
+  if (!u) return;
+  const win = window.open('', '_blank', 'width=440,height=620');
+  win.document.write(`<html><head><title>Biglietto ${u.nome}</title></head>
+    <body style="margin:0;background:#e5e7eb;font-family:Georgia,serif;color:#111827">
+      <div style="width:360px;margin:34px auto;background:#fff;border-radius:22px;padding:28px;box-shadow:0 24px 70px rgba(17,24,39,.22);border:1px solid #d1d5db">
+        <div style="font-size:12px;letter-spacing:.24em;text-transform:uppercase;color:#6b7280">Horygon</div>
+        <h1 style="margin:10px 0 4px;font-size:30px;line-height:1">${u.nome || ''}</h1>
+        <div style="font-size:14px;color:#374151;margin-bottom:18px">${u.qualifica || u.ruolo_nome || ''}</div>
+        <div style="display:flex;gap:20px;align-items:center">
+          <img src="${u.qr}" style="width:132px;height:132px">
+          <div style="font-size:13px;line-height:1.7">
+            <div>${u.email || ''}</div>
+            <div>${u.telefono || ''}</div>
+            <div>${u.linkedin || ''}</div>
+          </div>
+        </div>
+        <p style="font-size:12px;color:#6b7280;margin-top:18px">${u.note_biglietto || 'Scansiona il QR per salvare il contatto.'}</p>
+      </div>
+      <div style="text-align:center"><button onclick="window.print()" style="padding:10px 18px;border-radius:999px;border:0;background:#111827;color:white;cursor:pointer">Stampa</button></div>
+    </body></html>`);
+}
+
 async function loadPermessi(ruoloId) {
+  const help = document.getElementById('perm-role-help');
+  if (help) {
+    help.textContent = String(ruoloId) === '4'
+      ? 'SuperAdmin ha accesso totale. La matrice è mostrata a scopo documentale.'
+      : `Configura cosa può vedere o modificare il ruolo ${RUOLI_LABEL[ruoloId] || ruoloId}.`;
+  }
   const perms = await api('GET', `/utenti/permessi/${ruoloId}`);
   const permMap = {};
   (perms||[]).forEach(p => permMap[p.sezione] = p);
   document.getElementById('perm-table').innerHTML = `
-    <thead><tr><th>Sezione</th><th>Leggi</th><th>Modifica</th><th>Elimina</th><th>Admin</th></tr></thead>
+    <thead><tr><th>Pagina / Sezione</th><th>Vede</th><th>Modifica</th><th>Elimina</th><th>Admin</th></tr></thead>
     <tbody>${SEZIONI.map(s => {
       const p = permMap[s] || {};
-      return `<tr><td>${s}</td>
-        <td><input type="checkbox" data-s="${s}" data-a="read" ${p.can_read?'checked':''}></td>
-        <td><input type="checkbox" data-s="${s}" data-a="edit" ${p.can_edit?'checked':''}></td>
-        <td><input type="checkbox" data-s="${s}" data-a="delete" ${p.can_delete?'checked':''}></td>
-        <td><input type="checkbox" data-s="${s}" data-a="admin" ${p.can_admin?'checked':''}></td></tr>`;
+      const disabled = String(ruoloId) === '4' ? 'disabled' : '';
+      return `<tr><td>${SEZIONI_LABEL[s] || s}</td>
+        <td><input type="checkbox" data-s="${s}" data-a="read" ${p.can_read?'checked':''} ${disabled}></td>
+        <td><input type="checkbox" data-s="${s}" data-a="edit" ${p.can_edit?'checked':''} ${disabled}></td>
+        <td><input type="checkbox" data-s="${s}" data-a="delete" ${p.can_delete?'checked':''} ${disabled}></td>
+        <td><input type="checkbox" data-s="${s}" data-a="admin" ${p.can_admin?'checked':''} ${disabled}></td></tr>`;
     }).join('')}</tbody>`;
+  const saveBtn = document.getElementById('btn-save-perms');
+  if (saveBtn) saveBtn.style.display = String(ruoloId) === '4' ? 'none' : 'inline-flex';
 }
 
 async function salvaPermessi() {

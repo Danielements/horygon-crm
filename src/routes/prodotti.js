@@ -10,6 +10,20 @@ const s = (v) => (v === undefined || v === '' || v === null) ? null : v;
 const n = (v) => { const p = parseFloat(v); return isNaN(p) ? null : p; };
 const i = (v) => { const p = parseInt(v); return isNaN(p) ? null : p; };
 
+function getGiacenza(prodottoId) {
+  const row = db.prepare(`
+    SELECT COALESCE(SUM(CASE
+      WHEN tipo = 'carico' THEN quantita
+      WHEN tipo IN ('scarico','reso') THEN -quantita
+      WHEN tipo = 'rettifica' THEN quantita
+      ELSE 0
+    END), 0) as giacenza
+    FROM magazzino_movimenti
+    WHERE prodotto_id = ?
+  `).get(prodottoId);
+  return row?.giacenza || 0;
+}
+
 // Upload prodotti media
 const storageProdotti = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -22,7 +36,7 @@ const storageProdotti = multer.diskStorage({
     cb(null, `${Date.now()}-${Math.random().toString(36).substring(2)}${ext}`);
   }
 });
-const uploadProdotto = multer({ storage: storageProdotti, limits: { fileSize: 20 * 1024 * 1024 } });
+const uploadProdotto = multer({ storage: storageProdotti });
 
 router.use(authMiddleware);
 
@@ -37,9 +51,7 @@ router.get('/', (req, res) => {
   const rows = db.prepare(sql + ' ORDER BY p.nome').all(...params);
   // Aggiungi giacenza e prima immagine
   rows.forEach(p => {
-    const mov = db.prepare(`SELECT tipo, SUM(quantita) as tot FROM magazzino_movimenti WHERE prodotto_id = ? GROUP BY tipo`).all(p.id);
-    let g = 0; mov.forEach(m => { g += m.tipo === 'carico' ? m.tot : -m.tot; });
-    p.giacenza = g;
+    p.giacenza = getGiacenza(p.id);
     const img = db.prepare(`SELECT path FROM prodotti_media WHERE prodotto_id = ? AND tipo = 'immagine' LIMIT 1`).get(p.id);
     p.immagine = img ? img.path : null;
     p.listini = db.prepare('SELECT * FROM prodotti_listini WHERE prodotto_id = ? ORDER BY canale, valido_dal DESC').all(p.id);
@@ -83,9 +95,7 @@ router.get('/:id', (req, res) => {
     ORDER BY data DESC, id DESC
     LIMIT 50
   `).all(req.params.id);
-  const mov = db.prepare(`SELECT tipo, SUM(quantita) as tot FROM magazzino_movimenti WHERE prodotto_id = ? GROUP BY tipo`).all(req.params.id);
-  let g = 0; mov.forEach(m => { g += m.tipo === 'carico' ? m.tot : -m.tot; });
-  p.giacenza = g;
+  p.giacenza = getGiacenza(req.params.id);
   res.json(p);
 });
 
@@ -115,6 +125,14 @@ router.put('/:id', requirePermesso('prodotti', 'edit'), (req, res) => {
            req.params.id);
     res.json({ ok: true });
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Archivia prodotto: non elimina lo storico, lo nasconde da magazzino e anagrafiche operative
+router.delete('/:id', requirePermesso('prodotti', 'delete'), (req, res) => {
+  const p = db.prepare('SELECT id FROM prodotti WHERE id = ?').get(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Prodotto non trovato' });
+  db.prepare('UPDATE prodotti SET attivo = 0 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
 });
 
 // Upload foto/media prodotto (multipli)
@@ -169,7 +187,12 @@ router.post('/:id/fornitore', requirePermesso('prodotti', 'edit'), (req, res) =>
 router.get('/magazzino/giacenze', (req, res) => {
   const rows = db.prepare(`
     SELECT p.id, p.codice_interno, p.nome, c.nome as categoria,
-      COALESCE(SUM(CASE WHEN m.tipo='carico' THEN m.quantita WHEN m.tipo IN ('scarico','reso') THEN -m.quantita ELSE 0 END),0) as giacenza
+      COALESCE(SUM(CASE
+        WHEN m.tipo='carico' THEN m.quantita
+        WHEN m.tipo IN ('scarico','reso') THEN -m.quantita
+        WHEN m.tipo='rettifica' THEN m.quantita
+        ELSE 0
+      END),0) as giacenza
     FROM prodotti p
     LEFT JOIN categorie c ON c.id = p.categoria_id
     LEFT JOIN magazzino_movimenti m ON m.prodotto_id = p.id

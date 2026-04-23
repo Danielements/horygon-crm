@@ -63,6 +63,45 @@ router.get('/cpv-catalog', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+router.get('/cpv-operativi', (req, res) => {
+  try {
+    const entries = getCpvCatalogEntries({ activeOnly: true });
+    const rows = entries.map(entry => {
+      const prefix = String(entry.codice_cpv || '').replace(/[^0-9]/g, '').substring(0, 6);
+      const prodotti = db.prepare(`
+        SELECT p.id, p.nome, p.codice_interno,
+          COALESCE(SUM(CASE
+            WHEN m.tipo='carico' THEN m.quantita
+            WHEN m.tipo IN ('scarico','reso') THEN -m.quantita
+            WHEN m.tipo='rettifica' THEN m.quantita
+            ELSE 0
+          END),0) as giacenza
+        FROM prodotti p
+        JOIN prodotti_listini l ON l.prodotto_id = p.id
+        LEFT JOIN magazzino_movimenti m ON m.prodotto_id = p.id
+        WHERE p.attivo = 1 AND REPLACE(IFNULL(l.cpv,''),'-','') LIKE ?
+        GROUP BY p.id
+        ORDER BY p.nome
+      `).all(`${prefix}%`);
+      const mercato = db.prepare(`
+        SELECT SUM(valore_economico) as valore, SUM(n_ordini) as ordini
+        FROM mepa_ordini WHERE codice_cpv LIKE ?
+      `).get(`${prefix}%`);
+      const scorta = prodotti.reduce((sum, p) => sum + (p.giacenza || 0), 0);
+      return {
+        ...entry,
+        prodotti_count: prodotti.length,
+        prodotti,
+        giacenza_totale: scorta,
+        stato_operativo: !prodotti.length ? 'prodotto_assente' : scorta > 0 ? 'in_scorta' : 'da_acquistare',
+        valore_mercato: mercato?.valore || 0,
+        ordini_mercato: mercato?.ordini || 0
+      };
+    });
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 router.post('/cpv-catalog', (req, res) => {
   try {
     res.json({ ok: true, cpv: saveCpvCatalogEntry(req.body || {}) });

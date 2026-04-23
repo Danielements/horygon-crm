@@ -1,6 +1,75 @@
 const { google } = require('googleapis');
 const db = require('../db/database');
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS mepa_mail_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    utente_id INTEGER NOT NULL,
+    gmail_message_id TEXT NOT NULL UNIQUE,
+    mittente TEXT,
+    oggetto TEXT,
+    categoria TEXT,
+    gara_id TEXT,
+    nome_gara TEXT,
+    ente TEXT,
+    data_pubblicazione TEXT,
+    scadenza_offerte TEXT,
+    termine_chiarimenti TEXT,
+    corpo TEXT,
+    letto INTEGER DEFAULT 0,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+`);
+try { db.exec(`ALTER TABLE mepa_mail_alerts ADD COLUMN stato TEXT DEFAULT 'nuova'`); } catch {}
+try { db.exec(`ALTER TABLE mepa_mail_alerts ADD COLUMN sync_attiva INTEGER DEFAULT 1`); } catch {}
+try { db.exec(`ALTER TABLE mepa_mail_alerts ADD COLUMN google_event_id TEXT`); } catch {}
+try { db.exec(`ALTER TABLE mepa_mail_alerts ADD COLUMN attivita_id INTEGER`); } catch {}
+try { db.exec(`ALTER TABLE mepa_mail_alerts ADD COLUMN anagrafica_id INTEGER`); } catch {}
+try { db.exec(`ALTER TABLE mepa_mail_alerts ADD COLUMN notificata_3g INTEGER DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE mepa_mail_alerts ADD COLUMN notificata_1g INTEGER DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE mepa_mail_alerts ADD COLUMN eliminata_il TEXT`); } catch {}
+try { db.exec(`ALTER TABLE anagrafiche ADD COLUMN tipologia_cliente TEXT DEFAULT 'privato'`); } catch {}
+try { db.exec(`ALTER TABLE anagrafiche ADD COLUMN pa_mepa INTEGER DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE anagrafiche ADD COLUMN pa_sda INTEGER DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE anagrafiche ADD COLUMN pa_rdo INTEGER DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE anagrafiche ADD COLUMN canale_cliente TEXT DEFAULT 'privato'`); } catch {}
+try { db.exec(`ALTER TABLE notifiche_app ADD COLUMN pinned INTEGER DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE notifiche_app ADD COLUMN eliminata INTEGER DEFAULT 0`); } catch {}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS notifiche_app (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    utente_id INTEGER NOT NULL,
+    tipo TEXT,
+    titolo TEXT NOT NULL,
+    messaggio TEXT,
+    entita_tipo TEXT,
+    entita_id INTEGER,
+    unique_key TEXT UNIQUE,
+    letta INTEGER DEFAULT 0,
+    invio_email_tentato INTEGER DEFAULT 0,
+    invio_email_ok INTEGER DEFAULT 0,
+    creato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (utente_id) REFERENCES utenti(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    type TEXT DEFAULT 'string',
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+`);
+
+const seedSetting = db.prepare(`
+  INSERT OR IGNORE INTO app_settings (key, value, type, updated_at)
+  VALUES (?, ?, ?, datetime('now'))
+`);
+seedSetting.run('notifications.email_enabled', '0', 'boolean');
+seedSetting.run('notifications.deadline_days', '3,1', 'string');
+seedSetting.run('notifications.recipient_mode', 'all_active_users', 'string');
+seedSetting.run('company.notification_sender_name', 'Horygon CRM', 'string');
+
 function getClient(utente_id) {
   const tokens = db.prepare('SELECT * FROM google_tokens WHERE utente_id = ?').get(utente_id);
   if (!tokens) return null;
@@ -131,7 +200,439 @@ async function deleteFromDrive(utente_id, fileId) {
   await drive.files.delete({ fileId });
 }
 
+async function getGoogleContacts(utente_id) {
+  const client = getClient(utente_id);
+  if (!client) throw new Error('Google non connesso');
+  const people = google.people({ version: 'v1', auth: client });
+  const res = await people.people.connections.list({
+    resourceName: 'people/me',
+    personFields: 'names,emailAddresses,phoneNumbers,organizations',
+    pageSize: 200
+  });
+  return (res.data.connections || []).map(c => ({
+    id: c.resourceName,
+    nome: c.names?.[0]?.displayName || '',
+    email: c.emailAddresses?.[0]?.value || '',
+    telefono: c.phoneNumbers?.[0]?.value || '',
+    organizzazione: c.organizations?.[0]?.name || ''
+  }));
+}
+
+function buildGoogleContactPayload(c) {
+  const displayName = [c.nome, c.cognome].filter(Boolean).join(' ').trim();
+  const names = (c.nome || c.cognome) ? [{ givenName: c.nome || displayName, familyName: c.cognome || undefined, displayName }] : undefined;
+  const emailAddresses = c.email ? [{ value: c.email }] : undefined;
+  const phoneNumbers = c.telefono ? [{ value: c.telefono }] : undefined;
+  const organizations = c.organizzazione ? [{ name: c.organizzazione, title: c.ruolo || undefined }] : undefined;
+  const biographies = c.note ? [{ value: c.note }] : undefined;
+  return { names, emailAddresses, phoneNumbers, organizations, biographies };
+}
+
+async function syncSingleContactToGoogle(utente_id, contattoId) {
+  const client = getClient(utente_id);
+  if (!client) throw new Error('Google non connesso');
+  const people = google.people({ version: 'v1', auth: client });
+  const c = db.prepare(`
+    SELECT c.*, a.ragione_sociale as organizzazione
+    FROM anagrafiche_contatti c
+    LEFT JOIN anagrafiche a ON a.id = c.anagrafica_id
+    WHERE c.id = ? AND COALESCE(c.attivo, 1) = 1
+  `).get(contattoId);
+  if (!c) throw new Error('Contatto non trovato');
+  if (c.google_resource_name) return { ok: true, resourceName: c.google_resource_name, skipped: true };
+  const requestBody = buildGoogleContactPayload(c);
+  const created = await people.people.createContact({ requestBody });
+  const resourceName = created.data.resourceName;
+  db.prepare('UPDATE anagrafiche_contatti SET google_resource_name = ? WHERE id = ?').run(resourceName, contattoId);
+  return { ok: true, resourceName };
+}
+
+async function syncLocalContactsToGoogle(utente_id) {
+  const client = getClient(utente_id);
+  if (!client) throw new Error('Google non connesso');
+  const people = google.people({ version: 'v1', auth: client });
+  const locals = [
+    ...db.prepare(`
+      SELECT c.id, c.nome, c.cognome, c.email, c.telefono, c.ruolo, c.note, c.google_resource_name,
+             COALESCE(a.ragione_sociale, 'Contatto CRM') AS organizzazione
+      FROM anagrafiche_contatti c
+      LEFT JOIN anagrafiche a ON a.id = c.anagrafica_id
+      WHERE COALESCE(c.attivo, 1) = 1 AND (c.email IS NOT NULL OR c.telefono IS NOT NULL)
+    `).all(),
+    ...db.prepare(`SELECT ragione_sociale as nome, email, telefono, 'Anagrafica' as organizzazione FROM anagrafiche WHERE attivo = 1 AND (email IS NOT NULL OR telefono IS NOT NULL)`).all(),
+    ...db.prepare(`SELECT nome, email, telefono, 'Horygon' as organizzazione FROM utenti WHERE attivo = 1`).all()
+  ];
+  let created = 0;
+  let updated = 0;
+  for (const c of locals.slice(0, 150)) {
+    try {
+      if (c.id) {
+        const result = await syncSingleContactToGoogle(utente_id, c.id);
+        if (result?.resourceName) {
+          if (c.google_resource_name) updated += 1;
+          else created += 1;
+        }
+      } else {
+        await people.people.createContact({ requestBody: buildGoogleContactPayload(c) });
+        created += 1;
+      }
+    } catch {}
+  }
+  return { created, updated, total: locals.length };
+}
+
+function getSetting(key, fallback = null) {
+  const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key);
+  return row ? row.value : fallback;
+}
+
+function listSettings() {
+  return db.prepare('SELECT * FROM app_settings ORDER BY key').all();
+}
+
+function saveSettings(items = []) {
+  const upsert = db.prepare(`
+    INSERT INTO app_settings (key, value, type, updated_at)
+    VALUES (?, ?, ?, datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, type = excluded.type, updated_at = datetime('now')
+  `);
+  items.forEach(item => upsert.run(String(item.key), String(item.value ?? ''), String(item.type || 'string')));
+  return listSettings();
+}
+
+function decodeBase64Url(data) {
+  return Buffer.from(String(data || '').replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+}
+
+function decodeGmailBody(payload) {
+  const plainParts = [];
+  const htmlParts = [];
+  const visit = (node) => {
+    if (!node) return;
+    const mime = node.mimeType || '';
+    if ((mime === 'text/plain' || mime === 'text/html') && node.body?.data) {
+      const decoded = decodeBase64Url(node.body.data);
+      if (mime === 'text/plain') plainParts.push(decoded);
+      else htmlParts.push(decoded);
+    }
+    (node.parts || []).forEach(visit);
+  };
+  visit(payload);
+  if (!plainParts.length && !htmlParts.length && payload?.body?.data) {
+    plainParts.push(decodeBase64Url(payload.body.data));
+  }
+  return (plainParts.length ? plainParts : htmlParts).join('\n');
+}
+
+function cleanMailText(text) {
+  return (text || '')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<head[\s\S]*?<\/head>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/tr>/gi, '\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\r/g, '')
+    .replace(/[^\S\n]{2,}/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function parseItalianDateTime(value) {
+  if (!value) return null;
+  const m = String(value).trim().match(/(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?/);
+  if (!m) return null;
+  return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4] || '9'), Number(m[5] || '0'), 0);
+}
+
+function extractField(text, label) {
+  const re = new RegExp(`${label}\\s*:\\s*([\\s\\S]*?)(?:\\n\\s*\\n|\\n[A-ZÀ-Ú][^\\n]*:|$)`, 'i');
+  return text.match(re)?.[1]?.trim() || null;
+}
+
+function parseMepaMail(text, subject, from) {
+  const clean = cleanMailText(text);
+  const garaId = extractField(clean, 'Identificativo Numerico Gara');
+  if (!garaId && !/acquistinretepa\.it/i.test(from || '')) return null;
+  const nomeGara = extractField(clean, 'Nome Gara') || subject || null;
+  const categoria = extractField(clean, 'Categorie di riferimento');
+  const pubblicazione = extractField(clean, 'Data pubblicazione');
+  const scadenza = extractField(clean, 'Data ultima per la presentazione delle offerte');
+  const chiarimenti = extractField(clean, 'Data termine richiesta chiarimenti');
+  const ente = clean.match(/Hai ricevuto una comunicazione da parte di\s+(.+?)\s+relativa alla Gara/i)?.[1]?.trim() || null;
+  return {
+    categoria,
+    gara_id: garaId,
+    nome_gara: nomeGara,
+    ente,
+    data_pubblicazione: pubblicazione,
+    scadenza_offerte: scadenza,
+    termine_chiarimenti: chiarimenti,
+    corpo: clean
+  };
+}
+
+async function syncMepaGmail(utente_id) {
+  const client = getClient(utente_id);
+  if (!client) throw new Error('Google non connesso');
+  const gmail = google.gmail({ version: 'v1', auth: client });
+  const list = await gmail.users.messages.list({
+    userId: 'me',
+    maxResults: 25,
+    q: 'from:comunicazioni@acquistinretepa.it newer_than:180d'
+  });
+  const ids = list.data.messages || [];
+  const upsert = db.prepare(`
+    INSERT OR IGNORE INTO mepa_mail_alerts
+    (utente_id,gmail_message_id,mittente,oggetto,categoria,gara_id,nome_gara,ente,data_pubblicazione,scadenza_offerte,termine_chiarimenti,corpo)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+  `);
+  let inserted = 0;
+  for (const item of ids) {
+    const msg = await gmail.users.messages.get({ userId: 'me', id: item.id, format: 'full' });
+    const headers = Object.fromEntries((msg.data.payload?.headers || []).map(h => [String(h.name).toLowerCase(), h.value]));
+    const parsed = parseMepaMail(decodeGmailBody(msg.data.payload), headers.subject || '', headers.from || '');
+    if (!parsed) continue;
+    const r = upsert.run(
+      utente_id,
+      item.id,
+      headers.from || null,
+      headers.subject || null,
+      parsed.categoria,
+      parsed.gara_id,
+      parsed.nome_gara,
+      parsed.ente,
+      parsed.data_pubblicazione,
+      parsed.scadenza_offerte,
+      parsed.termine_chiarimenti,
+      parsed.corpo
+    );
+    if (r.changes > 0) inserted += 1;
+  }
+  return { inserted, total: ids.length };
+}
+
+function listMepaMailAlerts(utente_id) {
+  return db.prepare(`
+    SELECT * FROM mepa_mail_alerts
+    WHERE utente_id = ? AND sync_attiva = 1
+    ORDER BY COALESCE(scadenza_offerte, data_pubblicazione, creato_il) DESC, id DESC
+    LIMIT 100
+  `).all(utente_id);
+}
+
+function getMepaMailAlertById(utente_id, id) {
+  return db.prepare('SELECT * FROM mepa_mail_alerts WHERE utente_id = ? AND id = ?').get(utente_id, id);
+}
+
+function updateMepaMailAlert(utente_id, id, patch = {}) {
+  const alert = getMepaMailAlertById(utente_id, id);
+  if (!alert) throw new Error('Alert non trovato');
+  const stato = patch.stato || alert.stato || 'nuova';
+  const syncAttiva = patch.sync_attiva === undefined ? alert.sync_attiva : (patch.sync_attiva ? 1 : 0);
+  db.prepare(`
+    UPDATE mepa_mail_alerts
+    SET stato = ?, sync_attiva = ?, eliminata_il = CASE WHEN ? = 0 THEN COALESCE(eliminata_il, datetime('now')) ELSE NULL END
+    WHERE id = ? AND utente_id = ?
+  `).run(stato, syncAttiva, syncAttiva, id, utente_id);
+  return getMepaMailAlertById(utente_id, id);
+}
+
+function findOrCreatePaAnagrafica(ente) {
+  if (!ente) return null;
+  let row = db.prepare(`
+    SELECT * FROM anagrafiche
+    WHERE LOWER(ragione_sociale) = LOWER(?) AND attivo = 1
+    LIMIT 1
+  `).get(ente);
+  if (row) return row.id;
+  const inserted = db.prepare(`
+    INSERT INTO anagrafiche (tipo, ragione_sociale, paese, attivo, tipologia_cliente, pa_mepa, pa_rdo, canale_cliente)
+    VALUES ('cliente', ?, 'IT', 1, 'pa', 1, 1, 'mepa')
+  `).run(ente);
+  return inserted.lastInsertRowid;
+}
+
+async function sendMail(utente_id, to, subject, text) {
+  const client = getClient(utente_id);
+  if (!client) throw new Error('Google non connesso');
+  const gmail = google.gmail({ version: 'v1', auth: client });
+  const raw = Buffer.from(
+    `To: ${to}\r\nSubject: ${subject}\r\nContent-Type: text/plain; charset="UTF-8"\r\n\r\n${text}`,
+    'utf8'
+  ).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  const res = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
+  return res.data;
+}
+
+function createNotificationForUsers({ tipo = 'info', titolo, messaggio, entita_tipo = null, entita_id = null, uniqueSuffix = '' }) {
+  const users = db.prepare('SELECT id, email FROM utenti WHERE attivo = 1').all();
+  const ins = db.prepare(`
+    INSERT OR IGNORE INTO notifiche_app (utente_id, tipo, titolo, messaggio, entita_tipo, entita_id, unique_key)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  users.forEach(u => {
+    const uniqueKey = [u.id, tipo, entita_tipo || '', entita_id || '', uniqueSuffix].join(':');
+    ins.run(u.id, tipo, titolo, messaggio, entita_tipo, entita_id, uniqueKey);
+  });
+}
+
+async function dispatchPendingNotificationEmails(senderUserId) {
+  if (getSetting('notifications.email_enabled', '0') !== '1') return { sent: 0 };
+  const rows = db.prepare(`
+    SELECT n.*, u.email
+    FROM notifiche_app n
+    JOIN utenti u ON u.id = n.utente_id
+    WHERE n.letta = 0 AND n.invio_email_tentato = 0 AND u.attivo = 1
+    ORDER BY n.id ASC
+    LIMIT 20
+  `).all();
+  let sent = 0;
+  for (const row of rows) {
+    let ok = 0;
+    try {
+      await sendMail(senderUserId, row.email, `[Horygon] ${row.titolo}`, `${row.titolo}\n\n${row.messaggio || ''}`);
+      ok = 1;
+      sent += 1;
+    } catch {}
+    db.prepare('UPDATE notifiche_app SET invio_email_tentato = 1, invio_email_ok = ? WHERE id = ?').run(ok, row.id);
+  }
+  return { sent };
+}
+
+async function upsertMepaAlertAutomation(utente_id, alertId) {
+  const alert = getMepaMailAlertById(utente_id, alertId);
+  if (!alert || !alert.sync_attiva) return null;
+  const anagraficaId = alert.anagrafica_id || findOrCreatePaAnagrafica(alert.ente);
+  if (anagraficaId && !alert.anagrafica_id) {
+    db.prepare('UPDATE mepa_mail_alerts SET anagrafica_id = ? WHERE id = ?').run(anagraficaId, alertId);
+  }
+  let attivitaId = alert.attivita_id;
+  if (!attivitaId) {
+    const r = db.prepare(`
+      INSERT INTO attivita (tipo, anagrafica_id, utente_id, data_ora, durata_minuti, oggetto, note, esito, promemoria_il)
+      VALUES ('email', ?, ?, datetime('now'), 15, ?, ?, 'da_valutare', ?)
+    `).run(anagraficaId, utente_id, `Mail ricevuta da PA - ${alert.gara_id || 'MEPA'}`, alert.corpo, alert.scadenza_offerte || alert.data_pubblicazione || null);
+    attivitaId = r.lastInsertRowid;
+    db.prepare('UPDATE mepa_mail_alerts SET attivita_id = ? WHERE id = ?').run(attivitaId, alertId);
+  }
+  if (alert.scadenza_offerte && !alert.google_event_id) {
+    try {
+      const end = parseItalianDateTime(alert.scadenza_offerte);
+      if (!end) throw new Error('Data scadenza non valida');
+      const start = new Date(end.getTime() - 60 * 60 * 1000);
+      const event = await createEvent(utente_id, {
+        summary: `Scadenza MEPA ${alert.gara_id || ''}`.trim(),
+        description: `${alert.nome_gara || ''}\n${alert.ente || ''}`,
+        start: { dateTime: start.toISOString(), timeZone: 'Europe/Rome' },
+        end: { dateTime: end.toISOString(), timeZone: 'Europe/Rome' }
+      });
+      if (event?.id) db.prepare('UPDATE mepa_mail_alerts SET google_event_id = ? WHERE id = ?').run(event.id, alertId);
+    } catch {}
+  }
+  createNotificationForUsers({
+    tipo: 'mepa_mail',
+    titolo: `Nuova mail PA: ${alert.ente || 'PA'}`,
+    messaggio: `${alert.gara_id || ''} ${alert.nome_gara || alert.oggetto || ''}`.trim(),
+    entita_tipo: 'mepa_mail',
+    entita_id: alertId,
+    uniqueSuffix: 'new'
+  });
+  return getMepaMailAlertById(utente_id, alertId);
+}
+
+async function processMepaAutomation(utente_id) {
+  const rows = db.prepare(`
+    SELECT id FROM mepa_mail_alerts
+    WHERE utente_id = ? AND sync_attiva = 1 AND stato <> 'eliminata'
+    ORDER BY id DESC LIMIT 50
+  `).all(utente_id);
+  for (const row of rows) {
+    await upsertMepaAlertAutomation(utente_id, row.id);
+  }
+  const now = new Date();
+  const alerts = db.prepare(`
+    SELECT * FROM mepa_mail_alerts
+    WHERE utente_id = ? AND sync_attiva = 1 AND stato NOT IN ('eliminata','archiviata','scaduta')
+      AND scadenza_offerte IS NOT NULL
+  `).all(utente_id);
+  for (const alert of alerts) {
+    const due = parseItalianDateTime(alert.scadenza_offerte);
+    if (!due || Number.isNaN(due.getTime())) continue;
+    const diffDays = Math.ceil((due.getTime() - now.getTime()) / 86400000);
+    if (diffDays <= 3 && diffDays >= 0 && !alert.notificata_3g) {
+      createNotificationForUsers({
+        tipo: 'deadline',
+        titolo: `Scadenza MEPA in arrivo (${diffDays}g)`,
+        messaggio: `${alert.gara_id || ''} ${alert.nome_gara || alert.oggetto || ''}`.trim(),
+        entita_tipo: 'mepa_mail',
+        entita_id: alert.id,
+        uniqueSuffix: '3d'
+      });
+      db.prepare('UPDATE mepa_mail_alerts SET notificata_3g = 1 WHERE id = ?').run(alert.id);
+    }
+    if (diffDays <= 1 && diffDays >= 0 && !alert.notificata_1g) {
+      createNotificationForUsers({
+        tipo: 'deadline',
+        titolo: `Scadenza MEPA imminente (${diffDays}g)`,
+        messaggio: `${alert.gara_id || ''} ${alert.nome_gara || alert.oggetto || ''}`.trim(),
+        entita_tipo: 'mepa_mail',
+        entita_id: alert.id,
+        uniqueSuffix: '1d'
+      });
+      db.prepare('UPDATE mepa_mail_alerts SET notificata_1g = 1 WHERE id = ?').run(alert.id);
+    }
+    if (diffDays < 0 && alert.stato !== 'scaduta') {
+      db.prepare('UPDATE mepa_mail_alerts SET stato = ? WHERE id = ?').run('scaduta', alert.id);
+    }
+  }
+  return dispatchPendingNotificationEmails(utente_id);
+}
+
+function listNotifications(userId) {
+  return db.prepare(`
+    SELECT * FROM notifiche_app
+    WHERE utente_id = ? AND eliminata = 0
+    ORDER BY pinned DESC, letta ASC, creato_il DESC, id DESC
+    LIMIT 100
+  `).all(userId);
+}
+
+function markNotificationRead(userId, id, letta = 1) {
+  db.prepare('UPDATE notifiche_app SET letta = ? WHERE id = ? AND utente_id = ?').run(letta ? 1 : 0, id, userId);
+}
+
+function updateNotification(userId, id, patch = {}) {
+  db.prepare(`
+    UPDATE notifiche_app
+    SET letta = COALESCE(?, letta),
+        pinned = COALESCE(?, pinned),
+        eliminata = COALESCE(?, eliminata)
+    WHERE id = ? AND utente_id = ?
+  `).run(
+    patch.letta === undefined ? null : (patch.letta ? 1 : 0),
+    patch.pinned === undefined ? null : (patch.pinned ? 1 : 0),
+    patch.eliminata === undefined ? null : (patch.eliminata ? 1 : 0),
+    id,
+    userId
+  );
+}
+
 module.exports = {
   getClient, getEvents, createEvent, updateEvent, deleteEvent,
-  getDriveFiles, uploadToDrive, deleteFromDrive
+  getDriveFiles, uploadToDrive, deleteFromDrive,
+  getGoogleContacts, syncLocalContactsToGoogle, syncSingleContactToGoogle,
+  syncMepaGmail, listMepaMailAlerts, getMepaMailAlertById, updateMepaMailAlert,
+  processMepaAutomation, listNotifications, markNotificationRead, updateNotification,
+  listSettings, saveSettings, getSetting, sendMail
 };

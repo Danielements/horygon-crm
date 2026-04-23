@@ -13,9 +13,33 @@ try { db.exec(`ALTER TABLE ddt ADD COLUMN corriere TEXT`); } catch {}
 try { db.exec(`ALTER TABLE ddt ADD COLUMN numero_spedizione TEXT`); } catch {}
 try { db.exec(`ALTER TABLE ddt ADD COLUMN tracking_url TEXT`); } catch {}
 try { db.exec(`ALTER TABLE ddt ADD COLUMN note_spedizione TEXT`); } catch {}
+try { db.exec(`ALTER TABLE ddt ADD COLUMN causale TEXT`); } catch {}
+try { db.exec(`ALTER TABLE ddt ADD COLUMN resa TEXT`); } catch {}
+try { db.exec(`ALTER TABLE ddt ADD COLUMN porto TEXT`); } catch {}
+try { db.exec(`ALTER TABLE ddt ADD COLUMN colli INTEGER`); } catch {}
+try { db.exec(`ALTER TABLE ddt ADD COLUMN peso_totale REAL`); } catch {}
+try { db.exec(`ALTER TABLE ddt ADD COLUMN aspetto_beni TEXT`); } catch {}
+try { db.exec(`ALTER TABLE ddt ADD COLUMN data_ora_trasporto TEXT`); } catch {}
+try { db.exec(`ALTER TABLE attivita ADD COLUMN assegnato_a INTEGER`); } catch {}
+try { db.exec(`ALTER TABLE attivita ADD COLUMN stato TEXT DEFAULT 'aperta'`); } catch {}
 
 const s = (v) => (v === undefined || v === '' || v === null) ? null : v;
 const i = (v) => { const p = parseInt(v); return isNaN(p) ? null : p; };
+const n = (v) => { const p = parseFloat(v); return isNaN(p) ? null : p; };
+
+function getGiacenza(prodottoId) {
+  const row = db.prepare(`
+    SELECT COALESCE(SUM(CASE
+      WHEN tipo = 'carico' THEN quantita
+      WHEN tipo IN ('scarico','reso') THEN -quantita
+      WHEN tipo = 'rettifica' THEN quantita
+      ELSE 0
+    END), 0) as giacenza
+    FROM magazzino_movimenti
+    WHERE prodotto_id = ?
+  `).get(prodottoId);
+  return row?.giacenza || 0;
+}
 
 function syncMovimentiFromDdt(ddtId, tipo, righe = []) {
   if (!['entrata', 'uscita'].includes(tipo)) return;
@@ -24,8 +48,13 @@ function syncMovimentiFromDdt(ddtId, tipo, righe = []) {
   const movTipo = tipo === 'entrata' ? 'carico' : 'scarico';
   const ins = db.prepare('INSERT INTO magazzino_movimenti (prodotto_id,tipo,quantita,riferimento_tipo,riferimento_id,note) VALUES (?,?,?,?,?,?)');
   righe.forEach(r => {
-    if (r.prodotto_id && r.quantita) {
-      ins.run(i(r.prodotto_id), movTipo, i(r.quantita), 'ddt', ddtId, `Movimento automatico da DDT ${tipo}`);
+    const prodottoId = i(r.prodotto_id);
+    const quantita = i(r.quantita);
+    if (prodottoId && quantita && quantita > 0) {
+      if (tipo === 'uscita' && getGiacenza(prodottoId) < quantita) {
+        throw new Error(`Giacenza insufficiente per il prodotto ${prodottoId}`);
+      }
+      ins.run(prodottoId, movTipo, quantita, 'ddt', ddtId, `Movimento automatico da DDT ${tipo}`);
     }
   });
 }
@@ -56,23 +85,28 @@ router.post('/ddt', (req, res) => {
   const {
     numero_ddt, tipo, ordine_id, fattura_id, data, mittente_id, destinatario_id,
     indirizzo_consegna, lat_consegna, lng_consegna, vettore, spedizione_attiva,
-    corriere, numero_spedizione, tracking_url, note_spedizione, note, righe
+    corriere, numero_spedizione, tracking_url, note_spedizione, causale, resa,
+    porto, colli, peso_totale, aspetto_beni, data_ora_trasporto, note, righe
   } = req.body;
   try {
     const ddtTipo = ['entrata', 'uscita'].includes(s(tipo)) ? s(tipo) : 'uscita';
     const ddtNumero = s(numero_ddt) || `DDT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Date.now().toString().slice(-5)}`;
+    const cleanRighe = (righe || [])
+      .map(r => ({ prodotto_id: i(r.prodotto_id), quantita: i(r.quantita), lotto: s(r.lotto) }))
+      .filter(r => r.prodotto_id && r.quantita && r.quantita > 0);
     db.exec('BEGIN');
     const r = db.prepare(`INSERT INTO ddt
-      (numero_ddt,tipo,ordine_id,fattura_id,data,mittente_id,destinatario_id,indirizzo_consegna,lat_consegna,lng_consegna,vettore,spedizione_attiva,corriere,numero_spedizione,tracking_url,note_spedizione,note)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      (numero_ddt,tipo,ordine_id,fattura_id,data,mittente_id,destinatario_id,indirizzo_consegna,lat_consegna,lng_consegna,vettore,spedizione_attiva,corriere,numero_spedizione,tracking_url,note_spedizione,causale,resa,porto,colli,peso_totale,aspetto_beni,data_ora_trasporto,note)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(ddtNumero, ddtTipo, i(ordine_id), i(fattura_id), s(data), i(mittente_id), i(destinatario_id),
         s(indirizzo_consegna), lat_consegna || null, lng_consegna || null, s(vettore),
-        spedizione_attiva ? 1 : 0, s(corriere), s(numero_spedizione), s(tracking_url), s(note_spedizione), s(note));
+        spedizione_attiva ? 1 : 0, s(corriere), s(numero_spedizione), s(tracking_url), s(note_spedizione),
+        s(causale), s(resa), s(porto), i(colli), n(peso_totale), s(aspetto_beni), s(data_ora_trasporto), s(note));
     const id = r.lastInsertRowid;
-    if (righe?.length) {
+    if (cleanRighe.length) {
       const ins = db.prepare('INSERT INTO ddt_righe (ddt_id,prodotto_id,quantita,lotto) VALUES (?,?,?,?)');
-      righe.forEach(riga => ins.run(id, i(riga.prodotto_id), i(riga.quantita), s(riga.lotto)));
-      syncMovimentiFromDdt(id, ddtTipo, righe);
+      cleanRighe.forEach(riga => ins.run(id, riga.prodotto_id, riga.quantita, riga.lotto));
+      syncMovimentiFromDdt(id, ddtTipo, cleanRighe);
     }
     db.exec('COMMIT');
     res.json({ id });
@@ -98,30 +132,68 @@ router.get('/ddt/:id/pdf', (req, res) => {
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `inline; filename=ddt-${d.numero_ddt || d.id}.pdf`);
   doc.pipe(res);
-  doc.fontSize(18).text('Documento di Trasporto', { align: 'center' });
-  doc.moveDown();
-  doc.fontSize(11).text(`Numero: ${d.numero_ddt || '-'}`);
-  doc.text(`Data: ${d.data || '-'}`);
-  doc.text(`Tipo: ${d.tipo || '-'}`);
-  doc.text(`Mittente: ${d.mittente_nome || '-'}`);
-  doc.text(`Destinatario: ${d.destinatario_nome || '-'}`);
-  if (d.fattura_numero) doc.text(`Fattura associata: ${d.fattura_numero}`);
-  if (d.spedizione_attiva) doc.text(`Spedizione: ${d.corriere || '-'} ${d.numero_spedizione || ''}`);
-  doc.moveDown();
-  doc.fontSize(12).text('Righe', { underline: true });
-  doc.moveDown(0.5);
-  righe.forEach((r, idx) => {
-    doc.fontSize(10).text(`${idx + 1}. ${r.codice_interno} - ${r.nome} | Q.ta ${r.quantita}${r.lotto ? ' | Lotto ' + r.lotto : ''}`);
-  });
-  if (d.note || d.note_spedizione) {
-    doc.moveDown();
-    doc.fontSize(12).text('Note', { underline: true });
-    if (d.note) doc.fontSize(10).text(d.note);
-    if (d.note_spedizione) doc.fontSize(10).text(`Spedizione: ${d.note_spedizione}`);
+  const pageWidth = doc.page.width - 80;
+  doc.rect(40, 35, pageWidth, 64).fill('#111827');
+  doc.fillColor('#ffffff').fontSize(18).text('HORYGON', 55, 47);
+  doc.fontSize(10).text('Documento di Trasporto', 55, 72);
+  doc.fontSize(18).text('DDT', 430, 47, { width: 130, align: 'right' });
+  doc.fontSize(9).text(`N. ${d.numero_ddt || '-'}`, 430, 72, { width: 130, align: 'right' });
+  doc.fillColor('#111827');
+
+  const box = (x, y, w, h, title, body) => {
+    doc.roundedRect(x, y, w, h, 6).stroke('#d1d5db');
+    doc.fillColor('#6b7280').fontSize(8).text(title.toUpperCase(), x + 10, y + 8);
+    doc.fillColor('#111827').fontSize(10).text(body || '-', x + 10, y + 24, { width: w - 20, height: h - 30 });
+  };
+
+  box(40, 120, 250, 72, 'Mittente', d.mittente_nome || 'Horygon');
+  box(305, 120, 250, 72, 'Destinatario', d.destinatario_nome || '-');
+  box(40, 205, 120, 54, 'Numero', d.numero_ddt || '-');
+  box(170, 205, 100, 54, 'Data', d.data || '-');
+  box(280, 205, 120, 54, 'Causale', d.causale || (d.tipo === 'entrata' ? 'Reso/entrata' : 'Vendita'));
+  box(410, 205, 145, 54, 'Fattura', d.fattura_numero || '-');
+  box(40, 272, 120, 54, 'Porto', d.porto || '-');
+  box(170, 272, 100, 54, 'Resa', d.resa || '-');
+  box(280, 272, 120, 54, 'Colli / peso', `${d.colli || '-'} colli${d.peso_totale ? ` - ${d.peso_totale} kg` : ''}`);
+  box(410, 272, 145, 54, 'Aspetto beni', d.aspetto_beni || '-');
+
+  if (d.spedizione_attiva || d.vettore || d.corriere || d.numero_spedizione) {
+    box(40, 339, 515, 54, 'Trasporto', `${d.vettore || ''} ${d.corriere || ''} ${d.numero_spedizione || ''}${d.data_ora_trasporto ? ` - ${d.data_ora_trasporto}` : ''}`.trim() || '-');
   }
-  doc.moveDown(3);
-  doc.fontSize(10).text('Firma mittente ____________________', { continued: true });
-  doc.text('   Firma destinatario ____________________');
+
+  let y = 420;
+  doc.fontSize(11).fillColor('#111827').text('Articoli', 40, y);
+  y += 20;
+  doc.rect(40, y, 515, 22).fill('#f3f4f6');
+  doc.fillColor('#111827').fontSize(8).text('Codice', 48, y + 7);
+  doc.text('Descrizione', 125, y + 7);
+  doc.text('Lotto', 400, y + 7);
+  doc.text('Q.ta', 510, y + 7, { width: 35, align: 'right' });
+  y += 22;
+  righe.forEach((r, idx) => {
+    if (y > 720) { doc.addPage(); y = 50; }
+    doc.rect(40, y, 515, 24).stroke('#e5e7eb');
+    doc.fontSize(8).fillColor('#111827').text(r.codice_interno || '-', 48, y + 7, { width: 70 });
+    doc.text(r.nome || '-', 125, y + 7, { width: 265 });
+    doc.text(r.lotto || '-', 400, y + 7, { width: 80 });
+    doc.text(String(r.quantita || '-'), 510, y + 7, { width: 35, align: 'right' });
+    y += 24;
+  });
+  if (!righe.length) {
+    doc.rect(40, y, 515, 24).stroke('#e5e7eb');
+    doc.fontSize(8).fillColor('#6b7280').text('Nessun articolo indicato', 48, y + 7);
+    y += 24;
+  }
+
+  y += 18;
+  if (d.note || d.note_spedizione) {
+    doc.fontSize(9).fillColor('#6b7280').text('Note', 40, y);
+    y += 14;
+    doc.fillColor('#111827').fontSize(9).text([d.note, d.note_spedizione ? `Spedizione: ${d.note_spedizione}` : ''].filter(Boolean).join('\n'), 40, y, { width: 515 });
+    y += 42;
+  }
+  doc.fontSize(9).fillColor('#111827').text('Firma vettore __________________________', 40, 765);
+  doc.text('Firma destinatario __________________________', 320, 765);
   doc.end();
 });
 
@@ -171,8 +243,9 @@ router.patch('/container/:id/stato', (req, res) => {
 // ═══════════════════════════════
 router.get('/attivita', (req, res) => {
   const { anagrafica_id, tipo } = req.query;
-  let sql = `SELECT a.*, u.nome as utente_nome, an.ragione_sociale FROM attivita a
+  let sql = `SELECT a.*, u.nome as utente_nome, au.nome as assegnato_nome, an.ragione_sociale FROM attivita a
     LEFT JOIN utenti u ON u.id = a.utente_id
+    LEFT JOIN utenti au ON au.id = a.assegnato_a
     LEFT JOIN anagrafiche an ON an.id = a.anagrafica_id WHERE 1=1`;
   const params = [];
   if (anagrafica_id) { sql += ' AND a.anagrafica_id = ?'; params.push(anagrafica_id); }
@@ -181,10 +254,52 @@ router.get('/attivita', (req, res) => {
   res.json(db.prepare(sql).all(...params));
 });
 
+router.get('/attivita/meta', (req, res) => {
+  const utenti = db.prepare(`
+    SELECT id, nome, email
+    FROM utenti
+    WHERE attivo = 1
+    ORDER BY nome
+  `).all();
+  const anagrafiche = db.prepare(`
+    SELECT id, ragione_sociale, tipo
+    FROM anagrafiche
+    WHERE attivo = 1
+    ORDER BY ragione_sociale
+  `).all();
+  res.json({ utenti, anagrafiche });
+});
+
 router.post('/attivita', (req, res) => {
-  const { tipo, anagrafica_id, ordine_id, data_ora, durata_minuti, oggetto, note, esito, promemoria_il } = req.body;
-  const r = db.prepare(`INSERT INTO attivita (tipo,anagrafica_id,ordine_id,utente_id,data_ora,durata_minuti,oggetto,note,esito,promemoria_il)
-    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(tipo,anagrafica_id,ordine_id,req.user.id,data_ora,durata_minuti,oggetto,note,esito,promemoria_il);
+  const { tipo, anagrafica_id, ordine_id, assegnato_a, data_ora, durata_minuti, oggetto, note, esito, promemoria_il, stato } = req.body || {};
+  const assegnatoId = i(assegnato_a);
+  const r = db.prepare(`INSERT INTO attivita (tipo,anagrafica_id,ordine_id,utente_id,assegnato_a,data_ora,durata_minuti,oggetto,note,esito,promemoria_il,stato)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      s(tipo) || 'nota',
+      i(anagrafica_id),
+      i(ordine_id),
+      req.user.id,
+      assegnatoId,
+      s(data_ora),
+      i(durata_minuti),
+      s(oggetto) || 'Attivita',
+      s(note),
+      s(esito),
+      s(promemoria_il),
+      s(stato) || 'aperta'
+    );
+  if (assegnatoId && assegnatoId !== req.user.id) {
+    db.prepare(`
+      INSERT OR IGNORE INTO notifiche_app (utente_id, tipo, titolo, messaggio, entita_tipo, entita_id, unique_key)
+      VALUES (?, 'attivita_assegnata', ?, ?, 'attivita', ?, ?)
+    `).run(
+      assegnatoId,
+      'Nuova attività assegnata',
+      s(oggetto) || 'Attività CRM',
+      r.lastInsertRowid,
+      `attivita:${assegnatoId}:${r.lastInsertRowid}`
+    );
+  }
   res.json({ id: r.lastInsertRowid });
 });
 
@@ -217,8 +332,18 @@ router.get('/etichetta/:prodotto_id/pdf', async (req, res) => {
 // Magazzino movimenti manuali
 router.post('/magazzino', (req, res) => {
   const { prodotto_id, tipo, quantita, note } = req.body;
+  const prodottoId = i(prodotto_id);
+  let qty = i(quantita);
+  const movTipo = s(tipo);
+  if (!prodottoId || qty === null || qty < 0) return res.status(400).json({ error: 'Prodotto e quantita sono obbligatori' });
+  if (!['carico', 'scarico', 'rettifica', 'reso'].includes(movTipo)) return res.status(400).json({ error: 'Tipo movimento non valido' });
+  if (movTipo === 'rettifica') qty = qty - getGiacenza(prodottoId);
+  if (['scarico', 'reso'].includes(movTipo) && getGiacenza(prodottoId) < qty) {
+    return res.status(400).json({ error: 'Giacenza insufficiente per questo movimento' });
+  }
+  if (movTipo !== 'rettifica' && qty <= 0) return res.status(400).json({ error: 'La quantita deve essere maggiore di zero' });
   const r = db.prepare('INSERT INTO magazzino_movimenti (prodotto_id,tipo,quantita,riferimento_tipo,note) VALUES (?,?,?,?,?)')
-    .run(prodotto_id, tipo, quantita, 'manuale', note);
+    .run(prodottoId, movTipo, qty, 'manuale', s(note));
   res.json({ id: r.lastInsertRowid });
 });
 
