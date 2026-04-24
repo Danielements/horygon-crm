@@ -9,6 +9,7 @@ let calView = 'month';
 let calEvents = [];
 let currentEventId = null;
 let isMobileSidebarOpen = false;
+let notificationsCache = [];
 
 // Redirect da Google OAuth
 const urlToken = new URLSearchParams(window.location.search).get('token');
@@ -100,6 +101,7 @@ const NAV_PERMISSION_MAP = {
   cig: 'cig',
   mepa: 'mepa',
   rdo: 'mepa',
+  notifiche: 'attivita',
   analytics: 'analytics',
   attivita: 'attivita',
   documenti: 'documenti',
@@ -267,6 +269,7 @@ function navigateTo(section) {
       fatture: 'Fatture',
       mepa: 'MEPA',
       analytics: 'Analisi',
+      notifiche: 'Notifiche',
       cig: 'Stagionalita CIG',
       documenti: 'Documenti',
       settings: 'Impostazioni',
@@ -286,6 +289,7 @@ function navigateTo(section) {
     attivita: loadAttivita, documenti: loadDocumenti,
     statistics: loadStatistics, settings: loadSettingsPage,
     mappa: loadMappa, utenti: loadUtenti, mepa: loadMepa, rdo: loadRdoPage, 'opportunita-cpv': loadOpportunityCpv, cig: loadCIG, analytics: loadAnalytics,
+    notifiche: loadNotificationsPage,
   };
   if (map[section]) map[section]();
   scheduleResponsiveEnhancement();
@@ -324,16 +328,20 @@ function closeMobileSidebar() {
 // DASHBOARD
 // ═══════════════════════════════
 async function loadDashboard() {
-  const [ordini, prodotti, clienti, container] = await Promise.all([
-    api('GET', '/ordini?stato=ricevuto'), api('GET', '/prodotti'),
+  const [ordini, prodotti, clienti, container, notifications] = await Promise.all([
+    api('GET', '/ordini'), api('GET', '/prodotti'),
     api('GET', '/anagrafiche?tipo=cliente'), api('GET', '/container'),
+    api('GET', '/google/notifications')
   ]);
-  document.getElementById('kpi-ordini').textContent = ordini?.length || 0;
+  const openOrders = (ordini || []).filter(o => !['consegnato', 'annullato'].includes(String(o.stato || '').toLowerCase()));
+  notificationsCache = notifications || [];
+  document.getElementById('kpi-ordini').textContent = openOrders.length || 0;
   document.getElementById('kpi-prodotti').textContent = prodotti?.length || 0;
   document.getElementById('kpi-clienti').textContent = (clienti || []).filter(c => c.tipologia_cliente === 'pa').length || 0;
   document.getElementById('kpi-container').textContent = container?.filter(c => c.stato === 'in_transito').length || 0;
+  renderDashboardFocusCards({ ordini: ordini || [], clienti: clienti || [], container: container || [], notifications: notificationsCache });
   loadCalendar();
-  loadNotifications();
+  loadNotifications(false);
 }
 
 // ═══════════════════════════════
@@ -423,6 +431,126 @@ function compactText(value, max = 180) {
   const text = normalizeMailBody(value);
   if (text.length <= max) return text;
   return `${text.slice(0, max).trim()}…`;
+}
+
+function formatDateTimeIt(value) {
+  if (!value) return '—';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleString('it-IT', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function formatDateIt(value) {
+  if (!value) return '—';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleDateString('it-IT');
+}
+
+function formatCurrencyIt(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  const num = Number(value);
+  if (Number.isNaN(num)) return '—';
+  return num.toLocaleString('it-IT', { style: 'currency', currency: 'EUR' });
+}
+
+function renderSummaryCards(targetId, items = []) {
+  const box = document.getElementById(targetId);
+  if (!box) return;
+  box.innerHTML = items.map(item => `
+    <div class="summary-card ${item.tone ? `tone-${item.tone}` : ''}">
+      <div class="summary-card-top">
+        <span class="summary-card-icon">${item.icon || '•'}</span>
+        <span class="summary-card-label">${escapeHtml(item.label || '')}</span>
+      </div>
+      <div class="summary-card-value">${escapeHtml(item.value ?? '0')}</div>
+      ${item.meta ? `<div class="summary-card-meta">${escapeHtml(item.meta)}</div>` : ''}
+    </div>
+  `).join('');
+}
+
+function renderDashboardFocusCards({ ordini = [], clienti = [], container = [], notifications = [] }) {
+  const openOrders = ordini.filter(o => !['consegnato', 'annullato'].includes(String(o.stato || '').toLowerCase())).length;
+  const mepaClients = clienti.filter(c => !!c.pa_mepa).length;
+  const highAlerts = notifications.filter(n => !n.letta && n.livello_urgenza === 'alta').length;
+  renderSummaryCards('dashboard-focus-cards', [
+    { icon: '📦', label: 'Ordini da seguire', value: openOrders, meta: 'Lavorazione e consegne in corso', tone: 'primary' },
+    { icon: '🏛️', label: 'Clienti MEPA', value: mepaClients, meta: 'PA già pronte per opportunità', tone: 'cyan' },
+    { icon: '🚚', label: 'Logistica attiva', value: container.filter(c => c.stato === 'in_transito').length, meta: 'Container ancora in transito', tone: 'warning' },
+    { icon: '🔔', label: 'Alert urgenti', value: highAlerts, meta: highAlerts ? 'Da leggere subito' : 'Situazione sotto controllo', tone: highAlerts ? 'danger' : 'success' }
+  ]);
+}
+
+function renderAnagraficheMobileCards(targetId, rows = [], tipo = 'cliente') {
+  const box = document.getElementById(targetId);
+  if (!box) return;
+  if (!rows.length) {
+    box.innerHTML = '<div class="notification-empty">Nessun elemento trovato.</div>';
+    return;
+  }
+  box.innerHTML = rows.map(a => {
+    const channels = tipo === 'cliente' && a.tipologia_cliente === 'pa'
+      ? [a.pa_mepa && 'MEPA', a.pa_sda && 'SDA', a.pa_rdo && 'RdO'].filter(Boolean)
+      : [];
+    return `
+      <article class="mobile-record-card">
+        <div class="mobile-record-head">
+          <div>
+            <h3>${escapeHtml(a.ragione_sociale || 'Anagrafica')}</h3>
+            <div class="mobile-record-subtitle">${escapeHtml(a.citta || 'Località non indicata')}</div>
+          </div>
+          <span class="badge ${a.tipologia_cliente === 'pa' ? 'badge-pa' : ''}">${escapeHtml(a.tipologia_cliente || tipo)}</span>
+        </div>
+        <div class="mobile-record-meta">
+          <span><strong>P.IVA</strong> ${escapeHtml(a.piva || '—')}</span>
+          <span><strong>Tel</strong> ${escapeHtml(a.telefono || '—')}</span>
+          <span><strong>Email</strong> ${escapeHtml(a.email || '—')}</span>
+        </div>
+        ${channels.length ? `<div class="mobile-record-tags">${channels.map(tag => `<span class="record-tag">${tag}</span>`).join('')}</div>` : ''}
+        <div class="mobile-record-actions">
+          <button class="btn btn-outline btn-sm" onclick="editAnagrafica(${a.id})">Apri scheda</button>
+          ${a.email ? `<a class="btn btn-outline btn-sm" href="mailto:${escapeHtml(a.email)}">Email</a>` : ''}
+          ${a.telefono ? `<a class="btn btn-outline btn-sm" href="tel:${escapeHtml(a.telefono)}">Chiama</a>` : ''}
+        </div>
+      </article>
+    `;
+  }).join('');
+}
+
+function renderOrdiniMobileCards(rows = []) {
+  const box = document.getElementById('ordini-mobile-list');
+  if (!box) return;
+  if (!rows.length) {
+    box.innerHTML = '<div class="notification-empty">Nessun ordine trovato.</div>';
+    return;
+  }
+  box.innerHTML = rows.map(o => `
+    <article class="mobile-record-card">
+      <div class="mobile-record-head">
+        <div>
+          <h3>${escapeHtml(o.codice_ordine || 'Ordine')}</h3>
+          <div class="mobile-record-subtitle">${escapeHtml(o.ragione_sociale || 'Cliente/Fornitore non assegnato')}</div>
+        </div>
+        <span class="badge badge-${o.tipo === 'vendita' ? 'cliente' : 'fornitore'}">${escapeHtml(o.tipo || 'ordine')}</span>
+      </div>
+      <div class="mobile-record-meta">
+        <span><strong>Data</strong> ${formatDateIt(o.data_ordine)}</span>
+        <span><strong>Totale</strong> ${formatCurrencyIt(o.totale)}</span>
+        <span><strong>Stato</strong> ${escapeHtml(o.stato || '—')}</span>
+      </div>
+      <div class="mobile-record-actions">
+        <select class="notification-urgency-select order-state-select" onchange="cambiaStatoOrdine(${o.id},this.value)">
+          ${['ricevuto','confermato','in_lavorazione','spedito','consegnato','annullato'].map(s => `<option value="${s}"${o.stato === s ? ' selected' : ''}>${s}</option>`).join('')}
+        </select>
+      </div>
+    </article>
+  `).join('');
 }
 
 function renderMonthView() {
@@ -646,6 +774,15 @@ async function loadAnagrafiche(tipo) {
       <td>${a.email || '—'}</td>
       <td><button class="btn btn-outline btn-sm" onclick="editAnagrafica(${a.id})">Modifica</button></td>
     </tr>`).join('');
+  if (tipo === 'cliente') {
+    renderSummaryCards('clienti-summary', [
+      { icon: '👥', label: 'Clienti trovati', value: rows?.length || 0, meta: q ? `Filtro: ${q}` : 'Vista completa', tone: 'primary' },
+      { icon: '🏛️', label: 'Pubbliche Amministrazioni', value: (rows || []).filter(a => a.tipologia_cliente === 'pa').length, meta: 'Schede PA attive', tone: 'cyan' },
+      { icon: '🛒', label: 'Canale MEPA', value: (rows || []).filter(a => !!a.pa_mepa).length, meta: 'Clienti con flag MEPA', tone: 'warning' },
+      { icon: '✉️', label: 'Contattabili', value: (rows || []).filter(a => !!a.email || !!a.telefono).length, meta: 'Email o telefono presenti', tone: 'success' }
+    ]);
+    renderAnagraficheMobileCards('clienti-mobile-list', rows || [], 'cliente');
+  }
 }
 
 async function editAnagrafica(id) {
@@ -931,6 +1068,13 @@ async function loadOrdini() {
     <td><select class="btn btn-outline btn-sm" onchange="cambiaStatoOrdine(${o.id},this.value)">
       ${['ricevuto','confermato','in_lavorazione','spedito','consegnato','annullato'].map(s=>`<option value="${s}"${o.stato===s?' selected':''}>${s}</option>`).join('')}
     </select></td></tr>`).join('');
+  renderSummaryCards('ordini-summary', [
+    { icon: '📦', label: 'Ordini visibili', value: rows?.length || 0, meta: tipo ? `Filtro: ${tipo}` : 'Vendita e acquisto', tone: 'primary' },
+    { icon: '🟢', label: 'Vendite', value: (rows || []).filter(o => o.tipo === 'vendita').length, meta: 'Ordini lato cliente', tone: 'success' },
+    { icon: '🏭', label: 'Acquisti', value: (rows || []).filter(o => o.tipo === 'acquisto').length, meta: 'Ordini lato fornitore', tone: 'cyan' },
+    { icon: '🚚', label: 'Da chiudere', value: (rows || []).filter(o => !['consegnato', 'annullato'].includes(String(o.stato || '').toLowerCase())).length, meta: 'Ordini ancora attivi', tone: 'warning' }
+  ]);
+  renderOrdiniMobileCards(rows || []);
   const anag = await api('GET', '/anagrafiche');
   const sel = document.getElementById('ord-anagrafica');
   sel.innerHTML = '<option value="">Seleziona...</option>' + (anag||[]).map(a=>`<option value="${a.id}">${a.ragione_sociale}</option>`).join('');
@@ -1167,6 +1311,13 @@ async function loadAttivita() {
   const [rows, meta] = await Promise.all([
     api('GET', '/attivita'),
     api('GET', '/attivita/meta')
+  ]);
+  const todayKey = new Date().toDateString();
+  renderSummaryCards('attivita-summary', [
+    { icon: '📋', label: 'Totali', value: rows?.length || 0, meta: 'Storico attività CRM', tone: 'primary' },
+    { icon: '⏳', label: 'Aperte', value: (rows || []).filter(a => ['aperta', 'in_corso'].includes(String(a.stato || '').toLowerCase())).length, meta: 'Da seguire oggi', tone: 'warning' },
+    { icon: '🗓️', label: 'Oggi', value: (rows || []).filter(a => a.data_ora && new Date(a.data_ora).toDateString() === todayKey).length, meta: 'Attività con data odierna', tone: 'cyan' },
+    { icon: '☁️', label: 'Sync Google', value: (rows || []).filter(a => !!a.google_event_id).length, meta: 'Eventi agganciati al calendario', tone: 'success' }
   ]);
   document.getElementById('attivita-list').innerHTML = (rows || []).map(a => {
     const noteFull = normalizeMailBody(a.note || '');
@@ -1660,41 +1811,174 @@ async function removeMepaMail(id) {
   await updateMepaMailStatus(id, 'eliminata');
 }
 
-async function loadNotifications() {
-  const box = document.getElementById('dashboard-notifications');
-  if (!box) return;
-  const rows = await api('GET', '/google/notifications');
-  box.innerHTML = (rows || []).length
-    ? rows.slice(0, 8).map(n => `<div style="padding:10px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
-        <div>
-          <div style="font-weight:600;display:flex;align-items:center;gap:8px">
-            <button class="btn btn-sm ${n.pinned ? 'btn-danger' : 'btn-outline'}" onclick="toggleNotificationPinned(${n.id}, ${n.pinned ? 1 : 0})" title="Metti in evidenza">🚩</button>
-            <span>${escapeHtml(n.titolo || '')}</span>
-          </div>
-          <div style="font-size:12px;color:var(--text-muted)">${escapeHtml(compactText(n.messaggio || '', 180))}</div>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button class="btn btn-outline btn-sm" onclick="markNotificationRead(${n.id})">${n.letta ? 'Letta' : 'Segna letta'}</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteNotification(${n.id})">Elimina</button>
-        </div>
-      </div>`).join('')
-    : '<p style="color:var(--text-muted)">Nessuna notifica.</p>';
+function getNotificationUrgencyMeta(level = 'media') {
+  const key = ['alta', 'media', 'bassa'].includes(level) ? level : 'media';
+  return {
+    alta: { label: 'Alta', icon: '▲', cls: 'urgency-alta' },
+    media: { label: 'Media', icon: '●', cls: 'urgency-media' },
+    bassa: { label: 'Bassa', icon: '■', cls: 'urgency-bassa' }
+  }[key];
 }
 
-async function markNotificationRead(id) {
-  await api('PATCH', `/google/notifications/${id}`, { letta: 1 });
-  loadNotifications();
+function formatNotificationTimestamp(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('it-IT', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function notificationStateLabel(row) {
+  if (row?.eliminata) return 'Archiviata';
+  return row?.letta ? 'Letta' : 'Da leggere';
+}
+
+function filterNotifications(rows = []) {
+  const urgency = document.getElementById('notif-filter-urgency')?.value || '';
+  const state = document.getElementById('notif-filter-state')?.value || '';
+  return rows.filter(row => {
+    if (urgency && row.livello_urgenza !== urgency) return false;
+    if (state === 'aperte' && row.letta) return false;
+    if (state === 'lette' && !row.letta) return false;
+    return true;
+  });
+}
+
+function renderNotificationList(rows, { compact = false, targetId, emptyText }) {
+  const target = document.getElementById(targetId);
+  if (!target) return;
+  if (!rows?.length) {
+    target.innerHTML = `<div class="notification-empty">${emptyText}</div>`;
+    return;
+  }
+  target.innerHTML = `<div class="notification-list ${compact ? 'compact' : ''}">
+    ${rows.map(row => {
+      const urgency = getNotificationUrgencyMeta(row.livello_urgenza);
+      const state = notificationStateLabel(row);
+      const message = compact ? compactText(row.messaggio || '', 140) : (row.messaggio || '');
+      return `
+        <article class="notification-card ${compact ? 'compact' : ''} ${row.letta ? 'is-read' : 'is-open'}">
+          <div class="notification-card-top">
+            <div class="notification-meta">
+              <span class="notification-urgency ${urgency.cls}">${urgency.icon} ${urgency.label}</span>
+              ${row.pinned ? '<span class="notification-pin">In evidenza</span>' : ''}
+              <span class="notification-type">${escapeHtml(row.tipo || 'info')}</span>
+            </div>
+            <div class="notification-state">${state}</div>
+          </div>
+          <div class="notification-title-row">
+            <h3>${escapeHtml(row.titolo || 'Notifica')}</h3>
+            <button class="btn btn-sm ${row.pinned ? 'btn-danger' : 'btn-outline'}" onclick="toggleNotificationPinned(${row.id}, ${row.pinned ? 1 : 0})" title="Metti in evidenza">${row.pinned ? '★' : '☆'}</button>
+          </div>
+          <p class="notification-message">${escapeHtml(message)}</p>
+          <div class="notification-footer">
+            <div class="notification-submeta">
+              <span>${formatNotificationTimestamp(row.creato_il)}</span>
+              ${row.entita_tipo ? `<span>${escapeHtml(row.entita_tipo)}</span>` : ''}
+            </div>
+            <div class="notification-actions">
+              <button class="btn btn-outline btn-sm" onclick="markNotificationRead(${row.id}, ${row.letta ? 0 : 1})">${row.letta ? 'Segna da leggere' : 'Segna letta'}</button>
+              ${compact ? '' : `
+                <select class="notification-urgency-select" onchange="setNotificationUrgency(${row.id}, this.value)">
+                  <option value="alta" ${row.livello_urgenza === 'alta' ? 'selected' : ''}>Alta</option>
+                  <option value="media" ${(!row.livello_urgenza || row.livello_urgenza === 'media') ? 'selected' : ''}>Media</option>
+                  <option value="bassa" ${row.livello_urgenza === 'bassa' ? 'selected' : ''}>Bassa</option>
+                </select>
+              `}
+              <button class="btn btn-danger btn-sm" onclick="deleteNotification(${row.id})">Elimina</button>
+            </div>
+          </div>
+        </article>
+      `;
+    }).join('')}
+  </div>`;
+}
+
+function updateNotificationKpi(rows = []) {
+  const total = rows.length;
+  const open = rows.filter(row => !row.letta).length;
+  const high = rows.filter(row => row.livello_urgenza === 'alta').length;
+  const pinned = rows.filter(row => !!row.pinned).length;
+  const set = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+  };
+  set('notif-total', total);
+  set('notif-open', open);
+  set('notif-high', high);
+  set('notif-pinned', pinned);
+}
+
+async function fetchNotifications(force = false) {
+  if (!force && notificationsCache.length) return notificationsCache;
+  notificationsCache = await api('GET', '/google/notifications') || [];
+  return notificationsCache;
+}
+
+async function loadNotifications(force = true) {
+  const rows = await fetchNotifications(force);
+  renderNotificationList((rows || []).slice(0, 6), {
+    compact: true,
+    targetId: 'dashboard-notifications',
+    emptyText: 'Nessuna notifica in evidenza.'
+  });
+  if (document.getElementById('section-notifiche')?.classList.contains('active')) {
+    loadNotificationsPage(rows);
+  }
+}
+
+async function loadNotificationsPage(prefetchedRows) {
+  const rows = Array.isArray(prefetchedRows) ? prefetchedRows : await fetchNotifications(true);
+  const filtered = filterNotifications(rows);
+  updateNotificationKpi(rows);
+  renderNotificationList(filtered, {
+    compact: false,
+    targetId: 'notifications-page-list',
+    emptyText: 'Nessuna notifica per i filtri selezionati.'
+  });
+}
+
+async function refreshNotificationViews() {
+  notificationsCache = [];
+  await loadNotifications(true);
+}
+
+async function markNotificationRead(id, letta = 1) {
+  await api('PATCH', `/google/notifications/${id}`, { letta: letta ? 1 : 0 });
+  await refreshNotificationViews();
 }
 
 async function toggleNotificationPinned(id, pinned) {
   await api('PATCH', `/google/notifications/${id}`, { pinned: pinned ? 0 : 1 });
-  loadNotifications();
+  await refreshNotificationViews();
+}
+
+async function setNotificationUrgency(id, livello_urgenza) {
+  await api('PATCH', `/google/notifications/${id}`, { livello_urgenza });
+  await refreshNotificationViews();
 }
 
 async function deleteNotification(id) {
-  if (!confirm('Eliminare questa notifica dal dashboard?')) return;
+  if (!confirm('Eliminare questa notifica?')) return;
   await api('PATCH', `/google/notifications/${id}`, { eliminata: 1 });
-  loadNotifications();
+  await refreshNotificationViews();
+}
+
+async function markAllNotificationsRead() {
+  const rows = await fetchNotifications();
+  const unread = rows.filter(row => !row.letta);
+  if (!unread.length) {
+    toast('Tutte le notifiche sono gia lette', 'info');
+    return;
+  }
+  await Promise.all(unread.map(row => api('PATCH', `/google/notifications/${row.id}`, { letta: 1 })));
+  toast('Notifiche aggiornate', 'success');
+  await refreshNotificationViews();
 }
 
 async function loadStatistics() {
@@ -1985,6 +2269,13 @@ async function loadAttivita() {
   const [rows, meta] = await Promise.all([
     api('GET', '/attivita'),
     api('GET', '/attivita/meta')
+  ]);
+  const todayKey = new Date().toDateString();
+  renderSummaryCards('attivita-summary', [
+    { icon: '📋', label: 'Totali', value: rows?.length || 0, meta: 'Storico attività CRM', tone: 'primary' },
+    { icon: '⏳', label: 'Aperte', value: (rows || []).filter(a => ['aperta', 'in_corso'].includes(String(a.stato || '').toLowerCase())).length, meta: 'Da seguire oggi', tone: 'warning' },
+    { icon: '🗓️', label: 'Oggi', value: (rows || []).filter(a => a.data_ora && new Date(a.data_ora).toDateString() === todayKey).length, meta: 'Attività con data odierna', tone: 'cyan' },
+    { icon: '☁️', label: 'Sync Google', value: (rows || []).filter(a => !!a.google_event_id).length, meta: 'Eventi agganciati al calendario', tone: 'success' }
   ]);
   document.getElementById('attivita-list').innerHTML = (rows || []).map(a => {
     const noteFull = normalizeMailBody(a.note || '');

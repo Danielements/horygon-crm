@@ -59,6 +59,7 @@
       <div class="nav-group-label">Principale</div>
       <a class="nav-item active" data-section="dashboard"><span class="nav-icon">◈</span> Dashboard</a>
       <a class="nav-item" data-section="attivita"><span class="nav-icon">📅</span> Attività CRM</a>
+      <a class="nav-item" data-section="notifiche"><span class="nav-icon">🔔</span> Notifiche</a>
 
       <div class="nav-group-label">Gestione</div>
       <a class="nav-item" data-section="clienti"><span class="nav-icon">👥</span> Clienti</a>
@@ -122,6 +123,7 @@
         <div class="kpi-card"><div class="kpi-val" id="kpi-clienti">—</div><div class="kpi-label">Clienti PA</div></div>
         <div class="kpi-card"><div class="kpi-val" id="kpi-container">—</div><div class="kpi-label">Container in transito</div></div>
       </div>
+      <div id="dashboard-focus-cards" class="app-summary-grid" style="margin-bottom:18px"></div>
       <div class="dash-card app-quick-actions" style="margin-bottom:18px">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
           <h3 style="margin:0;font-size:16px">Azioni rapide</h3>
@@ -133,7 +135,7 @@
           <button class="quick-action-btn" onclick="openModalAnagrafica('cliente')"><span>👥</span><strong>Nuovo cliente</strong></button>
           <button class="quick-action-btn" onclick="navigateTo('ordini')"><span>📋</span><strong>Ordini</strong></button>
           <button class="quick-action-btn" onclick="navigateTo('contatti')"><span>📇</span><strong>Contatti</strong></button>
-          <button class="quick-action-btn" onclick="navigateTo('analytics')"><span>🔬</span><strong>Analisi</strong></button>
+          <button class="quick-action-btn" onclick="navigateTo('notifiche')"><span>🔔</span><strong>Notifiche</strong></button>
         </div>
       </div>
       <div class="dash-card" style="margin-bottom:18px">
@@ -174,7 +176,9 @@
           <button class="btn btn-accent" onclick="openModalAnagrafica('cliente')">+ Nuovo Cliente</button>
         </div>
       </div>
-      <div class="table-wrapper">
+      <div id="clienti-summary" class="app-summary-grid" style="margin-bottom:18px"></div>
+      <div id="clienti-mobile-list" class="mobile-record-list"></div>
+      <div class="table-wrapper desktop-table-only">
         <table class="data-table"><thead><tr><th>Ragione Sociale</th><th>Città</th><th>P.IVA</th><th>Telefono</th><th>Email</th><th>Azioni</th></tr></thead>
         <tbody id="clienti-body"></tbody></table>
       </div>
@@ -233,7 +237,9 @@
           <button class="btn btn-accent" onclick="openModal('modal-ordine')">+ Nuovo Ordine</button>
         </div>
       </div>
-      <div class="table-wrapper">
+      <div id="ordini-summary" class="app-summary-grid" style="margin-bottom:18px"></div>
+      <div id="ordini-mobile-list" class="mobile-record-list"></div>
+      <div class="table-wrapper desktop-table-only">
         <table class="data-table"><thead><tr><th>Codice</th><th>Tipo</th><th>Cliente/Fornitore</th><th>Data</th><th>Totale</th><th>Stato</th><th>Azioni</th></tr></thead>
         <tbody id="ordini-body"></tbody></table>
       </div>
@@ -393,7 +399,38 @@
         <h1>Attività CRM</h1>
         <button class="btn btn-accent" onclick="openAttivitaModal()">+ Nuova Attività</button>
       </div>
+      <div id="attivita-summary" class="app-summary-grid" style="margin-bottom:18px"></div>
       <div id="attivita-list"></div>
+    </section>
+
+    <section id="section-notifiche" class="section">
+      <div class="page-header">
+        <h1>Notifiche</h1>
+        <div class="header-actions">
+          <select id="notif-filter-urgency" onchange="loadNotificationsPage()">
+            <option value="">Tutte le urgenze</option>
+            <option value="alta">Alta</option>
+            <option value="media">Media</option>
+            <option value="bassa">Bassa</option>
+          </select>
+          <select id="notif-filter-state" onchange="loadNotificationsPage()">
+            <option value="">Tutti gli stati</option>
+            <option value="aperte">Solo aperte</option>
+            <option value="lette">Solo lette</option>
+          </select>
+          <button class="btn btn-outline btn-sm" onclick="markAllNotificationsRead()">Segna tutto letto</button>
+          <button class="btn btn-accent btn-sm" onclick="loadNotificationsPage()">Aggiorna</button>
+        </div>
+      </div>
+      <div class="kpi-grid" style="margin-bottom:16px">
+        <div class="kpi-card"><div class="kpi-val" id="notif-total">—</div><div class="kpi-label">Totali</div></div>
+        <div class="kpi-card"><div class="kpi-val" id="notif-open">—</div><div class="kpi-label">Da leggere</div></div>
+        <div class="kpi-card"><div class="kpi-val" id="notif-high">—</div><div class="kpi-label">Alta urgenza</div></div>
+        <div class="kpi-card"><div class="kpi-val" id="notif-pinned">—</div><div class="kpi-label">In evidenza</div></div>
+      </div>
+      <div class="dash-card">
+        <div id="notifications-page-list"></div>
+      </div>
     </section>
 
     <section id="section-rdo" class="section">
@@ -761,7 +798,7 @@
     <button class="mobile-tab" data-section="attivita" onclick="navigateTo('attivita')"><span>📅</span><small>Attività</small></button>
     <button class="mobile-tab" data-section="clienti" onclick="navigateTo('clienti')"><span>👥</span><small>Clienti</small></button>
     <button class="mobile-tab" data-section="ordini" onclick="navigateTo('ordini')"><span>📋</span><small>Ordini</small></button>
-    <button class="mobile-tab" data-section="analytics" onclick="navigateTo('analytics')"><span>📈</span><small>Analisi</small></button>
+    <button class="mobile-tab" data-section="notifiche" onclick="navigateTo('notifiche')"><span>🔔</span><small>Alert</small></button>
   </div>
 </div>
 
