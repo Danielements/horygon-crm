@@ -8,6 +8,26 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 router.use(authMiddleware);
 
+function normalizeGoogleDateTime(value) {
+  if (!value) return null;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(String(value))) return `${value}:00`;
+  return String(value);
+}
+
+function buildCalendarPayload(body = {}) {
+  const title = String(body.title || '').trim();
+  const start = normalizeGoogleDateTime(body.start);
+  const end = normalizeGoogleDateTime(body.end || body.start);
+  if (!title) throw new Error('Titolo evento obbligatorio');
+  if (!start || !end) throw new Error('Data inizio/fine non valida');
+  return {
+    summary: title,
+    description: body.description || '',
+    start: body.allDay ? { date: start.slice(0, 10) } : { dateTime: start, timeZone: 'Europe/Rome' },
+    end: body.allDay ? { date: end.slice(0, 10) } : { dateTime: end, timeZone: 'Europe/Rome' },
+  };
+}
+
 // ═══════════════════════════════
 // CALENDAR
 // ═══════════════════════════════
@@ -22,13 +42,7 @@ router.get('/calendar/events', async (req, res) => {
 // Crea evento
 router.post('/calendar/events', async (req, res) => {
   try {
-    const { title, start, end, description, allDay } = req.body;
-    const evento = {
-      summary: title,
-      description: description || '',
-      start: allDay ? { date: start } : { dateTime: start, timeZone: 'Europe/Rome' },
-      end: allDay ? { date: end } : { dateTime: end, timeZone: 'Europe/Rome' },
-    };
+    const evento = buildCalendarPayload(req.body || {});
     const result = await createEvent(req.user.id, evento);
     res.json(result);
   } catch (e) { res.status(400).json({ error: e.message }); }
@@ -37,13 +51,7 @@ router.post('/calendar/events', async (req, res) => {
 // Aggiorna evento
 router.put('/calendar/events/:eventId', async (req, res) => {
   try {
-    const { title, start, end, description, allDay } = req.body;
-    const evento = {
-      summary: title,
-      description: description || '',
-      start: allDay ? { date: start } : { dateTime: start, timeZone: 'Europe/Rome' },
-      end: allDay ? { date: end } : { dateTime: end, timeZone: 'Europe/Rome' },
-    };
+    const evento = buildCalendarPayload(req.body || {});
     const result = await updateEvent(req.user.id, req.params.eventId, evento);
     res.json(result);
   } catch (e) { res.status(400).json({ error: e.message }); }

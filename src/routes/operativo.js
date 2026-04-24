@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db/database');
 const { authMiddleware, requirePermesso } = require('../middleware/auth');
+const { createEvent, updateEvent, deleteEvent, processMepaAutomation } = require('../services/google');
 const QRCode = require('qrcode');
 const PDFDocument = require('pdfkit');
 
@@ -22,10 +23,29 @@ try { db.exec(`ALTER TABLE ddt ADD COLUMN aspetto_beni TEXT`); } catch {}
 try { db.exec(`ALTER TABLE ddt ADD COLUMN data_ora_trasporto TEXT`); } catch {}
 try { db.exec(`ALTER TABLE attivita ADD COLUMN assegnato_a INTEGER`); } catch {}
 try { db.exec(`ALTER TABLE attivita ADD COLUMN stato TEXT DEFAULT 'aperta'`); } catch {}
+try { db.exec(`ALTER TABLE attivita ADD COLUMN stato_origine TEXT`); } catch {}
+try { db.exec(`ALTER TABLE attivita ADD COLUMN origine_id INTEGER`); } catch {}
 
 const s = (v) => (v === undefined || v === '' || v === null) ? null : v;
 const i = (v) => { const p = parseInt(v); return isNaN(p) ? null : p; };
 const n = (v) => { const p = parseFloat(v); return isNaN(p) ? null : p; };
+const normalizeGoogleDateTime = (value) => {
+  if (!value) return null;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(String(value))) return `${value}:00`;
+  return String(value);
+};
+
+function buildGoogleEventPayload(event = {}) {
+  const start = normalizeGoogleDateTime(event.start);
+  const end = normalizeGoogleDateTime(event.end || event.start);
+  if (!start || !end) throw new Error('Data evento Google non valida');
+  return {
+    summary: s(event.title) || 'Attività CRM',
+    description: s(event.description) || '',
+    start: event.allDay ? { date: start.slice(0, 10) } : { dateTime: start, timeZone: 'Europe/Rome' },
+    end: event.allDay ? { date: end.slice(0, 10) } : { dateTime: end, timeZone: 'Europe/Rome' }
+  };
+}
 
 function getGiacenza(prodottoId) {
   const row = db.prepare(`
@@ -241,8 +261,9 @@ router.patch('/container/:id/stato', (req, res) => {
 // ═══════════════════════════════
 // ATTIVITA CRM
 // ═══════════════════════════════
-router.get('/attivita', (req, res) => {
+router.get('/attivita', async (req, res) => {
   const { anagrafica_id, tipo } = req.query;
+  try { await processMepaAutomation(req.user.id); } catch {}
   let sql = `SELECT a.*, u.nome as utente_nome, au.nome as assegnato_nome, an.ragione_sociale FROM attivita a
     LEFT JOIN utenti u ON u.id = a.utente_id
     LEFT JOIN utenti au ON au.id = a.assegnato_a
@@ -345,6 +366,72 @@ router.post('/magazzino', (req, res) => {
   const r = db.prepare('INSERT INTO magazzino_movimenti (prodotto_id,tipo,quantita,riferimento_tipo,note) VALUES (?,?,?,?,?)')
     .run(prodottoId, movTipo, qty, 'manuale', s(note));
   res.json({ id: r.lastInsertRowid });
+});
+
+router.put('/attivita/:id', async (req, res) => {
+  try {
+    const current = db.prepare('SELECT * FROM attivita WHERE id = ?').get(req.params.id);
+    if (!current) return res.status(404).json({ error: 'Attività non trovata' });
+    const { tipo, anagrafica_id, ordine_id, assegnato_a, data_ora, durata_minuti, oggetto, note, esito, promemoria_il, stato } = req.body || {};
+    db.prepare(`UPDATE attivita
+      SET tipo = ?, anagrafica_id = ?, ordine_id = ?, assegnato_a = ?, data_ora = ?, durata_minuti = ?,
+          oggetto = ?, note = ?, esito = ?, promemoria_il = ?, stato = ?
+      WHERE id = ?`).run(
+        s(tipo) || current.tipo || 'nota',
+        i(anagrafica_id),
+        i(ordine_id),
+        i(assegnato_a),
+        s(data_ora),
+        i(durata_minuti),
+        s(oggetto) || current.oggetto || 'Attivita',
+        s(note),
+        s(esito),
+        s(promemoria_il),
+        s(stato) || current.stato || 'aperta',
+        req.params.id
+      );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.post('/attivita/:id/google-sync', async (req, res) => {
+  try {
+    const current = db.prepare('SELECT * FROM attivita WHERE id = ?').get(req.params.id);
+    if (!current) return res.status(404).json({ error: 'Attività non trovata' });
+    const payload = buildGoogleEventPayload(req.body || {});
+    let googleEventId = current.google_event_id || null;
+    if (googleEventId) {
+      await updateEvent(req.user.id, googleEventId, payload);
+    } else {
+      const created = await createEvent(req.user.id, payload);
+      googleEventId = created?.id || null;
+    }
+    db.prepare('UPDATE attivita SET google_event_id = ? WHERE id = ?').run(googleEventId, req.params.id);
+    res.json({ ok: true, google_event_id: googleEventId });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.delete('/attivita/:id', async (req, res) => {
+  try {
+    const current = db.prepare('SELECT * FROM attivita WHERE id = ?').get(req.params.id);
+    if (!current) return res.status(404).json({ error: 'Attività non trovata' });
+    if (current.google_event_id) {
+      try { await deleteEvent(req.user.id, current.google_event_id); } catch {}
+    }
+    db.prepare('DELETE FROM attivita WHERE id = ?').run(req.params.id);
+    try {
+      db.prepare(`UPDATE mepa_mail_alerts
+        SET attivita_id = NULL, sync_attiva = 0, attivita_disattivata = 1, stato = CASE WHEN stato = 'nuova' THEN 'archiviata' ELSE stato END
+        WHERE attivita_id = ?`).run(req.params.id);
+    } catch {}
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 module.exports = router;

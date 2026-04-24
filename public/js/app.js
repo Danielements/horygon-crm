@@ -316,6 +316,11 @@ function getWeekStart(d) {
 function pad2(v) { return String(v).padStart(2, '0'); }
 function fmt(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
 function toDateTimeLocalValue(d) { return `${fmt(d)}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`; }
+function normalizeLocalDateTime(value) {
+  if (!value) return null;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return `${value}:00`;
+  return value;
+}
 
 function parseCalendarEventDate(value) {
   if (!value) return null;
@@ -1711,5 +1716,146 @@ function closeAllModals() {
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && document.getElementById('login-screen').style.display !== 'none') doLogin();
 });
+
+async function loadAttivita() {
+  const [rows, meta] = await Promise.all([
+    api('GET', '/attivita'),
+    api('GET', '/attivita/meta')
+  ]);
+  document.getElementById('attivita-list').innerHTML = (rows || []).map(a => {
+    const noteFull = normalizeMailBody(a.note || '');
+    const notePreview = compactText(noteFull, 220);
+    return `
+    <div class="attivita-item">
+      <div class="att-icon att-${a.tipo}">${ICONE[a.tipo] || '◎'}</div>
+      <div style="min-width:0;flex:1">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+          <div>
+            <strong>${escapeHtml(a.oggetto || a.tipo)}</strong>
+            ${a.ragione_sociale ? `<span style="color:var(--text-muted)"> — ${escapeHtml(a.ragione_sociale)}</span>` : ''}
+          </div>
+          <span class="badge">${escapeHtml(a.stato || 'aperta')}</span>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:4px">
+          ${a.data_ora ? new Date(a.data_ora).toLocaleString('it-IT') : ''}
+          ${a.durata_minuti ? ` · ${a.durata_minuti} min` : ''}
+          ${a.assegnato_nome ? ` · Assegnata a ${escapeHtml(a.assegnato_nome)}` : ''}
+          ${a.google_event_id ? ' · <span style="color:var(--accent)">Google Cal</span>' : ''}
+          ${a.stato_origine === 'mepa_mail' ? ' · <span style="color:#d97706">Mail MEPA</span>' : ''}
+        </div>
+        ${noteFull ? `
+          <details style="margin-top:8px">
+            <summary style="cursor:pointer;color:var(--text-muted);font-size:13px">${escapeHtml(notePreview)}</summary>
+            <div style="font-size:13px;margin-top:8px;color:var(--text-muted);white-space:pre-wrap;line-height:1.45">${escapeHtml(noteFull)}</div>
+          </details>` : ''}
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap">
+          <button class="btn btn-outline btn-sm" onclick="editAttivita(${a.id})">Modifica</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteAttivita(${a.id})">Elimina</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('') || '<p style="color:var(--text-muted)">Nessuna attività</p>';
+  const anag = meta?.anagrafiche || [];
+  const utenti = meta?.utenti || [];
+  document.getElementById('att-anagrafica').innerHTML = '<option value="">Seleziona...</option>' + anag.map(a => `<option value="${a.id}">${escapeHtml(a.ragione_sociale)}</option>`).join('');
+  document.getElementById('att-assegnato').innerHTML = '<option value="">Nessuno</option>' + utenti.map(u => `<option value="${u.id}">${escapeHtml(u.nome)}</option>`).join('');
+}
+
+async function openAttivitaModal() {
+  await loadAttivita();
+  document.getElementById('att-id').value = '';
+  document.getElementById('att-tipo').value = 'nota';
+  document.getElementById('att-anagrafica').value = '';
+  document.getElementById('att-assegnato').value = '';
+  document.getElementById('att-stato').value = 'aperta';
+  document.getElementById('att-oggetto').value = '';
+  document.getElementById('att-data').value = '';
+  document.getElementById('att-durata').value = 30;
+  document.getElementById('att-note').value = '';
+  document.getElementById('att-promemoria').value = '';
+  document.getElementById('att-sync-google').checked = false;
+  document.getElementById('btn-del-attivita').style.display = 'none';
+  openModal('modal-attivita');
+}
+
+async function editAttivita(id) {
+  const rows = await api('GET', '/attivita');
+  const a = (rows || []).find(item => Number(item.id) === Number(id));
+  if (!a) {
+    toast('Attività non trovata', 'error');
+    return;
+  }
+  await loadAttivita();
+  document.getElementById('att-id').value = a.id;
+  document.getElementById('att-tipo').value = a.tipo || 'nota';
+  document.getElementById('att-anagrafica').value = a.anagrafica_id || '';
+  document.getElementById('att-assegnato').value = a.assegnato_a || '';
+  document.getElementById('att-stato').value = a.stato || 'aperta';
+  document.getElementById('att-oggetto').value = a.oggetto || '';
+  document.getElementById('att-data').value = a.data_ora ? String(a.data_ora).replace(' ', 'T').slice(0, 16) : '';
+  document.getElementById('att-durata').value = a.durata_minuti || 30;
+  document.getElementById('att-note').value = a.note || '';
+  document.getElementById('att-promemoria').value = a.promemoria_il ? String(a.promemoria_il).replace(' ', 'T').slice(0, 16) : '';
+  document.getElementById('att-sync-google').checked = !!a.google_event_id;
+  document.getElementById('btn-del-attivita').style.display = 'inline-flex';
+  openModal('modal-attivita');
+}
+
+function buildGoogleEventFromActivity(body) {
+  const start = body.data_ora ? new Date(body.data_ora) : new Date();
+  const end = new Date(start.getTime() + (body.durata_minuti || 60) * 60000);
+  return {
+    title: body.oggetto || body.tipo || 'Attività CRM',
+    description: body.note || '',
+    start: normalizeLocalDateTime(toDateTimeLocalValue(start)),
+    end: normalizeLocalDateTime(toDateTimeLocalValue(end)),
+    allDay: false
+  };
+}
+
+async function salvaAttivita() {
+  const id = document.getElementById('att-id').value;
+  const body = {
+    tipo: document.getElementById('att-tipo').value,
+    anagrafica_id: document.getElementById('att-anagrafica').value || null,
+    assegnato_a: document.getElementById('att-assegnato').value || null,
+    stato: document.getElementById('att-stato').value || 'aperta',
+    data_ora: document.getElementById('att-data').value,
+    durata_minuti: parseInt(document.getElementById('att-durata').value) || null,
+    oggetto: document.getElementById('att-oggetto').value,
+    note: document.getElementById('att-note').value,
+    promemoria_il: document.getElementById('att-promemoria').value || null,
+  };
+  try {
+    let savedId = id || null;
+    if (document.getElementById('att-sync-google').checked && USER.hasGoogle) {
+      body.sync_google = 1;
+      body.google_event = buildGoogleEventFromActivity(body);
+    }
+    if (id) {
+      await api('PUT', `/attivita/${id}`, body);
+    } else {
+      const created = await api('POST', '/attivita', body);
+      savedId = created?.id || null;
+    }
+    if (body.sync_google && USER.hasGoogle && (savedId || id)) {
+      await api('POST', `/attivita/${savedId || id}/google-sync`, body.google_event);
+    }
+    closeAllModals();
+    toast('Attività salvata', 'success');
+    loadAttivita();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteAttivita(id = null) {
+  const targetId = id || document.getElementById('att-id').value;
+  if (!targetId || !confirm('Eliminare questa attività?')) return;
+  try {
+    await api('DELETE', `/attivita/${targetId}`);
+    closeAllModals();
+    toast('Attività eliminata', 'success');
+    loadAttivita();
+  } catch (e) { toast(e.message, 'error'); }
+}
 
 init();

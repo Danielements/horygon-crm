@@ -25,6 +25,7 @@ try { db.exec(`ALTER TABLE mepa_mail_alerts ADD COLUMN sync_attiva INTEGER DEFAU
 try { db.exec(`ALTER TABLE mepa_mail_alerts ADD COLUMN google_event_id TEXT`); } catch {}
 try { db.exec(`ALTER TABLE mepa_mail_alerts ADD COLUMN attivita_id INTEGER`); } catch {}
 try { db.exec(`ALTER TABLE mepa_mail_alerts ADD COLUMN anagrafica_id INTEGER`); } catch {}
+try { db.exec(`ALTER TABLE mepa_mail_alerts ADD COLUMN attivita_disattivata INTEGER DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE mepa_mail_alerts ADD COLUMN notificata_3g INTEGER DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE mepa_mail_alerts ADD COLUMN notificata_1g INTEGER DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE mepa_mail_alerts ADD COLUMN eliminata_il TEXT`); } catch {}
@@ -512,7 +513,7 @@ async function dispatchPendingNotificationEmails(senderUserId) {
 
 async function upsertMepaAlertAutomation(utente_id, alertId) {
   const alert = getMepaMailAlertById(utente_id, alertId);
-  if (!alert || !alert.sync_attiva) return null;
+  if (!alert || !alert.sync_attiva || alert.attivita_disattivata) return null;
   const anagraficaId = alert.anagrafica_id || findOrCreatePaAnagrafica(alert.ente);
   if (anagraficaId && !alert.anagrafica_id) {
     db.prepare('UPDATE mepa_mail_alerts SET anagrafica_id = ? WHERE id = ?').run(anagraficaId, alertId);
@@ -520,9 +521,9 @@ async function upsertMepaAlertAutomation(utente_id, alertId) {
   let attivitaId = alert.attivita_id;
   if (!attivitaId) {
     const r = db.prepare(`
-      INSERT INTO attivita (tipo, anagrafica_id, utente_id, data_ora, durata_minuti, oggetto, note, esito, promemoria_il)
-      VALUES ('email', ?, ?, datetime('now'), 15, ?, ?, 'da_valutare', ?)
-    `).run(anagraficaId, utente_id, `Mail ricevuta da PA - ${alert.gara_id || 'MEPA'}`, alert.corpo, alert.scadenza_offerte || alert.data_pubblicazione || null);
+      INSERT INTO attivita (tipo, anagrafica_id, utente_id, data_ora, durata_minuti, oggetto, note, esito, promemoria_il, stato, stato_origine, origine_id)
+      VALUES ('email', ?, ?, datetime('now'), 15, ?, ?, 'da_valutare', ?, 'aperta', 'mepa_mail', ?)
+    `).run(anagraficaId, utente_id, `Mail ricevuta da PA - ${alert.gara_id || 'MEPA'}`, alert.corpo, alert.scadenza_offerte || alert.data_pubblicazione || null, alert.id);
     attivitaId = r.lastInsertRowid;
     db.prepare('UPDATE mepa_mail_alerts SET attivita_id = ? WHERE id = ?').run(attivitaId, alertId);
   }

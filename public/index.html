@@ -56,6 +56,7 @@
     <nav>
       <div class="nav-group-label">Principale</div>
       <a class="nav-item active" data-section="dashboard"><span class="nav-icon">◈</span> Dashboard</a>
+      <a class="nav-item" data-section="attivita"><span class="nav-icon">📅</span> Attività CRM</a>
 
       <div class="nav-group-label">Gestione</div>
       <a class="nav-item" data-section="clienti"><span class="nav-icon">👥</span> Clienti</a>
@@ -75,7 +76,6 @@
 
       <a class="nav-item" data-section="mepa"><span class="nav-icon">📊</span> Analisi MEPA</a>
       <a class="nav-item" data-section="analytics"><span class="nav-icon">🔬</span> Analisi Incrociata</a>
-      <a class="nav-item" data-section="attivita"><span class="nav-icon">📅</span> Attività CRM</a>
       <a class="nav-item" data-section="documenti"><span class="nav-icon">📁</span> Documenti</a>
       <a class="nav-item" data-section="statistics"><span class="nav-icon">📈</span> Statistics</a>
       <a class="nav-item" data-section="settings"><span class="nav-icon">🛠️</span> Impostazioni</a>
@@ -862,6 +862,7 @@
 <div id="modal-attivita" class="modal">
   <div class="modal-box">
     <div class="modal-title">📅 Attività CRM</div>
+    <input type="hidden" id="att-id">
     <div class="form-row">
       <div class="form-group"><label>Tipo</label>
         <select id="att-tipo">
@@ -894,6 +895,7 @@
     <div class="form-group"><label>Promemoria</label><input type="datetime-local" id="att-promemoria"></div>
     <div class="form-group"><label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="att-sync-google"> Sincronizza su Google Calendar</label></div>
     <div class="modal-actions">
+      <button class="btn btn-danger btn-sm" id="btn-del-attivita" style="display:none" onclick="deleteAttivita()">Elimina</button>
       <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
       <button class="btn btn-accent" onclick="salvaAttivita()">Salva</button>
     </div>
