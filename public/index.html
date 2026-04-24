@@ -48,6 +48,8 @@
 <!-- APP -->
 <div id="app" style="display:none">
 
+  <div id="mobile-sidebar-backdrop" onclick="closeMobileSidebar()"></div>
+
   <aside id="sidebar">
     <div class="sidebar-logo">
       <div class="logo-h">H</div>
@@ -102,6 +104,11 @@
   </aside>
 
   <main id="main-content">
+    <div id="mobile-topbar">
+      <button class="mobile-menu-btn" onclick="toggleMobileSidebar()" aria-label="Apri menu">☰</button>
+      <div class="mobile-topbar-title">Horygon CRM</div>
+      <button class="mobile-menu-btn" onclick="navigateTo('dashboard')" aria-label="Vai alla dashboard">⌂</button>
+    </div>
 
     <!-- DASHBOARD -->
     <section id="section-dashboard" class="section active">

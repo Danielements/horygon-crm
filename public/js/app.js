@@ -8,6 +8,7 @@ let calDate = new Date();
 let calView = 'month';
 let calEvents = [];
 let currentEventId = null;
+let isMobileSidebarOpen = false;
 
 // Redirect da Google OAuth
 const urlToken = new URLSearchParams(window.location.search).get('token');
@@ -201,8 +202,9 @@ async function toggleTema() {
 function showScreen(id) {
   ['login-screen','setup-screen','app'].forEach(s => {
     const el = document.getElementById(s);
-    if (el) el.style.display = s === id ? 'flex' : 'none';
+    if (el) el.style.display = s === id ? (s === 'app' ? '' : 'flex') : 'none';
   });
+  if (id !== 'app') closeMobileSidebar();
 }
 
 function ensureAnagraficaLogisticaFields() {
@@ -249,6 +251,7 @@ function navigateTo(section) {
   document.querySelectorAll('.nav-item').forEach(a => a.classList.toggle('active', a.dataset.section === section));
   document.querySelectorAll('.section').forEach(s => s.classList.toggle('active', s.id === `section-${section}`));
   document.getElementById('main-content').scrollTop = 0;
+  closeMobileSidebar();
   const map = {
     dashboard: loadDashboard, clienti: () => loadAnagrafiche('cliente'),
     fornitori: () => loadAnagrafiche('fornitore'), contatti: loadContacts, prodotti: loadProdotti,
@@ -259,6 +262,36 @@ function navigateTo(section) {
     mappa: loadMappa, utenti: loadUtenti, mepa: loadMepa, rdo: loadRdoPage, 'opportunita-cpv': loadOpportunityCpv, cig: loadCIG, analytics: loadAnalytics,
   };
   if (map[section]) map[section]();
+}
+
+function isMobileViewport() {
+  return window.innerWidth <= 980;
+}
+
+function syncMobileLayoutState() {
+  const app = document.getElementById('app');
+  if (!app) return;
+  const mobile = isMobileViewport();
+  document.body.classList.toggle('is-mobile', mobile);
+  if (!mobile) {
+    isMobileSidebarOpen = false;
+    app.classList.remove('sidebar-open');
+  }
+}
+
+function toggleMobileSidebar() {
+  if (!isMobileViewport()) return;
+  const app = document.getElementById('app');
+  if (!app) return;
+  isMobileSidebarOpen = !isMobileSidebarOpen;
+  app.classList.toggle('sidebar-open', isMobileSidebarOpen);
+}
+
+function closeMobileSidebar() {
+  const app = document.getElementById('app');
+  if (!app) return;
+  isMobileSidebarOpen = false;
+  app.classList.remove('sidebar-open');
 }
 // ═══════════════════════════════
 // DASHBOARD
@@ -1848,6 +1881,13 @@ function closeAllModals() {
   document.querySelectorAll('.modal').forEach(m => { m.style.display = 'none'; });
 }
 
+window.addEventListener('resize', syncMobileLayoutState);
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    closeMobileSidebar();
+  }
+});
+
 // Enter login
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && document.getElementById('login-screen').style.display !== 'none') doLogin();
@@ -1995,3 +2035,4 @@ async function deleteAttivita(id = null) {
 }
 
 init();
+syncMobileLayoutState();
