@@ -44,6 +44,15 @@ async function apiForm(method, path, formData) {
   return res.json();
 }
 
+function registerPwaSupport() {
+  if (!('serviceWorker' in navigator)) return;
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/service-worker.js').catch(err => {
+      console.warn('Service worker non registrato', err);
+    });
+  });
+}
+
 // ═══════════════════════════════
 // TOAST
 // ═══════════════════════════════
@@ -2416,3 +2425,4 @@ async function deleteAttivita(id = null) {
 init();
 syncMobileLayoutState();
 scheduleResponsiveEnhancement();
+registerPwaSupport();

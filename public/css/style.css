@@ -659,7 +659,7 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 0 16px;
+  padding: calc(10px + env(safe-area-inset-top, 0px)) 0 16px;
   margin-bottom: 4px;
   background: linear-gradient(180deg, var(--bg) 0%, var(--bg) 82%, transparent 100%);
 }
