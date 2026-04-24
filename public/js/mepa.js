@@ -3,8 +3,15 @@
 // ═══════════════════════════════════════════════
 let mepaCharts = {};
 let mepaData = null;
+let mepaSelectedCategoryId = localStorage.getItem('mepa_selected_category_id') || '';
 
 const COLORS = ['#0057ff','#00d4ff','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#84cc16','#f97316','#6366f1','#14b8a6','#e11d48','#7c3aed','#059669'];
+
+function formatCpvDisplay(value) {
+  const digits = String(value || '').replace(/[^0-9]/g, '');
+  if (digits.length === 9) return digits.slice(0, 8) + '-' + digits.slice(8);
+  return String(value || '');
+}
 
 function getMepaTopLimit() {
   const el = document.getElementById('mepa-top-limit');
@@ -25,6 +32,402 @@ function renderMepaViews() {
   renderTopCpvTrendChart(mepaData);
   renderTopCpvTable(mepaData);
   ensureMepaCpvDetail(mepaData);
+}
+
+function getSelectedMepaCategoryId() {
+  return mepaSelectedCategoryId ? parseInt(mepaSelectedCategoryId, 10) || '' : '';
+}
+
+function setSelectedMepaCategoryId(value) {
+  mepaSelectedCategoryId = value ? String(value) : '';
+  if (mepaSelectedCategoryId) localStorage.setItem('mepa_selected_category_id', mepaSelectedCategoryId);
+  else localStorage.removeItem('mepa_selected_category_id');
+}
+
+function getMepaCategoryQuery() {
+  const id = getSelectedMepaCategoryId();
+  return id ? ('?categoria_id=' + encodeURIComponent(id)) : '';
+}
+
+function ensureMepaCategoryManager() {
+  if (document.getElementById('mepa-category-manager')) return;
+  const host = document.getElementById('mepa-data');
+  if (!host) return;
+
+  const wrapper = document.createElement('div');
+  wrapper.id = 'mepa-category-manager';
+  wrapper.className = 'dash-card';
+  wrapper.style.marginBottom = '16px';
+  wrapper.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:16px">
+      <div>
+        <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin:0 0 6px">Categorie abilitate</h3>
+        <div id="mepa-category-summary" style="font-size:12px;color:var(--text-muted)">Caricamento...</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn-secondary" onclick="rebuildMepaStats()">Rigenera statistiche</button>
+        <button class="btn-primary" onclick="openMepaCategoryModal()">Aggiungi categoria abilitata</button>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:minmax(240px,320px) 1fr;gap:12px;align-items:end;margin-bottom:16px">
+      <div class="form-group" style="margin:0">
+        <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:6px">Categoria in analisi</label>
+        <select id="mepa-category-select" onchange="selectMepaCategory(this.value)"></select>
+      </div>
+      <div id="mepa-category-active-info" style="font-size:12px;color:var(--text-muted);padding-bottom:8px"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:minmax(240px,1fr) auto;gap:10px;align-items:end;margin-bottom:16px">
+      <div class="form-group" style="margin:0">
+        <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:6px">Ricerca singolo CPV</label>
+        <input id="mepa-cpv-search-input" type="text" placeholder="Es. 18143000-3 oppure descrizione" onkeydown="if(event.key==='Enter'){searchMepaCpv()}">
+      </div>
+      <button class="btn-secondary" onclick="searchMepaCpv()">Cerca CPV</button>
+    </div>
+    <div id="mepa-cpv-search-results" style="display:none;margin-bottom:16px"></div>
+    <div style="overflow:auto;margin-top:12px">
+      <table class="data-table">
+        <thead><tr><th>Categoria</th><th>Fonte</th><th>CPV</th><th>Attivi</th><th>Stato</th><th>Azioni</th></tr></thead>
+        <tbody id="mepa-categorie-body"></tbody>
+      </table>
+    </div>
+  `;
+
+  host.insertBefore(wrapper, host.firstChild);
+  ensureMepaCategoryModal();
+}
+
+function setMepaDashboardVisibility(showAnalytics) {
+  const host = document.getElementById('mepa-data');
+  if (!host) return;
+  Array.from(host.children).forEach(child => {
+    if (child.id === 'mepa-category-manager') child.style.display = '';
+    else child.style.display = showAnalytics ? '' : 'none';
+  });
+}
+
+function renderMepaEmptyState(mode, stato) {
+  const noData = document.getElementById('mepa-no-data');
+  if (!noData) return;
+
+  if (mode === 'governance') {
+    noData.innerHTML = `
+      <div style="font-size:52px;margin-bottom:16px">🧭</div>
+      <h2 style="margin-bottom:12px;font-size:20px">Configura prima i CPV da monitorare</h2>
+      <p style="color:var(--text-muted);margin-bottom:24px;max-width:620px;margin-left:auto;margin-right:auto;line-height:1.6">
+        La pagina Analisi MEPA ora lavora solo sui CPV caricati da voi. Finché non aggiungete almeno una categoria abilitata con i relativi CPV dal pop-up, i CSV non vengono analizzati.
+      </p>
+      <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+        <button class="btn btn-accent" onclick="openMepaCategoryModal()">Aggiungi categoria abilitata</button>
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:18px">
+        Categorie attive: ${(stato?.categorieAbilitate || 0).toLocaleString('it')} · CPV monitorati: ${(stato?.cpvMonitorati || 0).toLocaleString('it')}
+      </div>
+    `;
+    return;
+  }
+
+  noData.innerHTML = `
+    <div style="font-size:52px;margin-bottom:16px">📄</div>
+    <h2 style="margin-bottom:12px;font-size:20px">Governance pronta, ora carica i CSV MEPA</h2>
+    <p style="color:var(--text-muted);margin-bottom:24px;max-width:620px;margin-left:auto;margin-right:auto;line-height:1.6">
+      Le categorie e i CPV sono configurati. Puoi caricare i file CSV oppure fare la scansione della cartella <code>data/mepa</code>: l’analisi userà solo i CPV governati nel catalogo.
+    </p>
+    <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+      <button class="btn btn-accent" onclick="openModal('modal-import-anac')">Upload CSV</button>
+      <button class="btn btn-outline" onclick="syncAnac()">Scan cartella MEPA</button>
+    </div>
+    <div style="font-size:12px;color:var(--text-muted);margin-top:18px">
+      CPV monitorati: ${(stato?.cpvMonitorati || 0).toLocaleString('it')} · File duplicati rilevati: ${(stato?.fileDuplicati || 0).toLocaleString('it')}
+    </div>
+  `;
+}
+
+function ensureMepaCategoryModal() {
+  if (document.getElementById('modal-mepa-categoria')) return;
+  const modal = document.createElement('div');
+  modal.id = 'modal-mepa-categoria';
+  modal.className = 'modal';
+  modal.innerHTML = `
+    <div class="modal-box" style="max-width:920px">
+      <div class="modal-title">Aggiungi categoria abilitata</div>
+      <div class="form-group">
+        <label>Nome categoria *</label>
+        <input type="text" id="mepa-modal-cat-nome" placeholder="Es. Tessuti, indumenti e DPI">
+      </div>
+      <div class="form-group">
+        <label>Fonte / riferimento</label>
+        <input type="text" id="mepa-modal-cat-fonte" placeholder="Es. Allegato 12 Consip giugno 2025">
+      </div>
+      <div class="form-group">
+        <label>Incolla testo</label>
+        <textarea id="mepa-modal-import-text" rows="12" placeholder="Incolla qui il testo con i CPV"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Oppure carica file testo / CSV</label>
+        <input id="mepa-modal-import-file" type="file" accept=".txt,.csv,.md">
+      </div>
+      <div id="mepa-modal-import-result" style="font-size:12px;color:var(--text-muted);margin:8px 0 12px"></div>
+      <div id="mepa-modal-import-preview" style="display:none;margin-bottom:12px"></div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
+        <button class="btn btn-outline" onclick="previewMepaCpvs()">Anteprima</button>
+        <button class="btn btn-accent" onclick="saveMepaCategory()">Salva categoria</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+async function loadMepaCategoryManager() {
+  ensureMepaCategoryManager();
+  const [categorie, stato] = await Promise.all([
+    api('GET', '/mepa/categorie-abilitate'),
+    api('GET', '/mepa/stato'),
+  ]);
+  if (!categorie) return;
+
+  const body = document.getElementById('mepa-categorie-body');
+  const summary = document.getElementById('mepa-category-summary');
+  const select = document.getElementById('mepa-category-select');
+  const activeInfo = document.getElementById('mepa-category-active-info');
+  const activeCategories = (categorie || []).filter(cat => Number(cat.attiva) === 1);
+  const selectedId = getSelectedMepaCategoryId();
+  const selectedCategory = activeCategories.find(cat => cat.id === selectedId) || activeCategories[0] || categorie[0] || null;
+  setSelectedMepaCategoryId(selectedCategory ? selectedCategory.id : '');
+
+  if (summary && stato) {
+    summary.textContent = (stato.categorieAbilitate || categorie.length || 0) + ' categorie abilitate · ' +
+      (stato.cpvMonitorati || 0) + ' CPV monitorati · ' +
+      (stato.fileDuplicati || 0) + ' file doppioni rilevati';
+  }
+
+  if (select) {
+    select.innerHTML = activeCategories.length
+      ? activeCategories.map(cat => '<option value="' + cat.id + '"' + (selectedCategory && selectedCategory.id === cat.id ? ' selected' : '') + '>' + escapeHtml(cat.nome) + '</option>').join('')
+      : '<option value="">Nessuna categoria attiva</option>';
+    select.disabled = !activeCategories.length;
+  }
+
+  if (activeInfo) {
+    activeInfo.textContent = selectedCategory
+      ? ('Dashboard filtrata su: ' + selectedCategory.nome + ' · ' + ((selectedCategory.cpv_attivi || 0).toLocaleString('it')) + ' CPV attivi')
+      : 'Nessuna categoria attiva selezionabile';
+  }
+
+  if (body) {
+    body.innerHTML = categorie.map(cat =>
+      '<tr>' +
+      '<td><strong>' + escapeHtml(cat.nome) + '</strong><div style="font-size:11px;color:var(--text-muted)">' + escapeHtml(cat.descrizione || '') + '</div></td>' +
+      '<td style="font-size:12px">' + escapeHtml(cat.fonte || '-') + '</td>' +
+      '<td style="text-align:right">' + ((cat.cpv_count || 0).toLocaleString('it')) + '</td>' +
+      '<td style="text-align:right">' + ((cat.cpv_attivi || 0).toLocaleString('it')) + '</td>' +
+      '<td style="text-align:center"><span style="display:inline-block;padding:4px 8px;border-radius:999px;font-size:11px;font-weight:600;background:' + (Number(cat.attiva) === 1 ? 'rgba(16,185,129,0.12);color:#10b981' : 'rgba(125,133,144,0.12);color:#7d8590') + '">' + (Number(cat.attiva) === 1 ? 'Attiva' : 'Esclusa') + '</span></td>' +
+      '<td style="white-space:nowrap">' +
+      (Number(cat.attiva) === 1 ? '<button class="btn-secondary" style="margin-right:6px" onclick="selectMepaCategory(' + cat.id + ')">Usa</button>' : '') +
+      '<button class="btn-secondary" style="margin-right:6px" onclick="toggleMepaCategoryState(' + cat.id + ',' + (Number(cat.attiva) === 1 ? 0 : 1) + ')">' + (Number(cat.attiva) === 1 ? 'Escludi' : 'Riattiva') + '</button>' +
+      '<button class="btn-secondary" onclick="deleteMepaCategory(' + cat.id + ')">Elimina</button>' +
+      '</td>' +
+      '</tr>'
+    ).join('') || '<tr><td colspan="6" style="padding:18px;text-align:center;color:var(--text-muted)">Nessuna categoria registrata</td></tr>';
+  }
+}
+
+async function searchMepaCpv() {
+  const input = document.getElementById('mepa-cpv-search-input');
+  const target = document.getElementById('mepa-cpv-search-results');
+  if (!target) return;
+
+  const query = input ? input.value.trim() : '';
+  target.style.display = 'block';
+  target.innerHTML = '<div style="padding:14px;border:1px solid var(--border);border-radius:10px;color:var(--text-muted)">Ricerca in corso...</div>';
+
+  const result = await api('GET', '/mepa/cpv-search?q=' + encodeURIComponent(query) + (getSelectedMepaCategoryId() ? '&categoria_id=' + encodeURIComponent(getSelectedMepaCategoryId()) : ''));
+  if (!result || !result.ok) return;
+
+  const rows = result.results || [];
+  if (!rows.length) {
+    target.innerHTML = '<div style="padding:14px;border:1px solid var(--border);border-radius:10px;color:var(--text-muted)">Nessun CPV trovato nel catalogo governato.</div>';
+    return;
+  }
+
+  target.innerHTML = rows.map(row =>
+    '<div style="padding:12px 14px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px">' +
+      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">' +
+        '<div>' +
+          '<div style="font-weight:700"><code>' + escapeHtml(formatCpvDisplay(row.codice_cpv_display || row.codice_cpv)) + '</code> · ' + escapeHtml(row.categoria || 'Senza categoria') + '</div>' +
+          '<div style="font-size:12px;color:var(--text-muted);margin-top:4px">' + escapeHtml(row.desc || row.descrizione || '-') + '</div>' +
+        '</div>' +
+        '<div style="text-align:right;font-size:12px;min-width:180px">' +
+          '<div><strong>' + formatEuro(row.valore_totale || 0) + '</strong></div>' +
+          '<div style="color:var(--text-muted);margin-top:4px">' + ((row.ordini_totali || 0).toLocaleString('it')) + ' ordini · ' + ((row.anni_coperti || 0).toLocaleString('it')) + ' anni</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>'
+  ).join('');
+}
+
+function openMepaCategoryModal() {
+  ensureMepaCategoryModal();
+  const nome = document.getElementById('mepa-modal-cat-nome');
+  const fonte = document.getElementById('mepa-modal-cat-fonte');
+  const text = document.getElementById('mepa-modal-import-text');
+  const file = document.getElementById('mepa-modal-import-file');
+  const result = document.getElementById('mepa-modal-import-result');
+  const preview = document.getElementById('mepa-modal-import-preview');
+  if (nome) nome.value = '';
+  if (fonte) fonte.value = '';
+  if (text) text.value = '';
+  if (file) file.value = '';
+  if (result) result.textContent = '';
+  if (preview) {
+    preview.style.display = 'none';
+    preview.innerHTML = '';
+  }
+  openModal('modal-mepa-categoria');
+}
+
+function getMepaModalState() {
+  return {
+    nome: document.getElementById('mepa-modal-cat-nome'),
+    fonte: document.getElementById('mepa-modal-cat-fonte'),
+    text: document.getElementById('mepa-modal-import-text'),
+    file: document.getElementById('mepa-modal-import-file'),
+    resultEl: document.getElementById('mepa-modal-import-result'),
+    previewEl: document.getElementById('mepa-modal-import-preview'),
+  };
+}
+
+async function saveMepaCategory() {
+  const { nome, fonte, text, file, resultEl } = getMepaModalState();
+  const categoryName = String(nome?.value || '').trim();
+
+  if (!categoryName) {
+    toast('Inserisci il nome categoria', 'error');
+    return;
+  }
+
+  const categoryRes = await api('POST', '/mepa/categorie-abilitate', {
+    nome: categoryName,
+    categoria: categoryName,
+    fonte: fonte ? fonte.value.trim() : '',
+    descrizione: '',
+    attiva: 1,
+  });
+  if (!categoryRes || !categoryRes.ok) return;
+
+  const hasText = !!(text && text.value.trim());
+  const hasFile = !!(file && file.files && file.files[0]);
+  if (hasText || hasFile) {
+    const fd = new FormData();
+    fd.append('categoria_id', categoryRes.categoria.id);
+    fd.append('categoria', categoryRes.categoria.nome);
+    fd.append('fonte', fonte ? fonte.value.trim() : '');
+    fd.append('testo', text ? text.value : '');
+    if (hasFile) fd.append('file', file.files[0]);
+    if (resultEl) resultEl.textContent = 'Import in corso...';
+    const importRes = await apiForm('POST', '/mepa/cpv-import', fd);
+    if (!importRes || !importRes.ok) return;
+    if (resultEl) resultEl.textContent = 'Categoria salvata e import completato: ' + importRes.totaleLetti + ' CPV letti';
+    toast('Categoria e CPV salvati', 'success');
+  } else {
+    toast('Categoria abilitata salvata', 'success');
+  }
+
+  closeAllModals();
+  await loadMepaCategoryManager();
+  await loadMepa();
+}
+
+async function importMepaCpvs() {
+  return saveMepaCategory();
+}
+
+async function previewMepaCpvs() {
+  const { nome, text, file, resultEl, previewEl } = getMepaModalState();
+
+  if (!nome || !nome.value.trim()) {
+    toast('Inserisci il nome categoria', 'error');
+    return;
+  }
+
+  const fd = new FormData();
+  fd.append('categoria', nome.value.trim());
+  fd.append('testo', text ? text.value : '');
+  if (file && file.files && file.files[0]) fd.append('file', file.files[0]);
+
+  if (resultEl) resultEl.textContent = 'Analisi testo in corso...';
+  try {
+    const result = await apiForm('POST', '/mepa/cpv-preview', fd);
+    if (!result || !result.ok) return;
+    if (resultEl) {
+      resultEl.textContent = 'Anteprima pronta: ' + result.totaleLetti + ' CPV riconosciuti · ' + result.nuovi + ' nuovi · ' + result.esistenti + ' gia presenti';
+    }
+    if (previewEl) {
+      previewEl.style.display = 'block';
+      previewEl.style.marginTop = '10px';
+      previewEl.innerHTML =
+        '<div style="max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:10px">' +
+        '<table class="data-table">' +
+        '<thead><tr><th>CPV</th><th>Descrizione rilevata</th><th>Stato</th></tr></thead>' +
+        '<tbody>' +
+        (result.rows || []).slice(0, 80).map(row =>
+          '<tr>' +
+          '<td><code>' + escapeHtml(formatCpvDisplay(row.codice_cpv_display || row.codice_cpv)) + '</code></td>' +
+          '<td style="font-size:12px">' + escapeHtml(row.descrizione || '-') +
+            (row.esistente && row.descrizione_esistente && row.descrizione_esistente !== row.descrizione
+              ? '<div style="font-size:11px;color:var(--text-muted)">Gia in catalogo: ' + escapeHtml(row.descrizione_esistente) + '</div>'
+              : '') +
+          '</td>' +
+          '<td style="font-size:12px;color:' + (row.esistente ? '#f59e0b' : '#10b981') + ';font-weight:600">' + (row.esistente ? 'Gia presente' : 'Nuovo') + '</td>' +
+          '</tr>'
+        ).join('') +
+        '</tbody></table></div>' +
+        ((result.rows || []).length > 80 ? '<div style="font-size:11px;color:var(--text-muted);margin-top:6px">Mostrati i primi 80 risultati.</div>' : '');
+    }
+  } catch (error) {
+    if (resultEl) resultEl.textContent = error.message || 'Errore anteprima';
+  }
+}
+
+async function rebuildMepaStats() {
+  const confirmed = confirm('Rigenero tutte le statistiche MEPA partendo solo dai file unici presenti in data/mepa. Continuare?');
+  if (!confirmed) return;
+  const result = await api('POST', '/mepa/rebuild');
+  if (!result || !result.ok) return;
+  const imported = (result.results || []).filter(item => item.status === 'importato').length;
+  const duplicates = (result.results || []).filter(item => item.status.includes('duplicato')).length;
+  toast('Rigenerazione completata: ' + imported + ' file importati, ' + duplicates + ' doppioni ignorati', 'success');
+  await loadMepa();
+  await loadMepaCategoryManager();
+}
+
+async function selectMepaCategory(categoryId) {
+  setSelectedMepaCategoryId(categoryId);
+  await loadMepaCategoryManager();
+  await loadMepa();
+}
+
+async function toggleMepaCategoryState(categoryId, attiva) {
+  const message = attiva ? 'Riattivo questa categoria per l’analisi?' : 'Escludo questa categoria dalla dashboard MEPA?';
+  if (!confirm(message)) return;
+  await api('PATCH', '/mepa/categorie-abilitate/' + encodeURIComponent(categoryId), { attiva });
+  if (!attiva && String(getSelectedMepaCategoryId()) === String(categoryId)) {
+    setSelectedMepaCategoryId('');
+  }
+  toast(attiva ? 'Categoria riattivata' : 'Categoria esclusa', 'success');
+  await loadMepaCategoryManager();
+  await loadMepa();
+}
+
+async function deleteMepaCategory(categoryId) {
+  if (!confirm('Elimino categoria e CPV collegati? Questa azione rimuove la governance associata.')) return;
+  await api('DELETE', '/mepa/categorie-abilitate/' + encodeURIComponent(categoryId));
+  if (String(getSelectedMepaCategoryId()) === String(categoryId)) {
+    setSelectedMepaCategoryId('');
+  }
+  toast('Categoria eliminata', 'success');
+  await loadMepaCategoryManager();
+  await loadMepa();
 }
 
 function ensureMepaTopSelector() {
@@ -134,15 +537,33 @@ async function loadMepaCpvDetail() {
 }
 
 async function loadMepa() {
-  const stato = await api('GET', '/mepa/stato');
+  ensureMepaCategoryManager();
+  const stato = await api('GET', '/mepa/stato' + getMepaCategoryQuery());
   const total = stato ? (stato.totalRecords || 0) : 0;
   const noData = document.getElementById('mepa-no-data');
   const dataEl = document.getElementById('mepa-data');
   if (!noData || !dataEl) return;
-  if (total === 0) {
-    noData.style.display = 'block'; dataEl.style.display = 'none'; return;
+  dataEl.style.display = 'block';
+  if (!stato || !stato.governanceReady) {
+    noData.style.display = 'block';
+    setMepaDashboardVisibility(false);
+    renderMepaEmptyState('governance', stato);
+    const el = document.getElementById('mepa-last-sync');
+    if (el) el.textContent = 'Configura categorie e CPV governati';
+    await loadMepaCategoryManager();
+    return;
   }
-  noData.style.display = 'none'; dataEl.style.display = 'block';
+  if (total === 0) {
+    noData.style.display = 'block';
+    setMepaDashboardVisibility(false);
+    renderMepaEmptyState('csv', stato);
+    const el = document.getElementById('mepa-last-sync');
+    if (el) el.textContent = 'Governance pronta · nessun CSV analizzato';
+    await loadMepaCategoryManager();
+    return;
+  }
+  noData.style.display = 'none';
+  setMepaDashboardVisibility(true);
   if (stato.anni && stato.anni.length) {
     const el = document.getElementById('mepa-last-sync');
     if (el) el.textContent = stato.anni.join(', ') + ' · ' + stato.totalRecords + ' righe · ' + formatEuro(stato.totValore);
@@ -153,20 +574,20 @@ async function loadMepa() {
     const valoreVista = stato.totValoreHorygon || stato.totValore || 0;
     if (el) el.textContent = stato.anni.join(', ') + ' - vista Horygon: ' + righeVista + ' righe - ' + formatEuro(valoreVista);
   }
-  const data = await api('GET', '/mepa/analytics');
+  const data = await api('GET', '/mepa/analytics' + getMepaCategoryQuery());
   if (!data) return;
   ensureMepaTopSelector();
   mepaData = data;
   renderMepaKPI(data);
   renderSerieAnniChart(data);
   renderRegioniChart(data);
-  renderCategoriChart(data);
   renderOpportunita(data);
   renderDeclino(data);
   renderPredizioni(data);
   renderMepaViews();
   renderTipologiePA(data);
   renderRegioniFocus(data);
+  await loadMepaCategoryManager();
 }
 
 function renderMepaKPI(data) {
@@ -256,7 +677,16 @@ function renderCategoriChart(data) {
   mepaCharts['chart-categorie'] = new Chart(canvas.getContext('2d'), {
     type: 'doughnut',
     data: { labels: cat.map(c => c.categoria_mepa), datasets: [{ data: cat.map(c => c.tot_valore), backgroundColor: COLORS.slice(0, cat.length), borderWidth: 2 }] },
-    options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { color: '#7d8590', font: { size: 10 }, boxWidth: 10 } }, tooltip: { callbacks: { label: ctx => ' ' + ctx.label + ': ' + formatEuro(ctx.parsed) } } } }
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '68%',
+      radius: '78%',
+      plugins: {
+        legend: { position: 'bottom', labels: { color: '#7d8590', font: { size: 10 }, boxWidth: 10 } },
+        tooltip: { callbacks: { label: ctx => ' ' + ctx.label + ': ' + formatEuro(ctx.parsed) } },
+      },
+    }
   });
 }
 
@@ -545,3 +975,12 @@ function renderOpportunityCpv(data) {
 }
 
 ensureOpportunityCpvShell();
+window.saveMepaCategory = saveMepaCategory;
+window.openMepaCategoryModal = openMepaCategoryModal;
+window.previewMepaCpvs = previewMepaCpvs;
+window.importMepaCpvs = importMepaCpvs;
+window.searchMepaCpv = searchMepaCpv;
+window.selectMepaCategory = selectMepaCategory;
+window.toggleMepaCategoryState = toggleMepaCategoryState;
+window.deleteMepaCategory = deleteMepaCategory;
+window.rebuildMepaStats = rebuildMepaStats;

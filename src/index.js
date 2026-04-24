@@ -15,8 +15,6 @@ app.use(cors({
   origin: (origin, cb) => (!origin || ALLOWED_ORIGINS.includes(origin)) ? cb(null, true) : cb(new Error('CORS bloccato')),
   credentials: true,
 }));
-app.use('/api/mepa', require('./routes/mepa'));
-app.use('/api/analytics', require('./routes/analytics'));
 // Security headers
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -30,17 +28,11 @@ app.use((req, res, next) => {
 app.use('/api/auth/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Troppi tentativi. Riprova tra 15 minuti.' } }));
 app.use('/api/auth/setup', rateLimit({ windowMs: 60 * 60 * 1000, max: 3 }));
 app.use('/api', rateLimit({ windowMs: 60 * 1000, max: 300 }));
+
+// Body parser must run before API routes that read req.body
 app.use(express.json({ limit: '20mb' }));
-app.use(express.static(path.join(__dirname, '../public')));
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
-app.use('/api/mepa', require('./routes/mepa'));
-// Body & static
-app.use('/api/mepa', require('./routes/mepa'));
-app.use('/api/cig', require('./routes/cig'));
-app.use('/api/anagrafiche', require('./routes/anagrafiche'));
-app.use('/api/prodotti',    require('./routes/prodotti'));
-app.use('/api/ordini',      require('./routes/ordini'));
-app.use('/api/analytics',   require('./routes/analytics'));
+
+// Static assets
 app.use(express.static(path.join(__dirname, '../public')));
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 app.use(session({
@@ -59,6 +51,10 @@ app.use('/api/fatture',     require('./routes/fatture'));
 app.use('/api/google',      require('./routes/google'));
 app.use('/api/contatti',    require('./routes/contatti'));
 app.use('/api/system',      require('./routes/system'));
+app.use('/api/mepa',        require('./routes/mepa'));
+app.use('/api/rdo',         require('./routes/rdo'));
+app.use('/api/cig',         require('./routes/cig'));
+app.use('/api/analytics',   require('./routes/analytics'));
 app.use('/api',             require('./routes/operativo'));
 
 // Error handler

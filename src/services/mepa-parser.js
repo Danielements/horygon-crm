@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { parse } = require('csv-parse/sync');
 const db = require('../db/database');
 
@@ -178,62 +179,89 @@ const CPV_HORYGON = {
   '44812000': { desc: 'Tempere, colori e pigmenti', categoria: 'Restauro', priorita: 'bassa' },
 };
 
-const FALLBACK_CPV_PREFISSI = [...new Set(Object.keys(CPV_HORYGON).map(k => k.substring(0, 6)))];
-
-function getCpvCatalogEntries({ activeOnly = false } = {}) {
-  try {
-    const rows = db.prepare(`
-      SELECT codice_cpv, descrizione as desc, categoria, priorita, attivo, note
-      FROM mepa_cpv_catalog
-      ${activeOnly ? 'WHERE attivo = 1' : ''}
-      ORDER BY categoria, descrizione
-    `).all();
-    if (rows.length) return rows;
-  } catch {}
-
-  return Object.entries(CPV_HORYGON).map(([codice_cpv, meta]) => ({
-    codice_cpv,
-    desc: meta.desc,
-    categoria: meta.categoria,
-    priorita: meta.priorita,
-    attivo: 1,
-    note: '',
-  }));
+function normalizeCpvCode(value = '', { keepCheckDigit = true } = {}) {
+  const digits = String(value || '').replace(/[^0-9]/g, '');
+  if (!digits) return '';
+  if (keepCheckDigit && digits.length >= 9) return digits.substring(0, 9);
+  return digits.substring(0, 8);
 }
 
-function getActiveCpvPrefixes() {
-  const entries = getCpvCatalogEntries({ activeOnly: true });
-  const prefixes = entries.map(entry => String(entry.codice_cpv || '').replace(/[^0-9]/g, '').substring(0, 6)).filter(Boolean);
-  return [...new Set(prefixes.length ? prefixes : FALLBACK_CPV_PREFISSI)];
+function formatCpvCode(value = '') {
+  const digits = normalizeCpvCode(value, { keepCheckDigit: true });
+  if (digits.length === 9) return `${digits.substring(0, 8)}-${digits.substring(8)}`;
+  return digits;
+}
+
+function getCpvMatchKey(value = '') {
+  const digits = normalizeCpvCode(value, { keepCheckDigit: true });
+  if (digits.length >= 8) return digits.substring(0, 8);
+  return digits.substring(0, 6);
+}
+
+function getCpvCatalogEntries({ activeOnly = false, categoryId = null } = {}) {
+  try {
+    const where = [];
+    const params = [];
+    if (activeOnly) where.push('attivo = 1 AND categoria_id IS NOT NULL');
+    if (categoryId) {
+      where.push('categoria_id = ?');
+      params.push(Number(categoryId));
+    }
+    return db.prepare(`
+      SELECT codice_cpv, descrizione as desc, categoria, priorita, attivo, note, categoria_id
+      FROM mepa_cpv_catalog
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY categoria, descrizione
+    `).all(...params);
+  } catch {
+    return [];
+  }
+}
+
+function getActiveCpvPrefixes(categoryId = null) {
+  const entries = getCpvCatalogEntries({ activeOnly: true, categoryId });
+  return [...new Set(entries.map(entry => getCpvMatchKey(entry.codice_cpv)).filter(Boolean))];
+}
+
+function hasActiveGovernance(categoryId = null) {
+  try {
+    return listEnabledCategories({ activeOnly: true, categoryId }).length > 0
+      && getCpvCatalogEntries({ activeOnly: true, categoryId }).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 function getCpvMeta(cpv = '') {
-  const clean = String(cpv || '').replace(/[^0-9]/g, '').substring(0, 8);
+  const clean = normalizeCpvCode(cpv, { keepCheckDigit: true });
   if (!clean) return {};
+  const matchKey = getCpvMatchKey(clean);
   const catalogMatch = getCpvCatalogEntries()
-    .find(entry => clean.startsWith(String(entry.codice_cpv || '').replace(/[^0-9]/g, '').substring(0, 6)));
+    .find(entry => getCpvMatchKey(entry.codice_cpv) === matchKey);
   if (catalogMatch) return {
     desc: catalogMatch.desc,
     target_desc: catalogMatch.desc,
     categoria: catalogMatch.categoria,
     priorita: catalogMatch.priorita,
     attivo: catalogMatch.attivo,
+    codice_cpv_display: formatCpvCode(catalogMatch.codice_cpv),
   };
-  if (CPV_HORYGON[clean]) return { ...CPV_HORYGON[clean], target_desc: CPV_HORYGON[clean].desc };
-  const match = Object.entries(CPV_HORYGON).find(([key]) => clean.startsWith(key.substring(0, 6)));
-  return match ? { ...match[1], target_desc: match[1].desc } : {};
+  return {};
 }
 
-function getActiveCpvFilter(alias = '') {
+function getActiveCpvFilter(alias = '', categoryId = null) {
   const column = alias ? `${alias}.codice_cpv` : 'codice_cpv';
-  const activePrefixes = getActiveCpvPrefixes();
-  const where = activePrefixes.map(() => `${column} LIKE ?`).join(' OR ') || '1=0';
-  const params = activePrefixes.map(prefix => `${prefix}%`);
-  return { where: `(${where})`, params };
+  const activePrefixes = getActiveCpvPrefixes(categoryId);
+  if (!activePrefixes.length) return { where: '1=0', params: [] };
+  const placeholders = activePrefixes.map(() => '?').join(', ');
+  return {
+    where: `substr(${column}, 1, 8) IN (${placeholders})`,
+    params: activePrefixes.map(prefix => prefix.substring(0, 8)),
+  };
 }
 
 function saveCpvCatalogEntry(input = {}) {
-  const codice = String(input.codice_cpv || '').replace(/[^0-9]/g, '').substring(0, 8);
+  const codice = normalizeCpvCode(input.codice_cpv, { keepCheckDigit: true });
   if (codice.length < 6) throw new Error('Codice CPV non valido');
   const descrizione = String(input.descrizione || input.desc || '').trim();
   if (!descrizione) throw new Error('Descrizione CPV obbligatoria');
@@ -257,6 +285,205 @@ function saveCpvCatalogEntry(input = {}) {
   return db.prepare('SELECT * FROM mepa_cpv_catalog WHERE codice_cpv = ?').get(codice);
 }
 
+function listEnabledCategories({ activeOnly = false, categoryId = null } = {}) {
+  const where = [];
+  const params = [];
+  if (activeOnly) where.push('c.attiva = 1');
+  if (categoryId) {
+    where.push('c.id = ?');
+    params.push(Number(categoryId));
+  }
+  return db.prepare(`
+    SELECT c.*,
+      COUNT(cat.codice_cpv) as cpv_count,
+      SUM(CASE WHEN cat.attivo = 1 THEN 1 ELSE 0 END) as cpv_attivi
+    FROM mepa_categorie_abilitate c
+    LEFT JOIN mepa_cpv_catalog cat ON cat.categoria_id = c.id
+    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    GROUP BY c.id
+    ORDER BY c.attiva DESC, c.nome ASC
+  `).all(...params);
+}
+
+function saveEnabledCategory(input = {}) {
+  const nome = String(input.nome || input.categoria || '').trim();
+  if (!nome) throw new Error('Nome categoria obbligatorio');
+  const descrizione = String(input.descrizione || '').trim();
+  const fonte = String(input.fonte || '').trim();
+  const attiva = input.attiva === false || input.attiva === 0 ? 0 : 1;
+  const existingId = input.id ? Number(input.id) : null;
+
+  if (existingId) {
+    db.prepare(`
+      UPDATE mepa_categorie_abilitate
+      SET nome = ?, descrizione = ?, fonte = ?, attiva = ?, aggiornato_il = datetime('now')
+      WHERE id = ?
+    `).run(nome, descrizione, fonte, attiva, existingId);
+    return db.prepare('SELECT * FROM mepa_categorie_abilitate WHERE id = ?').get(existingId);
+  }
+
+  db.prepare(`
+    INSERT INTO mepa_categorie_abilitate (nome, descrizione, fonte, attiva, aggiornato_il)
+    VALUES (?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(nome) DO UPDATE SET
+      descrizione = excluded.descrizione,
+      fonte = excluded.fonte,
+      attiva = excluded.attiva,
+      aggiornato_il = datetime('now')
+  `).run(nome, descrizione, fonte, attiva);
+
+  return db.prepare('SELECT * FROM mepa_categorie_abilitate WHERE nome = ?').get(nome);
+}
+
+function setEnabledCategoryState(id, attiva) {
+  const categoryId = Number(id);
+  if (!categoryId) throw new Error('Categoria non valida');
+  db.prepare(`
+    UPDATE mepa_categorie_abilitate
+    SET attiva = ?, aggiornato_il = datetime('now')
+    WHERE id = ?
+  `).run(attiva ? 1 : 0, categoryId);
+  return db.prepare('SELECT * FROM mepa_categorie_abilitate WHERE id = ?').get(categoryId);
+}
+
+function deleteEnabledCategory(id) {
+  const categoryId = Number(id);
+  if (!categoryId) throw new Error('Categoria non valida');
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM mepa_cpv_catalog WHERE categoria_id = ?').run(categoryId);
+    db.prepare('DELETE FROM mepa_categorie_abilitate WHERE id = ?').run(categoryId);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  return { ok: true, id: categoryId };
+}
+
+function parseImportedCpvLines(rawText = '') {
+  const text = String(rawText || '').replace(/\r/g, '\n');
+  const lines = text.split('\n').map(line => line.trim()).filter(Boolean);
+  const rows = [];
+  const seen = new Set();
+
+  for (const line of lines) {
+    const match = line.match(/(\d{8}\s*-\s*\d|\d{8})/);
+    if (!match) continue;
+    const codice = normalizeCpvCode(match[1], { keepCheckDigit: true });
+    if (codice.length < 6 || seen.has(codice)) continue;
+
+    let descrizione = line
+      .replace(/^.*?CPV\s*/i, '')
+      .replace(/^\d{8}-\d\s*[–-]?\s*/u, '')
+      .replace(/^\d{8}\s*[–-]?\s*/u, '')
+      .replace(/\s+\d+\s*$/u, '')
+      .replace(/^Prodotto:\s*/i, '')
+      .trim();
+
+    descrizione = descrizione.replace(/^\d{8}\s*-\s*\d\s*[-–]?\s*/u, '');
+    descrizione = descrizione.replace(/^\d{8}\s*[-–]?\s*/u, '').trim();
+
+    if (!descrizione) {
+      const fallback = CPV_HORYGON[codice];
+      descrizione = fallback?.desc || `CPV ${codice}`;
+    }
+
+    rows.push({ codice_cpv: codice, codice_cpv_display: formatCpvCode(codice), descrizione });
+    seen.add(codice);
+  }
+
+  return rows;
+}
+
+function previewCpvCatalogText(rawText = '', options = {}) {
+  const categoria = String(options.categoria || 'Da classificare').trim() || 'Da classificare';
+  const rows = parseImportedCpvLines(rawText).map(row => {
+    const existing = db.prepare(`
+      SELECT codice_cpv, descrizione, categoria, categoria_id, attivo
+      FROM mepa_cpv_catalog
+      WHERE codice_cpv = ?
+    `).get(row.codice_cpv);
+    return {
+      ...row,
+      categoria,
+      esistente: !!existing,
+      codice_cpv_display: formatCpvCode(row.codice_cpv),
+      categoria_esistente: existing?.categoria || '',
+      descrizione_esistente: existing?.descrizione || '',
+      attivo_esistente: existing?.attivo ?? null,
+    };
+  });
+
+  return {
+    categoria,
+    totaleLetti: rows.length,
+    nuovi: rows.filter(row => !row.esistente).length,
+    esistenti: rows.filter(row => row.esistente).length,
+    rows,
+  };
+}
+
+function importCpvCatalogText(rawText = '', options = {}) {
+  const categoria = String(options.categoria || 'Da classificare').trim() || 'Da classificare';
+  const fonte = String(options.fonte || '').trim();
+  const priorita = String(options.priorita || 'media').trim() || 'media';
+  const attivo = options.attivo === false || options.attivo === 0 ? 0 : 1;
+  const categoriaRow = saveEnabledCategory({
+    id: options.categoria_id,
+    nome: categoria,
+    descrizione: options.descrizione_categoria || '',
+    fonte,
+    attiva: 1,
+  });
+
+  const rows = parseImportedCpvLines(rawText);
+  if (!rows.length) throw new Error('Nessun codice CPV valido trovato nel file');
+
+  let inseriti = 0;
+  let aggiornati = 0;
+  const codici = [];
+
+  for (const row of rows) {
+    const existing = db.prepare('SELECT codice_cpv FROM mepa_cpv_catalog WHERE codice_cpv = ?').get(row.codice_cpv);
+    db.prepare(`
+      INSERT INTO mepa_cpv_catalog (codice_cpv, descrizione, categoria, categoria_id, priorita, attivo, note, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(codice_cpv) DO UPDATE SET
+        descrizione = excluded.descrizione,
+        categoria = excluded.categoria,
+        categoria_id = excluded.categoria_id,
+        priorita = excluded.priorita,
+        attivo = excluded.attivo,
+        note = CASE
+          WHEN mepa_cpv_catalog.note IS NULL OR mepa_cpv_catalog.note = '' THEN excluded.note
+          ELSE mepa_cpv_catalog.note
+        END,
+        updated_at = datetime('now')
+    `).run(
+      row.codice_cpv,
+      row.descrizione,
+      categoria,
+      categoriaRow.id,
+      priorita,
+      attivo,
+      fonte ? `Fonte: ${fonte}` : ''
+    );
+    if (existing) aggiornati += 1;
+    else inseriti += 1;
+    codici.push(row.codice_cpv);
+  }
+
+  inactiveOppCache = null;
+  return {
+    categoria: categoriaRow,
+    totaleLetti: rows.length,
+    inseriti,
+    aggiornati,
+    codici,
+  };
+}
+
 let inactiveOppCache = null;
 
 function parseMepaRows(csvData) {
@@ -271,11 +498,49 @@ function parseMepaRows(csvData) {
   });
 }
 
+function computeContentHash(content) {
+  return crypto.createHash('sha256').update(Buffer.isBuffer(content) ? content : Buffer.from(String(content), 'latin1')).digest('hex');
+}
+
+function getImportedHashRow(contentHash) {
+  if (!contentHash) return null;
+  try {
+    return db.prepare('SELECT * FROM mepa_import_log WHERE content_hash = ? LIMIT 1').get(contentHash);
+  } catch {
+    return null;
+  }
+}
+
+function listUniqueMepaFiles() {
+  const dataDir = path.join(process.cwd(), 'data', 'mepa');
+  if (!fs.existsSync(dataDir)) return [];
+  const unique = [];
+  const seenHashes = new Set();
+  for (const name of fs.readdirSync(dataDir).filter(file => file.endsWith('.csv'))) {
+    const fullPath = path.join(dataDir, name);
+    const content = fs.readFileSync(fullPath);
+    const contentHash = computeContentHash(content);
+    const duplicateOf = getImportedHashRow(contentHash);
+    const duplicateInFolder = seenHashes.has(contentHash);
+    unique.push({
+      name,
+      fullPath,
+      content,
+      contentHash,
+      duplicateInFolder,
+      alreadyImported: !!duplicateOf,
+      importedAs: duplicateOf?.file_nome || null,
+    });
+    if (!duplicateInFolder) seenHashes.add(contentHash);
+  }
+  return unique;
+}
+
 function getInactiveOpportunityCacheKey(files) {
   return files
     .map(file => {
       const stat = fs.statSync(file.fullPath);
-      return `${file.name}:${stat.size}:${stat.mtimeMs}`;
+      return `${file.name}:${file.contentHash || ''}:${stat.size}:${stat.mtimeMs}`;
     })
     .join('|');
 }
@@ -283,10 +548,9 @@ function getInactiveOpportunityCacheKey(files) {
 function getMepaInactiveOpportunities(limit = 50) {
   const dataDir = path.join(process.cwd(), 'data', 'mepa');
   if (!fs.existsSync(dataDir)) return { anni: [], items: [], summary: { totalItems: 0, totalValue: 0 } };
+  if (!hasActiveGovernance()) return { anni: [], items: [], summary: { totalItems: 0, totalValue: 0 }, scannedRows: 0, duplicateFiles: 0 };
 
-  const files = fs.readdirSync(dataDir)
-    .filter(name => name.endsWith('.csv'))
-    .map(name => ({ name, fullPath: path.join(dataDir, name) }));
+  const files = listUniqueMepaFiles().filter(file => !file.duplicateInFolder);
 
   const cacheKey = getInactiveOpportunityCacheKey(files);
   if (inactiveOppCache && inactiveOppCache.key === cacheKey) {
@@ -299,16 +563,17 @@ function getMepaInactiveOpportunities(limit = 50) {
   const byCpv = new Map();
   const years = new Set();
   let scannedRows = 0;
+  let duplicateFiles = 0;
   const activePrefixes = getActiveCpvPrefixes();
 
   for (const file of files) {
-    const content = fs.readFileSync(file.fullPath, 'latin1');
-    const records = parseMepaRows(content);
+    if (file.alreadyImported && file.importedAs && file.importedAs !== file.name) duplicateFiles += 1;
+    const records = parseMepaRows(file.content.toString('latin1'));
 
     for (const r of records) {
       scannedRows++;
       const anno = parseInt(r['Anno_Riferimento'] || r['anno_riferimento'] || '0', 10);
-      const cpv = (r['codice_CPV'] || r['codice_cpv'] || '').replace(/[^0-9]/g, '').substring(0, 8);
+      const cpv = normalizeCpvCode(r['codice_CPV'] || r['codice_cpv'] || '', { keepCheckDigit: true });
       if (!anno || !cpv || cpv.length < 6) continue;
 
       const alreadyActive = activePrefixes.some(prefix => cpv.startsWith(prefix));
@@ -373,6 +638,7 @@ function getMepaInactiveOpportunities(limit = 50) {
   const data = {
     anni: sortedYears,
     scannedRows,
+    duplicateFiles,
     items,
     summary: {
       totalItems: items.length,
@@ -417,7 +683,18 @@ db.exec(`
     righe_totali INTEGER,
     righe_horygon INTEGER,
     valore_horygon REAL,
+    content_hash TEXT,
     data_import TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS mepa_categorie_abilitate (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nome TEXT NOT NULL UNIQUE,
+    descrizione TEXT,
+    fonte TEXT,
+    attiva INTEGER DEFAULT 1,
+    creato_il TEXT DEFAULT (datetime('now')),
+    aggiornato_il TEXT DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS mepa_cpv_catalog (
@@ -436,19 +713,27 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_mepa_regione ON mepa_ordini(regione_pa);
 `);
 
-const seedCpvCatalog = db.prepare(`
-  INSERT OR IGNORE INTO mepa_cpv_catalog (codice_cpv, descrizione, categoria, priorita, attivo)
-  VALUES (?, ?, ?, ?, 1)
-`);
+try { db.exec(`ALTER TABLE mepa_import_log ADD COLUMN content_hash TEXT`); } catch {}
+try { db.exec(`ALTER TABLE mepa_cpv_catalog ADD COLUMN categoria_id INTEGER`); } catch {}
 
-for (const [codice, meta] of Object.entries(CPV_HORYGON)) {
-  seedCpvCatalog.run(codice, meta.desc, meta.categoria, meta.priorita);
-}
 
 // ═══════════════════════════════════════════════
 // PARSER CSV MEPA
 // ═══════════════════════════════════════════════
-function parseMepaCSV(csvData, nomeFile) {
+function parseMepaCSV(csvData, nomeFile, options = {}) {
+  const { force = false } = options;
+  const contentHash = computeContentHash(csvData);
+  const existingHash = getImportedHashRow(contentHash);
+  if (existingHash && !force) {
+    return {
+      totale: existingHash.righe_totali || 0,
+      horygon: existingHash.righe_horygon || 0,
+      valoreHorygon: existingHash.valore_horygon || 0,
+      skipped: true,
+      duplicateOf: existingHash.file_nome || null,
+      contentHash
+    };
+  }
   let records;
   try {
     records = parseMepaRows(csvData);
@@ -482,7 +767,7 @@ function parseMepaCSV(csvData, nomeFile) {
     for (const r of records) {
       totale++;
       const anno = parseInt(r['Anno_Riferimento'] || r['anno_riferimento'] || '0');
-      const cpv = (r['codice_CPV'] || r['codice_cpv'] || '').replace(/[^0-9]/g, '').substring(0, 8);
+      const cpv = normalizeCpvCode(r['codice_CPV'] || r['codice_cpv'] || '', { keepCheckDigit: true });
       const descCpv = (r['descrizione_CPV'] || r['descrizione_cpv'] || '').toUpperCase().trim();
       const tipPa = (r['Tipologia_Amministrazione'] || '').trim();
       const regPa = (r['Regione_PA'] || '').trim();
@@ -506,15 +791,15 @@ function parseMepaCSV(csvData, nomeFile) {
       upsert.run(anno, tipPa, regPa, provPa, regFor, bando, cat, cpv, descCpv, nOrd, valore, nPa, nFor, nomeFile);
     }
 
-    db.prepare(`INSERT OR REPLACE INTO mepa_import_log (file_nome,anno,righe_totali,righe_horygon,valore_horygon)
-      VALUES (?,?,?,?,?)`).run(nomeFile, records[0]?.Anno_Riferimento || 0, totale, horygon, valoreHorygon);
+    db.prepare(`INSERT OR REPLACE INTO mepa_import_log (file_nome,anno,righe_totali,righe_horygon,valore_horygon,content_hash)
+      VALUES (?,?,?,?,?,?)`).run(nomeFile, records[0]?.Anno_Riferimento || 0, totale, horygon, valoreHorygon, contentHash);
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
     throw e;
   }
 
-  return { totale, horygon, valoreHorygon };
+  return { totale, horygon, valoreHorygon, contentHash };
 }
 
 // ═══════════════════════════════════════════════
@@ -548,8 +833,24 @@ function scanAndImportAll() {
 // ═══════════════════════════════════════════════
 // ANALYTICS MEPA
 // ═══════════════════════════════════════════════
-function getMepaAnalytics() {
-  const activeFilter = getActiveCpvFilter();
+function getMepaAnalytics(categoryId = null) {
+  if (!hasActiveGovernance(categoryId)) {
+    return {
+      anni: [],
+      kpiAnni: [],
+      topCpv: [],
+      topRegioni: [],
+      topTipologie: [],
+      topCategorie: [],
+      serieAnni: [],
+      opportunita: [],
+      declino: [],
+      regioniTarget: [],
+      predizioni: [],
+      cpvHorygon: {},
+    };
+  }
+  const activeFilter = getActiveCpvFilter('', categoryId);
   // Anni disponibili
   const anni = db.prepare(`SELECT DISTINCT anno FROM mepa_ordini WHERE ${activeFilter.where} ORDER BY anno ASC`).all(...activeFilter.params).map(r => r.anno);
 
@@ -662,13 +963,72 @@ function getMepaAnalytics() {
   };
 }
 
+function scanAndImportAll() {
+  const dataDir = path.join(process.cwd(), 'data', 'mepa');
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+    return [];
+  }
+
+  const files = listUniqueMepaFiles();
+  const results = [];
+
+  for (const file of files) {
+    if (file.duplicateInFolder) {
+      results.push({ file: file.name, status: 'duplicato cartella', duplicateOf: file.importedAs || 'contenuto gia visto' });
+      continue;
+    }
+    if (file.alreadyImported) {
+      results.push({ file: file.name, status: 'gia importato', duplicateOf: file.importedAs || file.name });
+      continue;
+    }
+
+    try {
+      const result = parseMepaCSV(file.content.toString('latin1'), file.name);
+      results.push({ file: file.name, status: result.skipped ? 'duplicato import' : 'importato', ...result });
+    } catch (e) {
+      results.push({ file: file.name, status: 'errore', errore: e.message });
+    }
+  }
+
+  inactiveOppCache = null;
+  return results;
+}
+
+function rebuildMepaFromFiles() {
+  db.exec('BEGIN');
+  try {
+    db.exec('DELETE FROM mepa_ordini');
+    db.exec('DELETE FROM mepa_import_log');
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+
+  inactiveOppCache = null;
+  return scanAndImportAll();
+}
+
 module.exports = {
   parseMepaCSV,
   scanAndImportAll,
+  rebuildMepaFromFiles,
   getMepaAnalytics,
   getMepaInactiveOpportunities,
   getCpvCatalogEntries,
   getActiveCpvPrefixes,
+  getActiveCpvFilter,
+  hasActiveGovernance,
   saveCpvCatalogEntry,
+  listEnabledCategories,
+  saveEnabledCategory,
+  setEnabledCategoryState,
+  deleteEnabledCategory,
+  previewCpvCatalogText,
+  importCpvCatalogText,
+  listUniqueMepaFiles,
+  normalizeCpvCode,
+  formatCpvCode,
   CPV_HORYGON,
 };

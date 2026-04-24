@@ -75,6 +75,7 @@
       <a class="nav-item" data-section="cig"><span class="nav-icon">📉</span> Stagionalità CIG</a>
 
       <a class="nav-item" data-section="mepa"><span class="nav-icon">📊</span> Analisi MEPA</a>
+      <a class="nav-item" data-section="rdo"><span class="nav-icon">📝</span> RdO</a>
       <a class="nav-item" data-section="analytics"><span class="nav-icon">🔬</span> Analisi Incrociata</a>
       <a class="nav-item" data-section="documenti"><span class="nav-icon">📁</span> Documenti</a>
       <a class="nav-item" data-section="statistics"><span class="nav-icon">📈</span> Statistics</a>
@@ -300,16 +301,10 @@
           <div class="kpi-card"><div class="kpi-val" id="mk-anni">—</div><div class="kpi-label">Anni analizzati</div></div>
         </div>
 
-        <!-- Trend anni + Categorie -->
-        <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-bottom:16px">
-          <div class="dash-card">
-            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">📈 Valore mercato per anno</h3>
-            <canvas id="chart-serie" height="160"></canvas>
-          </div>
-          <div class="dash-card">
-            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">🗂️ Categorie MEPA</h3>
-            <canvas id="chart-categorie" height="200"></canvas>
-          </div>
+        <!-- Trend anni -->
+        <div class="dash-card" style="margin-bottom:16px">
+          <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">📈 Valore mercato per anno</h3>
+          <canvas id="chart-serie" height="160"></canvas>
         </div>
 
         <!-- CPV trend 3 anni -->
@@ -378,6 +373,34 @@
         <button class="btn btn-accent" onclick="openAttivitaModal()">+ Nuova Attività</button>
       </div>
       <div id="attivita-list"></div>
+    </section>
+
+    <section id="section-rdo" class="section">
+      <div class="page-header">
+        <h1>RdO da file XLS</h1>
+        <div class="header-actions">
+          <input id="rdo-upload-input" type="file" accept=".xls,.xlsx" style="display:none" onchange="uploadRdoFile(this.files)">
+          <select id="rdo-import-select" onchange="loadRdoPage()"></select>
+          <input type="text" id="rdo-search" placeholder="Cerca ente, gara, categoria, CPV..." oninput="loadRdoPage()">
+          <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted)">
+            <input type="checkbox" id="rdo-only-matched" checked onchange="loadRdoPage()"> Solo match trovati
+          </label>
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('rdo-upload-input').click()">Upload XLS</button>
+          <button class="btn btn-accent btn-sm" onclick="loadRdoPage()">Aggiorna</button>
+        </div>
+      </div>
+      <div class="kpi-grid" style="margin-bottom:16px">
+        <div class="kpi-card"><div class="kpi-val" id="rdo-total">—</div><div class="kpi-label">Righe importate</div></div>
+        <div class="kpi-card"><div class="kpi-val" id="rdo-matched">—</div><div class="kpi-label">Con match CPV</div></div>
+        <div class="kpi-card"><div class="kpi-val" id="rdo-unmatched">—</div><div class="kpi-label">Senza match</div></div>
+        <div class="kpi-card"><div class="kpi-val" id="rdo-visible">—</div><div class="kpi-label">Righe visibili</div></div>
+      </div>
+      <div class="dash-card">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">
+          Carica un file XLS/XLSX con la tabella RdO. Il sistema legge il primo foglio, salva le righe e confronta il testo di ogni riga con le descrizioni dei CPV governati.
+        </div>
+        <div id="rdo-table-wrap"></div>
+      </div>
     </section>
      <section id="section-cig" class="section">
       <div class="page-header">

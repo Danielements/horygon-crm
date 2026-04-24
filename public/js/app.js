@@ -98,6 +98,7 @@ const NAV_PERMISSION_MAP = {
   fatture: 'fatture',
   cig: 'cig',
   mepa: 'mepa',
+  rdo: 'mepa',
   analytics: 'analytics',
   attivita: 'attivita',
   documenti: 'documenti',
@@ -255,7 +256,7 @@ function navigateTo(section) {
     container: loadContainer, fatture: loadFatture,
     attivita: loadAttivita, documenti: loadDocumenti,
     statistics: loadStatistics, settings: loadSettingsPage,
-    mappa: loadMappa, utenti: loadUtenti, mepa: loadMepa, 'opportunita-cpv': loadOpportunityCpv, cig: loadCIG, analytics: loadAnalytics,
+    mappa: loadMappa, utenti: loadUtenti, mepa: loadMepa, rdo: loadRdoPage, 'opportunita-cpv': loadOpportunityCpv, cig: loadCIG, analytics: loadAnalytics,
   };
   if (map[section]) map[section]();
 }
@@ -1389,6 +1390,141 @@ async function loadMepaMailList() {
       </td>
     </tr>`).join('')}</tbody></table>`
     : '<p style="color:var(--text-muted)">Nessuna comunicazione MEPA acquisita.</p>';
+}
+
+async function loadRdoPage() {
+  const wrap = document.getElementById('rdo-table-wrap');
+  if (!wrap) return;
+  const importSelect = document.getElementById('rdo-import-select');
+  const q = document.getElementById('rdo-search')?.value?.trim() || '';
+  const soloMatch = document.getElementById('rdo-only-matched')?.checked ? '1' : '0';
+  const importId = importSelect?.value ? `&import_id=${encodeURIComponent(importSelect.value)}` : '';
+  wrap.innerHTML = '<p style="color:var(--text-muted)">Analisi RdO in corso...</p>';
+  try {
+    const data = await api('GET', `/rdo/matches?q=${encodeURIComponent(q)}&solo_match=${soloMatch}${importId}`);
+    const set = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+    set('rdo-total', (data?.total || 0).toLocaleString('it'));
+    set('rdo-matched', (data?.matched || 0).toLocaleString('it'));
+    set('rdo-unmatched', (data?.unmatched || 0).toLocaleString('it'));
+    set('rdo-visible', ((data?.results || []).length).toLocaleString('it'));
+
+    if (importSelect) {
+      const imports = data?.imports || [];
+      importSelect.innerHTML = imports.length
+        ? imports.map(item => {
+            const selected = Number(item.id) === Number(data?.selectedImportId) ? 'selected' : '';
+            const label = `${item.file_name} · ${item.sheet_name || 'Foglio'} · ${item.row_count || 0} righe`;
+            return `<option value="${item.id}" ${selected}>${escapeHtml(label)}</option>`;
+          }).join('')
+        : '<option value="">Nessun file</option>';
+    }
+
+    const rows = data?.results || [];
+    if (!data?.selectedImportId) {
+      wrap.innerHTML = '<p style="color:var(--text-muted)">Carica prima un file XLS/XLSX con la tabella RdO.</p>';
+      return;
+    }
+
+    if (!rows.length) {
+      wrap.innerHTML = '<p style="color:var(--text-muted)">Nessuna riga compatibile con i filtri attuali.</p>';
+      return;
+    }
+
+    const categoriaMap = new Map();
+    rows.forEach(r => {
+      const key = String(r.categoria || 'Senza categoria').trim() || 'Senza categoria';
+      if (!categoriaMap.has(key)) categoriaMap.set(key, { count: 0, matched: 0 });
+      const item = categoriaMap.get(key);
+      item.count += 1;
+      if (r.match_count) item.matched += 1;
+    });
+    const categorie = [...categoriaMap.entries()]
+      .map(([categoria, stats]) => ({ categoria, ...stats }))
+      .sort((a, b) => b.count - a.count);
+
+    wrap.innerHTML = `
+      <div style="display:grid;grid-template-columns:minmax(260px, 360px) 1fr;gap:16px;align-items:start">
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Categoria RdO</th>
+                <th>Righe</th>
+                <th>Con match</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${categorie.map(item => `
+                <tr>
+                  <td>${escapeHtml(item.categoria)}</td>
+                  <td>${item.count}</td>
+                  <td>${item.matched}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Riga</th>
+                <th>Ente</th>
+                <th>Gara / Oggetto</th>
+                <th>Categoria RdO</th>
+                <th>Categorie trovate</th>
+                <th>CPV trovati</th>
+                <th>Scadenza</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map(r => {
+                const categorieTrovate = [...new Set((r.cpv_matches || []).map(m => m.categoria_catalogo).filter(Boolean))];
+                const cpvTrovati = (r.cpv_matches || []).map(m => `${m.codice_cpv_display || m.codice_cpv} (${m.score})`);
+                return `
+                  <tr>
+                    <td><strong>${escapeHtml(r.row_index || '-')}</strong></td>
+                    <td style="min-width:180px">${escapeHtml(r.ente || '-')}</td>
+                    <td style="min-width:280px">${escapeHtml(r.gara || '-')}</td>
+                    <td style="min-width:220px">${escapeHtml((r.categoria || '-').substring(0, 180))}</td>
+                    <td style="min-width:220px;font-size:12px">
+                      ${categorieTrovate.length ? categorieTrovate.map(item => `<div>${escapeHtml(item)}</div>`).join('') : '<span style="color:var(--text-muted)">Nessuna</span>'}
+                    </td>
+                    <td style="min-width:220px;font-size:12px">
+                      ${cpvTrovati.length ? cpvTrovati.map(item => `<div><code>${escapeHtml(item)}</code></div>`).join('') : '<span style="color:var(--text-muted)">Nessuno</span>'}
+                    </td>
+                    <td style="color:${getDeadlineColor(r.scadenza)}">${escapeHtml(r.scadenza || '-')}</td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+  } catch (e) {
+    wrap.innerHTML = `<p style="color:var(--danger)">${escapeHtml(e.message || 'Errore RdO')}</p>`;
+  }
+}
+
+async function uploadRdoFile(files) {
+  const file = files?.[0];
+  if (!file) return;
+  const input = document.getElementById('rdo-upload-input');
+  const wrap = document.getElementById('rdo-table-wrap');
+  if (wrap) wrap.innerHTML = '<p style="color:var(--text-muted)">Upload file RdO in corso...</p>';
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    const data = await apiForm('POST', '/rdo/upload', form);
+    if (!data?.ok) throw new Error(data?.error || 'Upload non riuscito');
+    toast(`File importato: ${file.name}`, 'success');
+    await loadRdoPage();
+  } catch (e) {
+    toast(e.message || 'Errore upload file RdO', 'error');
+    if (wrap) wrap.innerHTML = `<p style="color:var(--danger)">${escapeHtml(e.message || 'Errore upload file RdO')}</p>`;
+  } finally {
+    if (input) input.value = '';
+  }
 }
 
 function getDeadlineColor(value) {
