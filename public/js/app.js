@@ -249,7 +249,33 @@ function navigateTo(section) {
     section = 'dashboard';
   }
   document.querySelectorAll('.nav-item').forEach(a => a.classList.toggle('active', a.dataset.section === section));
+  document.querySelectorAll('.mobile-tab').forEach(a => a.classList.toggle('active', a.dataset.section === section));
   document.querySelectorAll('.section').forEach(s => s.classList.toggle('active', s.id === `section-${section}`));
+  const mobileTitle = document.getElementById('mobile-topbar-title');
+  if (mobileTitle) {
+    const titleMap = {
+      dashboard: 'Home',
+      attivita: 'Attivita',
+      clienti: 'Clienti',
+      fornitori: 'Fornitori',
+      contatti: 'Contatti',
+      prodotti: 'Prodotti',
+      magazzino: 'Magazzino',
+      ordini: 'Ordini',
+      ddt: 'DDT',
+      container: 'Container',
+      fatture: 'Fatture',
+      mepa: 'MEPA',
+      analytics: 'Analisi',
+      cig: 'Stagionalita CIG',
+      documenti: 'Documenti',
+      settings: 'Impostazioni',
+      statistics: 'Statistiche',
+      mappa: 'Mappa PA',
+      utenti: 'Utenti'
+    };
+    mobileTitle.textContent = titleMap[section] || 'Horygon CRM';
+  }
   document.getElementById('main-content').scrollTop = 0;
   closeMobileSidebar();
   const map = {
@@ -262,6 +288,7 @@ function navigateTo(section) {
     mappa: loadMappa, utenti: loadUtenti, mepa: loadMepa, rdo: loadRdoPage, 'opportunita-cpv': loadOpportunityCpv, cig: loadCIG, analytics: loadAnalytics,
   };
   if (map[section]) map[section]();
+  scheduleResponsiveEnhancement();
 }
 
 function isMobileViewport() {
@@ -328,7 +355,8 @@ async function loadCalendar() {
 
 function renderCalendar() {
   updateCalTitle();
-  if (calView === 'month') renderMonthView();
+  if (isMobileViewport()) renderMobileAgendaView();
+  else if (calView === 'month') renderMonthView();
   else renderWeekView();
 }
 
@@ -461,6 +489,51 @@ function renderWeekView() {
   }
   html += '</div>';
   document.getElementById('cal-body').innerHTML = html;
+}
+
+function renderMobileAgendaView() {
+  const body = document.getElementById('cal-body');
+  if (!body) return;
+  const today = new Date();
+  const upcoming = (calEvents || [])
+    .map(evento => ({
+      ...evento,
+      startDate: getCalendarEventStart(evento),
+      allDay: !!evento?.start?.date
+    }))
+    .filter(evento => evento.startDate)
+    .filter(evento => {
+      const diff = evento.startDate.getTime() - today.getTime();
+      return diff >= -86400000 * 2 && diff <= 86400000 * 21;
+    })
+    .sort((a, b) => a.startDate - b.startDate);
+
+  if (!upcoming.length) {
+    body.innerHTML = `
+      <div class="cal-agenda-empty">
+        <div style="font-size:28px">📭</div>
+        <div>Nessun evento nelle prossime settimane</div>
+        <button class="btn btn-accent btn-sm" onclick="openModal('modal-evento')">Nuovo evento</button>
+      </div>`;
+    return;
+  }
+
+  body.innerHTML = `<div class="cal-agenda-list">
+    ${upcoming.map(evento => {
+      const start = evento.startDate;
+      const dayLabel = start.toLocaleDateString('it-IT', { weekday: 'short', day: '2-digit', month: 'short' });
+      const timeLabel = evento.allDay ? 'Tutto il giorno' : start.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+      return `
+        <button class="cal-agenda-item" onclick="editEvento(event,'${evento.id}')">
+          <div class="cal-agenda-day">${escapeHtml(dayLabel)}</div>
+          <div class="cal-agenda-content">
+            <strong>${escapeHtml(evento.summary || '(senza titolo)')}</strong>
+            <div class="cal-agenda-meta">${escapeHtml(timeLabel)}</div>
+            ${evento.description ? `<div class="cal-agenda-desc">${escapeHtml(String(evento.description).slice(0, 140))}</div>` : ''}
+          </div>
+        </button>`;
+    }).join('')}
+  </div>`;
 }
 function calPrev() { if (calView==='month') calDate.setMonth(calDate.getMonth()-1); else calDate.setDate(calDate.getDate()-7); loadCalendar(); }
 function calNext() { if (calView==='month') calDate.setMonth(calDate.getMonth()+1); else calDate.setDate(calDate.getDate()+7); loadCalendar(); }
@@ -1881,6 +1954,21 @@ function closeAllModals() {
   document.querySelectorAll('.modal').forEach(m => { m.style.display = 'none'; });
 }
 
+function enhanceResponsiveTables() {
+  document.querySelectorAll('.data-table').forEach(table => {
+    const headers = [...table.querySelectorAll('thead th')].map(th => th.textContent.trim());
+    table.querySelectorAll('tbody tr').forEach(row => {
+      [...row.children].forEach((cell, index) => {
+        if (cell.tagName === 'TD') cell.setAttribute('data-label', headers[index] || '');
+      });
+    });
+  });
+}
+
+function scheduleResponsiveEnhancement() {
+  requestAnimationFrame(() => requestAnimationFrame(enhanceResponsiveTables));
+}
+
 window.addEventListener('resize', syncMobileLayoutState);
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
@@ -2036,3 +2124,4 @@ async function deleteAttivita(id = null) {
 
 init();
 syncMobileLayoutState();
+scheduleResponsiveEnhancement();

@@ -148,7 +148,8 @@ body {
 #app { display: flex; height: 100vh; }
 
 #mobile-sidebar-backdrop,
-#mobile-topbar { display: none; }
+#mobile-topbar,
+#mobile-bottom-nav { display: none; }
 
 /* ═══════════════════════════════════════
    SIDEBAR
@@ -282,6 +283,32 @@ nav { flex: 1; padding: 10px 8px; overflow-y: auto; }
 .dash-grid { display: grid; grid-template-columns: 3fr 2fr; gap: 16px; }
 .dash-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); }
 .dash-card h3 { font-size: 14px; font-weight: 600; color: var(--text-muted); margin-bottom: 16px; }
+
+.quick-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.quick-action-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 8px;
+  min-height: 92px;
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-input) 100%);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  box-shadow: var(--shadow);
+}
+
+.quick-action-btn span { font-size: 20px; }
+.quick-action-btn strong { font-size: 13px; line-height: 1.2; }
 
 /* ═══════════════════════════════════════
    CALENDARIO
@@ -519,6 +546,92 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
   background: linear-gradient(180deg, var(--bg) 0%, var(--bg) 82%, transparent 100%);
 }
 
+#mobile-bottom-nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 70;
+  gap: 8px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  background: rgba(13, 17, 23, 0.94);
+  border-top: 1px solid var(--border);
+  backdrop-filter: blur(16px);
+}
+
+.mobile-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 8px 4px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.mobile-tab span { font-size: 18px; }
+.mobile-tab small { font-size: 11px; }
+.mobile-tab.active {
+  color: #fff;
+  background: rgba(0, 87, 255, 0.22);
+}
+
+.cal-agenda-list {
+  display: grid;
+  gap: 12px;
+}
+
+.cal-agenda-item {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  gap: 12px;
+  width: 100%;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-input) 100%);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+
+.cal-agenda-day {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+
+.cal-agenda-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cal-agenda-meta,
+.cal-agenda-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.cal-agenda-empty {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 32px 20px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
 .mobile-topbar-title {
   font-size: 15px;
   font-weight: 700;
@@ -549,6 +662,7 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
   body { overflow: auto; }
   #app { display: block; height: auto; min-height: 100vh; }
   #mobile-topbar { display: flex; }
+  #mobile-bottom-nav { display: flex; }
   #mobile-sidebar-backdrop {
     position: fixed;
     inset: 0;
@@ -571,12 +685,13 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
   #app.sidebar-open #mobile-sidebar-backdrop { display: block; }
   #main-content {
     min-height: 100vh;
-    padding: 16px;
+    padding: 16px 16px 96px;
     overflow: visible;
   }
   .kpi-grid { grid-template-columns: 1fr 1fr; gap: 12px; }
   .kpi-card { padding: 16px; }
   .kpi-val { font-size: 26px; }
+  .quick-actions-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .page-header h1 { font-size: 20px; }
   .header-actions input,
   .header-actions select,
@@ -628,6 +743,7 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
   #main-content { padding: 12px; }
   .kpi-grid { grid-template-columns: 1fr; }
   .dash-card { padding: 16px; }
+  .quick-actions-grid { grid-template-columns: 1fr 1fr; }
   .form-row { grid-template-columns: 1fr; }
   .drive-grid { grid-template-columns: 1fr; }
   #toast-container {
@@ -636,5 +752,50 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
     bottom: 12px;
   }
   .toast { max-width: none; }
-  .data-table { min-width: 640px; }
+  #main-content { padding: 12px 12px 92px; }
+  .table-wrapper {
+    border: none;
+    box-shadow: none;
+    background: transparent;
+    overflow: visible;
+  }
+  .data-table {
+    min-width: 0;
+    display: block;
+  }
+  .data-table thead {
+    display: none;
+  }
+  .data-table tbody {
+    display: grid;
+    gap: 12px;
+  }
+  .data-table tr {
+    display: block;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--bg-card);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .data-table td {
+    display: grid;
+    grid-template-columns: 108px 1fr;
+    gap: 10px;
+    align-items: start;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    background: transparent !important;
+    min-height: 44px;
+  }
+  .data-table td::before {
+    content: attr(data-label);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .data-table td:last-child { border-bottom: none; }
+  .data-table code { word-break: break-all; }
 }

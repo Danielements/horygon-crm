@@ -106,7 +106,7 @@
   <main id="main-content">
     <div id="mobile-topbar">
       <button class="mobile-menu-btn" onclick="toggleMobileSidebar()" aria-label="Apri menu">☰</button>
-      <div class="mobile-topbar-title">Horygon CRM</div>
+      <div class="mobile-topbar-title" id="mobile-topbar-title">Horygon CRM</div>
       <button class="mobile-menu-btn" onclick="navigateTo('dashboard')" aria-label="Vai alla dashboard">⌂</button>
     </div>
 
@@ -121,6 +121,20 @@
         <div class="kpi-card"><div class="kpi-val" id="kpi-prodotti">—</div><div class="kpi-label">Prodotti attivi</div></div>
         <div class="kpi-card"><div class="kpi-val" id="kpi-clienti">—</div><div class="kpi-label">Clienti PA</div></div>
         <div class="kpi-card"><div class="kpi-val" id="kpi-container">—</div><div class="kpi-label">Container in transito</div></div>
+      </div>
+      <div class="dash-card app-quick-actions" style="margin-bottom:18px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+          <h3 style="margin:0;font-size:16px">Azioni rapide</h3>
+          <span style="font-size:12px;color:var(--text-muted)">Pensate per uso rapido da telefono</span>
+        </div>
+        <div class="quick-actions-grid" style="margin-top:14px">
+          <button class="quick-action-btn" onclick="openAttivitaModal()"><span>📅</span><strong>Nuova attività</strong></button>
+          <button class="quick-action-btn" onclick="openModal('modal-evento')"><span>🗓️</span><strong>Evento</strong></button>
+          <button class="quick-action-btn" onclick="openModalAnagrafica('cliente')"><span>👥</span><strong>Nuovo cliente</strong></button>
+          <button class="quick-action-btn" onclick="navigateTo('ordini')"><span>📋</span><strong>Ordini</strong></button>
+          <button class="quick-action-btn" onclick="navigateTo('contatti')"><span>📇</span><strong>Contatti</strong></button>
+          <button class="quick-action-btn" onclick="navigateTo('analytics')"><span>🔬</span><strong>Analisi</strong></button>
+        </div>
       </div>
       <div class="dash-card" style="margin-bottom:18px">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
@@ -741,6 +755,14 @@
     </section>
 
   </main>
+
+  <div id="mobile-bottom-nav">
+    <button class="mobile-tab active" data-section="dashboard" onclick="navigateTo('dashboard')"><span>⌂</span><small>Home</small></button>
+    <button class="mobile-tab" data-section="attivita" onclick="navigateTo('attivita')"><span>📅</span><small>Attività</small></button>
+    <button class="mobile-tab" data-section="clienti" onclick="navigateTo('clienti')"><span>👥</span><small>Clienti</small></button>
+    <button class="mobile-tab" data-section="ordini" onclick="navigateTo('ordini')"><span>📋</span><small>Ordini</small></button>
+    <button class="mobile-tab" data-section="analytics" onclick="navigateTo('analytics')"><span>📈</span><small>Analisi</small></button>
+  </div>
 </div>
 
 <!-- TOAST -->
