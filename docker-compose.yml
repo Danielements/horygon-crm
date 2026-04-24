@@ -4,7 +4,7 @@ services:
     container_name: horygon-crm
     restart: unless-stopped
     ports:
-      - "3001:3001"
+      - "8443:3001"
     volumes:
       - ./uploads:/app/uploads
       - ./horygon.db:/app/horygon.db
@@ -16,5 +16,5 @@ services:
       - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
       - SESSION_SECRET=${SESSION_SECRET}
       - BASE_URL=${BASE_URL}
-      - NODE_ENV=production
+      - NODE_ENV=${NODE_ENV:-production}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
