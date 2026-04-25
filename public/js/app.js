@@ -10,6 +10,10 @@ let calEvents = [];
 let currentEventId = null;
 let isMobileSidebarOpen = false;
 let notificationsCache = [];
+let tableEnhancementScheduled = false;
+let googleMapsPromise = null;
+let crmMap = null;
+let crmMapMarkers = [];
 
 // Redirect da Google OAuth
 const urlToken = new URLSearchParams(window.location.search).get('token');
@@ -68,6 +72,10 @@ function toast(msg, type = 'info') {
 // AUTH
 // ═══════════════════════════════
 async function init() {
+  ensureAccountingSections();
+  organizeNavigationLayout();
+  configureMobileBottomNav();
+  organizeDashboardLayout();
   if (!TOKEN) { showScreen('login-screen'); document.getElementById('setup-link').style.display = 'block'; return; }
   try {
     const me = await api('GET', '/auth/me');
@@ -80,6 +88,8 @@ async function init() {
     document.getElementById('user-name').textContent = USER.nome;
     document.getElementById('user-role').textContent = ['','Read Only','Editor','Admin','SuperAdmin'][USER.ruolo_id] || '';
     document.getElementById('user-avatar').textContent = USER.nome[0].toUpperCase();
+    const automationNavIcon = document.querySelector('.nav-item[data-section="automazioni"] .nav-icon');
+    if (automationNavIcon) automationNavIcon.innerHTML = '&#9889;';
     // Google status
     document.getElementById('btn-google').textContent = USER.hasGoogle ? '✅' : '🔗';
     // Permessi
@@ -103,16 +113,21 @@ const NAV_PERMISSION_MAP = {
   contatti: 'contatti',
   prodotti: 'prodotti',
   magazzino: 'magazzino',
+  preventivi: 'ordini',
   ordini: 'ordini',
   ddt: 'ddt',
   container: 'container',
   fatture: 'fatture',
+  'fatture-attive': 'fatture',
+  'fatture-passive': 'fatture',
+  'fatture-fuori-campo': 'fatture',
   cig: 'cig',
   mepa: 'mepa',
   rdo: 'mepa',
   notifiche: 'attivita',
   analytics: 'analytics',
   attivita: 'attivita',
+  automazioni: 'settings',
   documenti: 'documenti',
   statistics: 'statistics',
   settings: 'settings',
@@ -218,6 +233,170 @@ function showScreen(id) {
   if (id !== 'app') closeMobileSidebar();
 }
 
+function bindNavItem(item) {
+  item.addEventListener('click', e => {
+    e.preventDefault();
+    const s = item.dataset.section;
+    if (s) navigateTo(s);
+  });
+  return item;
+}
+
+function createNavItem(section, label, icon, id = '') {
+  const a = document.createElement('a');
+  a.className = 'nav-item';
+  a.dataset.section = section;
+  if (id) a.id = id;
+  a.href = '#';
+  a.innerHTML = `<span class="nav-icon">${icon}</span> ${label}`;
+  return bindNavItem(a);
+}
+
+function ensureAccountingSections() {
+  const base = document.getElementById('section-fatture');
+  if (!base || base.dataset.accountingSplit === '1') return;
+  const main = document.querySelector('#main-content');
+  if (!main) return;
+  base.id = 'section-fatture-attive';
+  const title = base.querySelector('.page-header h1');
+  if (title) title.textContent = 'Fatture attive';
+  const headerActions = base.querySelector('.header-actions');
+  const filter = document.getElementById('filter-tipo-fattura');
+  if (filter) filter.remove();
+  const tbody = document.getElementById('fatture-body');
+  if (tbody) tbody.id = 'fatture-attive-body';
+  const theadRow = base.querySelector('thead tr');
+  if (theadRow && !theadRow.dataset.ivaAdded) {
+    const statoTh = theadRow.children[5];
+    const ivaTh = document.createElement('th');
+    ivaTh.textContent = 'IVA';
+    theadRow.insertBefore(ivaTh, statoTh);
+    theadRow.dataset.ivaAdded = '1';
+  }
+  base.dataset.accountingSplit = '1';
+
+  const passive = base.cloneNode(true);
+  passive.id = 'section-fatture-passive';
+  passive.classList.remove('active');
+  const passiveTitle = passive.querySelector('.page-header h1');
+  if (passiveTitle) passiveTitle.textContent = 'Fatture passive';
+  const passiveBody = passive.querySelector('#fatture-attive-body');
+  if (passiveBody) passiveBody.id = 'fatture-passive-body';
+  const passiveHeaderActions = passive.querySelector('.header-actions');
+  if (passiveHeaderActions) {
+    const createBtn = [...passiveHeaderActions.querySelectorAll('button')].find(btn => btn.textContent.includes('Nuova Fattura'));
+    if (createBtn) createBtn.remove();
+  }
+
+  const fuoriCampo = base.cloneNode(true);
+  fuoriCampo.id = 'section-fatture-fuori-campo';
+  fuoriCampo.classList.remove('active');
+  const fuoriTitle = fuoriCampo.querySelector('.page-header h1');
+  if (fuoriTitle) fuoriTitle.textContent = 'Fatture fuori campo IVA';
+  const fuoriBody = fuoriCampo.querySelector('#fatture-attive-body');
+  if (fuoriBody) fuoriBody.id = 'fatture-fuori-campo-body';
+  const fuoriActions = fuoriCampo.querySelector('.header-actions');
+  if (fuoriActions) {
+    [...fuoriActions.querySelectorAll('button')].forEach(btn => {
+      if (btn.textContent.includes('Nuova Fattura')) btn.remove();
+    });
+  }
+
+  main.insertBefore(passive, base.nextSibling);
+  main.insertBefore(fuoriCampo, passive.nextSibling);
+}
+
+function organizeNavigationLayout() {
+  const nav = document.querySelector('#sidebar nav');
+  if (!nav || nav.dataset.organized === '1') return;
+  const itemMap = Object.fromEntries([...nav.querySelectorAll('.nav-item[data-section]')].map(item => [item.dataset.section, item]));
+  const getItem = (section, label, icon, id = '') => itemMap[section] || createNavItem(section, label, icon, id);
+  const groups = [
+    { label: '', sections: ['dashboard'] },
+    { label: 'Operativo', sections: ['attivita', 'notifiche'] },
+    { label: 'Anagrafiche', sections: ['clienti', 'fornitori', 'contatti', 'mappa'] },
+    { label: 'Logistica', sections: ['prodotti', 'magazzino', 'preventivi', 'ordini', 'ddt', 'container', 'documenti'] },
+    { label: 'Contabilita', sections: ['fatture-attive', 'fatture-passive', 'fatture-fuori-campo'] },
+    { label: 'Statistica', sections: ['cig', 'mepa', 'rdo', 'analytics', 'statistics'] },
+    { label: 'Impostazioni', sections: ['utenti', 'automazioni', 'settings'] }
+  ];
+  nav.innerHTML = '';
+  groups.forEach(group => {
+    if (group.label) {
+      const label = document.createElement('div');
+      label.className = 'nav-group-label';
+      label.textContent = group.label;
+      nav.appendChild(label);
+    }
+    group.sections.forEach(section => {
+      const item = section === 'dashboard' ? getItem('dashboard', 'Dashboard', '◈')
+        : section === 'attivita' ? getItem('attivita', 'Attività CRM', '📅')
+        : section === 'notifiche' ? getItem('notifiche', 'Notifiche', '🔔')
+        : section === 'clienti' ? getItem('clienti', 'Clienti', '👥')
+        : section === 'fornitori' ? getItem('fornitori', 'Fornitori', '🏭')
+        : section === 'contatti' ? getItem('contatti', 'Contatti', '📇')
+        : section === 'mappa' ? getItem('mappa', 'Mappa CRM', '🗺️')
+        : section === 'prodotti' ? getItem('prodotti', 'Prodotti', '📦')
+        : section === 'magazzino' ? getItem('magazzino', 'Magazzino', '🏪')
+        : section === 'preventivi' ? getItem('preventivi', 'Preventivi', '🧮')
+        : section === 'ordini' ? getItem('ordini', 'Ordini', '📋')
+        : section === 'ddt' ? getItem('ddt', 'DDT', '🚚')
+        : section === 'container' ? getItem('container', 'Container CN', '🚢')
+        : section === 'documenti' ? getItem('documenti', 'Documenti', '📁')
+        : section === 'fatture-attive' ? getItem('fatture-attive', 'Fatture attive', '🧾')
+        : section === 'fatture-passive' ? getItem('fatture-passive', 'Fatture passive', '🧾')
+        : section === 'fatture-fuori-campo' ? getItem('fatture-fuori-campo', 'Fuori campo IVA', '🧾')
+        : section === 'cig' ? getItem('cig', 'Stagionalità CIG', '📉')
+        : section === 'mepa' ? getItem('mepa', 'Analisi MEPA', '📊')
+        : section === 'rdo' ? getItem('rdo', 'RdO', '📝')
+        : section === 'analytics' ? getItem('analytics', 'Analisi Incrociata', '🔬')
+        : section === 'statistics' ? getItem('statistics', 'Statistiche', '📈')
+        : section === 'utenti' ? getItem('utenti', 'Utenti', '⚙️', 'nav-utenti')
+        : section === 'automazioni' ? getItem('automazioni', 'Automazioni', '⚡')
+        : section === 'settings' ? getItem('settings', 'Impostazioni', '🛠️')
+        : null;
+      if (item) {
+        nav.appendChild(item);
+      }
+    });
+  });
+  nav.dataset.organized = '1';
+}
+
+function configureMobileBottomNav() {
+  const nav = document.getElementById('mobile-bottom-nav');
+  if (!nav) return;
+  nav.innerHTML = `
+    <button class="mobile-tab active" data-section="dashboard" onclick="navigateTo('dashboard')"><span>⌂</span><small>Home</small></button>
+    <button class="mobile-tab" data-section="clienti" onclick="navigateTo('clienti')"><span>👥</span><small>Anagr.</small></button>
+    <button class="mobile-tab" data-section="ordini" onclick="navigateTo('ordini')"><span>📋</span><small>Logistica</small></button>
+    <button class="mobile-tab" data-section="fatture-attive" onclick="navigateTo('fatture-attive')"><span>🧾</span><small>Contab.</small></button>
+    <button class="mobile-tab" data-section="settings" onclick="navigateTo('settings')"><span>⚙️</span><small>Impost.</small></button>
+  `;
+}
+
+function organizeDashboardLayout() {
+  const section = document.getElementById('section-dashboard');
+  if (!section || section.dataset.organized === '1') return;
+  const header = section.querySelector('.page-header');
+  const calendar = document.getElementById('calendar-container');
+  const notifCard = document.getElementById('dashboard-notifications')?.closest('.dash-card');
+  const kpis = section.querySelector('.kpi-grid');
+  const focus = document.getElementById('dashboard-focus-cards');
+  const quick = section.querySelector('.app-quick-actions');
+  if (!header || !calendar || !notifCard || !kpis || !focus || !quick) return;
+  const cockpit = document.createElement('div');
+  cockpit.className = 'dashboard-cockpit';
+  header.insertAdjacentElement('afterend', cockpit);
+  cockpit.appendChild(calendar);
+  cockpit.appendChild(notifCard);
+  section.appendChild(kpis);
+  section.appendChild(focus);
+  section.appendChild(quick);
+  if (notifCard.querySelector('h3')) notifCard.classList.add('dashboard-alerts');
+  section.dataset.organized = '1';
+}
+
 function ensureAnagraficaLogisticaFields() {
   if (document.getElementById('anag-tipologia-cliente')) return;
   const note = document.getElementById('anag-note');
@@ -272,18 +451,23 @@ function navigateTo(section) {
       contatti: 'Contatti',
       prodotti: 'Prodotti',
       magazzino: 'Magazzino',
+      preventivi: 'Preventivi',
       ordini: 'Ordini',
       ddt: 'DDT',
       container: 'Container',
-      fatture: 'Fatture',
+      fatture: 'Fatture attive',
+      'fatture-attive': 'Fatture attive',
+      'fatture-passive': 'Fatture passive',
+      'fatture-fuori-campo': 'Fuori campo IVA',
       mepa: 'MEPA',
       analytics: 'Analisi',
       notifiche: 'Notifiche',
+      automazioni: 'Automazioni',
       cig: 'Stagionalita CIG',
       documenti: 'Documenti',
       settings: 'Impostazioni',
       statistics: 'Statistiche',
-      mappa: 'Mappa PA',
+      mappa: 'Mappa CRM',
       utenti: 'Utenti'
     };
     mobileTitle.textContent = titleMap[section] || 'Horygon CRM';
@@ -293,10 +477,15 @@ function navigateTo(section) {
   const map = {
     dashboard: loadDashboard, clienti: () => loadAnagrafiche('cliente'),
     fornitori: () => loadAnagrafiche('fornitore'), contatti: loadContacts, prodotti: loadProdotti,
-    magazzino: loadMagazzino, ordini: loadOrdini, ddt: loadDdt,
-    container: loadContainer, fatture: loadFatture,
+    magazzino: loadMagazzino, preventivi: loadPreventivi, ordini: loadOrdini, ddt: loadDdt,
+    container: loadContainer,
+    fatture: () => loadFattureBySection('fatture-attive'),
+    'fatture-attive': () => loadFattureBySection('fatture-attive'),
+    'fatture-passive': () => loadFattureBySection('fatture-passive'),
+    'fatture-fuori-campo': () => loadFattureBySection('fatture-fuori-campo'),
     attivita: loadAttivita, documenti: loadDocumenti,
     statistics: loadStatistics, settings: loadSettingsPage,
+    automazioni: loadAutomationPage,
     mappa: loadMappa, utenti: loadUtenti, mepa: loadMepa, rdo: loadRdoPage, 'opportunita-cpv': loadOpportunityCpv, cig: loadCIG, analytics: loadAnalytics,
     notifiche: loadNotificationsPage,
   };
@@ -1065,6 +1254,84 @@ async function salvaMovimento() {
 // ═══════════════════════════════
 // ORDINI
 // ═══════════════════════════════
+async function loadPreventivi() {
+  const stato = document.getElementById('filter-stato-preventivo')?.value || '';
+  const rows = await api('GET', `/preventivi${stato ? `?stato=${encodeURIComponent(stato)}` : ''}`);
+  const body = document.getElementById('preventivi-body');
+  if (body) {
+    body.innerHTML = (rows || []).map(p => `
+      <tr><td><strong>${p.codice_preventivo}</strong></td>
+      <td>${p.ragione_sociale || '—'}</td><td>${p.data_preventivo || '—'}</td>
+      <td>${p.data_scadenza || '—'}</td>
+      <td>${p.totale ? 'EUR ' + Number(p.totale).toFixed(2) : '—'}</td>
+      <td><span class="badge badge-${p.stato}">${p.stato}</span></td>
+      <td><select class="btn btn-outline btn-sm" onchange="cambiaStatoPreventivo(${p.id},this.value)">
+        ${['bozza','inviato','accettato','rifiutato','scaduto'].map(s=>`<option value="${s}"${p.stato===s?' selected':''}>${s}</option>`).join('')}
+      </select></td></tr>`).join('');
+  }
+  renderSummaryCards('preventivi-summary', [
+    { icon: '🧮', label: 'Preventivi', value: rows?.length || 0, meta: stato ? `Filtro: ${stato}` : 'Tutti gli stati', tone: 'primary' },
+    { icon: '📤', label: 'Inviati', value: (rows || []).filter(p => p.stato === 'inviato').length, meta: 'In attesa di risposta', tone: 'cyan' },
+    { icon: '✅', label: 'Accettati', value: (rows || []).filter(p => p.stato === 'accettato').length, meta: 'Pronti per ordine', tone: 'success' },
+    { icon: '⏳', label: 'Bozze', value: (rows || []).filter(p => p.stato === 'bozza').length, meta: 'Da completare', tone: 'warning' }
+  ]);
+  renderPreventiviMobileCards(rows || []);
+  const anag = await api('GET', '/anagrafiche?tipo=cliente');
+  const sel = document.getElementById('prev-anagrafica');
+  if (sel) sel.innerHTML = '<option value="">Seleziona...</option>' + (anag || []).map(a => `<option value="${a.id}">${a.ragione_sociale}</option>`).join('');
+}
+
+function renderPreventiviMobileCards(rows) {
+  const wrap = document.getElementById('preventivi-mobile-list');
+  if (!wrap) return;
+  wrap.innerHTML = (rows || []).map(p => `
+    <article class="mobile-record-card">
+      <div class="mobile-record-header">
+        <div>
+          <strong>${p.codice_preventivo}</strong>
+          <div class="mobile-record-subtitle">${p.ragione_sociale || 'Cliente non associato'}</div>
+        </div>
+        <span class="badge badge-${p.stato}">${p.stato}</span>
+      </div>
+      <div class="mobile-record-grid">
+        <div><span>Data</span><strong>${p.data_preventivo || '—'}</strong></div>
+        <div><span>Scadenza</span><strong>${p.data_scadenza || '—'}</strong></div>
+        <div><span>Totale</span><strong>${p.totale ? 'EUR ' + Number(p.totale).toFixed(2) : '—'}</strong></div>
+      </div>
+      <div class="mobile-record-actions">
+        <select class="order-state-select" onchange="cambiaStatoPreventivo(${p.id},this.value)">
+          ${['bozza','inviato','accettato','rifiutato','scaduto'].map(s=>`<option value="${s}"${p.stato===s?' selected':''}>${s}</option>`).join('')}
+        </select>
+      </div>
+    </article>
+  `).join('');
+}
+
+async function salvaPreventivo() {
+  const id = document.getElementById('prev-id')?.value;
+  const body = {
+    codice_preventivo: document.getElementById('prev-codice').value,
+    stato: document.getElementById('prev-stato').value,
+    anagrafica_id: document.getElementById('prev-anagrafica').value || null,
+    data_preventivo: document.getElementById('prev-data').value,
+    data_scadenza: document.getElementById('prev-scadenza').value,
+    totale: parseFloat(document.getElementById('prev-totale').value) || null,
+    note: document.getElementById('prev-note').value
+  };
+  try {
+    if (id) await api('PUT', `/preventivi/${id}`, body);
+    else await api('POST', '/preventivi', body);
+    closeAllModals();
+    toast('Preventivo salvato', 'success');
+    loadPreventivi();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function cambiaStatoPreventivo(id, stato) {
+  await api('PATCH', `/preventivi/${id}/stato`, { stato });
+  loadPreventivi();
+}
+
 async function loadOrdini() {
   const tipo = document.getElementById('filter-tipo-ordine')?.value || '';
   const rows = await api('GET', `/ordini?tipo=${tipo}`);
@@ -1291,7 +1558,55 @@ async function loadFatture() {
     </select></td></tr>`).join('');
 }
 
-async function cambiaStatoFattura(id, stato) { await api('PATCH', `/fatture/${id}/stato`, { stato }); }
+async function cambiaStatoFattura(id, stato) {
+  await api('PATCH', `/fatture/${id}/stato`, { stato });
+  const active = document.querySelector('.section.active')?.id?.replace('section-', '') || 'fatture-attive';
+  if (['fatture-attive', 'fatture-passive', 'fatture-fuori-campo'].includes(active)) {
+    loadFattureBySection(active);
+  }
+}
+
+function formatIvaValue(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '-';
+  if (n === 0) return 'Fuori campo';
+  return `EUR ${n.toFixed(2)}`;
+}
+
+function renderFattureRows(targetId, rows) {
+  const body = document.getElementById(targetId);
+  if (!body) return;
+  body.innerHTML = (rows||[]).map(f=>`
+    <tr><td><strong>${f.numero}</strong></td>
+    <td><span class="badge badge-${f.tipo==='ricevuta'?'fornitore':'cliente'}">${f.tipo}</span></td>
+    <td>${f.ragione_sociale||'-'}</td><td>${f.data||'-'}</td>
+    <td>${f.totale ? 'EUR '+Number(f.totale).toFixed(2) : '-'}</td>
+    <td>${formatIvaValue(f.iva)}</td>
+    <td><span class="badge badge-${f.stato}">${f.stato}</span></td>
+    <td><select class="btn btn-outline btn-sm" onchange="cambiaStatoFattura(${f.id},this.value)">
+      ${['ricevuta','pagata','scaduta','annullata'].map(s=>`<option value="${s}"${f.stato===s?' selected':''}>${s}</option>`).join('')}
+    </select></td></tr>`).join('');
+}
+
+async function loadFattureBySection(section) {
+  ensureAccountingSections();
+  if (section === 'fatture-passive') {
+    const rows = await api('GET', '/fatture?tipo=ricevuta');
+    renderFattureRows('fatture-passive-body', rows || []);
+    return;
+  }
+  if (section === 'fatture-fuori-campo') {
+    const rows = await api('GET', '/fatture');
+    renderFattureRows('fatture-fuori-campo-body', (rows || []).filter(f => !f.iva || Number(f.iva) === 0));
+    return;
+  }
+  const rows = await api('GET', '/fatture?tipo=emessa');
+  renderFattureRows('fatture-attive-body', rows || []);
+}
+
+async function loadFatture() {
+  return loadFattureBySection('fatture-attive');
+}
 
 async function importXML(input) {
   const file = input.files[0]; if (!file) return;
@@ -1990,6 +2305,154 @@ async function markAllNotificationsRead() {
   await refreshNotificationViews();
 }
 
+const AUTOMATION_SETTING_DEFS = [
+  {
+    key: 'automation.email_users_activity_assignments',
+    label: 'Email utenti su nuove assegnazioni attività',
+    description: 'Quando assegniamo o riassegniamo un’attività, l’utente incaricato riceve anche una mail oltre alla notifica in-app.',
+    group: 'attivita',
+    audience: 'Utenti interni'
+  },
+  {
+    key: 'automation.email_users_activity_updates',
+    label: 'Email utenti su aggiornamenti attività',
+    description: 'Invia una mail agli utenti coinvolti quando cambiano stato, data o altri campi importanti dell’attività.',
+    group: 'attivita',
+    audience: 'Utenti interni'
+  },
+  {
+    key: 'automation.email_clients_activity_updates',
+    label: 'Email clienti su aggiornamenti attività',
+    description: 'Manda una comunicazione esterna al cliente quando cambia stato o data di un’attività collegata.',
+    group: 'attivita',
+    audience: 'Clienti'
+  },
+  {
+    key: 'automation.email_users_order_status',
+    label: 'Email utenti su cambio stato ordini',
+    description: 'Ogni variazione di stato ordine viene riepilogata anche via mail agli utenti attivi.',
+    group: 'ordini',
+    audience: 'Utenti interni'
+  },
+  {
+    key: 'automation.email_clients_order_status',
+    label: 'Email clienti su cambio stato ordini',
+    description: 'Informa automaticamente il cliente quando lo stato del suo ordine viene aggiornato nel CRM.',
+    group: 'ordini',
+    audience: 'Clienti'
+  }
+];
+
+let automationSettingsCache = {};
+
+function getAutomationSettingValue(key, fallback = '0') {
+  return automationSettingsCache[key] ?? fallback;
+}
+
+function summarizeAutomationSettings() {
+  const defs = AUTOMATION_SETTING_DEFS;
+  const enabled = defs.filter(def => getAutomationSettingValue(def.key) === '1');
+  const internal = enabled.filter(def => def.audience === 'Utenti interni').length;
+  const clients = enabled.filter(def => def.audience === 'Clienti').length;
+  return { total: defs.length, enabled: enabled.length, internal, clients };
+}
+
+function renderAutomationSummary() {
+  const target = document.getElementById('automation-summary');
+  if (!target) return;
+  const summary = summarizeAutomationSettings();
+  target.innerHTML = `
+    <div class="summary-card tone-primary">
+      <div class="summary-card-top"><span class="summary-card-icon">⚙</span><span>Regole disponibili</span></div>
+      <div class="summary-card-value">${summary.total}</div>
+      <div class="summary-card-meta">Automazioni CRM pronte da gestire</div>
+    </div>
+    <div class="summary-card tone-success">
+      <div class="summary-card-top"><span class="summary-card-icon">✅</span><span>Automazioni attive</span></div>
+      <div class="summary-card-value">${summary.enabled}</div>
+      <div class="summary-card-meta">Flussi email attualmente accesi</div>
+    </div>
+    <div class="summary-card tone-warning">
+      <div class="summary-card-top"><span class="summary-card-icon">👥</span><span>Utenti interni</span></div>
+      <div class="summary-card-value">${summary.internal}</div>
+      <div class="summary-card-meta">Regole attive verso il team</div>
+    </div>
+    <div class="summary-card tone-primary">
+      <div class="summary-card-top"><span class="summary-card-icon">📨</span><span>Clienti</span></div>
+      <div class="summary-card-value">${summary.clients}</div>
+      <div class="summary-card-meta">Regole attive verso l’esterno</div>
+    </div>
+  `;
+}
+
+function renderAutomationSections() {
+  const target = document.getElementById('automation-sections');
+  if (!target) return;
+  const grouped = AUTOMATION_SETTING_DEFS.reduce((acc, def) => {
+    acc[def.group] ||= [];
+    acc[def.group].push(def);
+    return acc;
+  }, {});
+  const groupTitles = {
+    attivita: 'Attività CRM',
+    ordini: 'Ordini'
+  };
+  target.innerHTML = Object.entries(grouped).map(([group, defs]) => `
+    <div class="dash-card automation-card-group">
+      <div class="automation-group-header">
+        <div>
+          <h3>${groupTitles[group] || group}</h3>
+          <p>Gestiamo in modo separato automazioni interne ed eventuali comunicazioni verso i clienti.</p>
+        </div>
+      </div>
+      <div class="automation-option-list">
+        ${defs.map(def => `
+          <label class="automation-option">
+            <div class="automation-option-copy">
+              <div class="automation-option-top">
+                <strong>${def.label}</strong>
+                <span class="automation-badge">${def.audience}</span>
+              </div>
+              <p>${def.description}</p>
+            </div>
+            <span class="automation-switch">
+              <input type="checkbox" data-automation-key="${def.key}" ${getAutomationSettingValue(def.key) === '1' ? 'checked' : ''}>
+              <span class="automation-switch-slider"></span>
+            </span>
+          </label>
+        `).join('')}
+      </div>
+    </div>
+  `).join('');
+}
+
+async function loadAutomationPage() {
+  const rows = await api('GET', '/google/settings');
+  automationSettingsCache = {};
+  (rows || []).forEach(row => {
+    automationSettingsCache[row.key] = String(row.value ?? '');
+  });
+  renderAutomationSummary();
+  renderAutomationSections();
+}
+
+async function saveAutomationSettings() {
+  const toggles = [...document.querySelectorAll('[data-automation-key]')];
+  if (!toggles.length) {
+    toast('Nessuna automazione da salvare', 'info');
+    return;
+  }
+  const items = toggles.map(input => ({
+    key: input.dataset.automationKey,
+    type: 'boolean',
+    value: input.checked ? '1' : '0'
+  }));
+  await api('PUT', '/google/settings', { items });
+  items.forEach(item => { automationSettingsCache[item.key] = item.value; });
+  renderAutomationSummary();
+  toast('Automazioni aggiornate', 'success');
+}
+
 async function loadStatistics() {
   const stats = await api('GET', '/system/stats/overview');
   const cpv = await api('GET', '/mepa/cpv-operativi');
@@ -2055,6 +2518,150 @@ function formatSize(bytes) {
   return (b/(1024*1024)).toFixed(1) + ' MB';
 }
 
+function slugifyTableName(value = 'tabella') {
+  return String(value || 'tabella')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'tabella';
+}
+
+function escapeCsvValue(value) {
+  const text = String(value ?? '').replace(/\r?\n/g, ' ').trim();
+  if (/[",;\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  return text;
+}
+
+function getTableCellExportText(cell) {
+  if (!cell) return '';
+  const select = cell.querySelector('select');
+  if (select) return select.options[select.selectedIndex]?.textContent?.trim() || '';
+  return cell.innerText.replace(/\s+/g, ' ').trim();
+}
+
+function getTableRows(table, mode = 'visible') {
+  return [...table.querySelectorAll('tbody tr')].filter(row => row.querySelectorAll('td').length > 0)
+    .filter(row => mode === 'all' || row.style.display !== 'none');
+}
+
+function getTableHeaders(table) {
+  return [...table.querySelectorAll('thead tr:first-child th')].map(th => th.textContent.trim() || 'Colonna');
+}
+
+function buildTableExportMatrix(table, mode = 'visible') {
+  const headers = getTableHeaders(table);
+  const rows = getTableRows(table, mode).map(row => [...row.querySelectorAll('td')].map(getTableCellExportText));
+  return { headers, rows };
+}
+
+function downloadBlob(filename, content, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+function exportTableCsv(table, mode = 'visible') {
+  const { headers, rows } = buildTableExportMatrix(table, mode);
+  const csv = [headers.map(escapeCsvValue).join(';')]
+    .concat(rows.map(row => row.map(escapeCsvValue).join(';')))
+    .join('\n');
+  const name = `${table.dataset.exportName || 'tabella'}-${mode === 'visible' ? 'visibile' : 'completa'}.csv`;
+  downloadBlob(name, '\uFEFF' + csv, 'text/csv;charset=utf-8;');
+}
+
+function exportTableExcel(table, mode = 'visible') {
+  const { headers, rows } = buildTableExportMatrix(table, mode);
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body><table border="1"><thead><tr>${
+    headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')
+  }</tr></thead><tbody>${
+    rows.map(row => `<tr>${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')
+  }</tbody></table></body></html>`;
+  const name = `${table.dataset.exportName || 'tabella'}-${mode === 'visible' ? 'visibile' : 'completa'}.xls`;
+  downloadBlob(name, html, 'application/vnd.ms-excel;charset=utf-8;');
+}
+
+function applyTableColumnFilters(table) {
+  const values = [...table.querySelectorAll('.table-filter-input')].map(input => (input.value || '').trim().toLowerCase());
+  table.querySelectorAll('tbody tr').forEach(row => {
+    const cells = [...row.querySelectorAll('td')];
+    const match = values.every((value, idx) => {
+      if (!value) return true;
+      const cellText = getTableCellExportText(cells[idx]).toLowerCase();
+      return cellText.includes(value);
+    });
+    row.style.display = match ? '' : 'none';
+  });
+}
+
+function ensureTableToolbar(table) {
+  if (table.dataset.toolsEnhanced === '1') return;
+  const wrapper = table.closest('.table-wrapper');
+  if (!wrapper) return;
+  const title = table.closest('.section')?.querySelector('.page-header h1')?.textContent?.trim()
+    || table.dataset.exportName
+    || 'Tabella';
+  table.dataset.exportName = slugifyTableName(title);
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'table-tools-bar';
+  toolbar.innerHTML = `
+    <div class="table-tools-title">
+      <strong>${escapeHtml(title)}</strong>
+      <span>Filtra per colonna ed esporta i risultati</span>
+    </div>
+    <div class="table-tools-actions">
+      <button class="btn btn-outline btn-sm" type="button" data-export="csv-visible">CSV visibile</button>
+      <button class="btn btn-outline btn-sm" type="button" data-export="csv-all">CSV completo</button>
+      <button class="btn btn-outline btn-sm" type="button" data-export="xls-visible">Excel visibile</button>
+      <button class="btn btn-outline btn-sm" type="button" data-export="xls-all">Excel completo</button>
+    </div>
+  `;
+  toolbar.querySelectorAll('[data-export]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const action = btn.dataset.export || '';
+      if (action === 'csv-visible') exportTableCsv(table, 'visible');
+      if (action === 'csv-all') exportTableCsv(table, 'all');
+      if (action === 'xls-visible') exportTableExcel(table, 'visible');
+      if (action === 'xls-all') exportTableExcel(table, 'all');
+    });
+  });
+  wrapper.parentNode.insertBefore(toolbar, wrapper);
+  table.dataset.toolsEnhanced = '1';
+}
+
+function ensureTableFilterRow(table) {
+  const thead = table.querySelector('thead');
+  const headerRow = table.querySelector('thead tr:first-child');
+  if (!thead || !headerRow) return;
+  let filterRow = table.querySelector('thead tr.table-filter-row');
+  if (!filterRow) {
+    filterRow = document.createElement('tr');
+    filterRow.className = 'table-filter-row';
+    [...headerRow.children].forEach((th, index) => {
+      const cell = document.createElement('th');
+      const label = (th.textContent || '').trim();
+      const filterable = label && !/azioni|^$/.test(label.toLowerCase());
+      cell.innerHTML = filterable
+        ? `<input class="table-filter-input" type="text" placeholder="Filtra ${escapeHtml(label)}" data-col="${index}">`
+        : '<span class="table-filter-placeholder">—</span>';
+      filterRow.appendChild(cell);
+    });
+    thead.appendChild(filterRow);
+  }
+  filterRow.querySelectorAll('.table-filter-input').forEach(input => {
+    if (input.dataset.bound === '1') return;
+    input.addEventListener('input', () => applyTableColumnFilters(table));
+    input.dataset.bound = '1';
+  });
+}
+
 // ═══════════════════════════════
 // MAPPA PA
 // ═══════════════════════════════
@@ -2072,19 +2679,203 @@ async function loadMappa() {
 // ═══════════════════════════════
 // UTENTI
 // ═══════════════════════════════
+function getMarkerColor(type) {
+  if (type === 'fornitore') return '#f59e0b';
+  if (type === 'pa') return '#0ea5e9';
+  if (type === 'consegna') return '#ef4444';
+  return '#10b981';
+}
+
+function buildMarkerIcon(type) {
+  return {
+    path: window.google.maps.SymbolPath.CIRCLE,
+    fillColor: getMarkerColor(type),
+    fillOpacity: 0.95,
+    strokeColor: '#ffffff',
+    strokeOpacity: 1,
+    strokeWeight: 2,
+    scale: 8
+  };
+}
+
+async function ensureGoogleMapsLoaded() {
+  if (window.google?.maps) return window.google.maps;
+  if (googleMapsPromise) return googleMapsPromise;
+  googleMapsPromise = (async () => {
+    const cfg = await api('GET', '/system/public-config');
+    const key = cfg?.googleMapsApiKey;
+    if (!key) throw new Error('Chiave Google Maps non configurata');
+    await new Promise((resolve, reject) => {
+      const existing = document.querySelector('script[data-google-maps="1"]');
+      if (existing) {
+        existing.addEventListener('load', resolve, { once: true });
+        existing.addEventListener('error', reject, { once: true });
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}`;
+      script.async = true;
+      script.defer = true;
+      script.dataset.googleMaps = '1';
+      script.onload = resolve;
+      script.onerror = () => reject(new Error('Google Maps non caricato'));
+      document.head.appendChild(script);
+    });
+    return window.google.maps;
+  })();
+  return googleMapsPromise;
+}
+
+function renderMappaSummary(points, stats = {}) {
+  const el = document.getElementById('mappa-summary');
+  if (!el) return;
+  const clienti = points.filter(p => p.marker_type === 'cliente').length;
+  const fornitori = points.filter(p => p.marker_type === 'fornitore').length;
+  const pa = points.filter(p => p.marker_type === 'pa').length;
+  const consegne = points.filter(p => p.marker_type === 'consegna').length;
+  el.innerHTML = `
+    <div class="summary-card"><div class="summary-label">Punti visibili</div><div class="summary-value">${points.length}</div><div class="summary-meta">Totale CRM: ${stats.totale || points.length}</div></div>
+    <div class="summary-card"><div class="summary-label">Clienti / Fornitori</div><div class="summary-value">${clienti} / ${fornitori}</div><div class="summary-meta">Anagrafiche geolocalizzate</div></div>
+    <div class="summary-card"><div class="summary-label">Pubbliche amministrazioni</div><div class="summary-value">${pa}</div><div class="summary-meta">PA con coordinate</div></div>
+    <div class="summary-card"><div class="summary-label">Consegne DDT</div><div class="summary-value">${consegne}</div><div class="summary-meta">Punti spedizione</div></div>
+  `;
+}
+
+function renderMappaFallback(points) {
+  const c = document.getElementById('mappa-container');
+  if (!c) return;
+  c.innerHTML = `
+    <div class="crm-map-shell">
+      <div class="crm-map-fallback">
+        <div class="crm-map-info">
+          <strong>Mappa interattiva non disponibile</strong>
+          <span>Mostro comunque tutti gli indirizzi geolocalizzati del CRM con link diretto a Google Maps.</span>
+        </div>
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Nome</th>
+                <th>Tipo</th>
+                <th>Indirizzo</th>
+                <th>Coordinate</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${points.map(p => `
+                <tr>
+                  <td>${p.title || '—'}</td>
+                  <td>${p.marker_type || p.category || '—'}</td>
+                  <td>${p.address || '—'}</td>
+                  <td>${p.lat}, ${p.lng}</td>
+                  <td><a href="https://maps.google.com/?q=${p.lat},${p.lng}" target="_blank" rel="noopener" style="color:var(--accent)">Apri mappa</a></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function renderGoogleMap(points) {
+  const maps = await ensureGoogleMapsLoaded();
+  const c = document.getElementById('mappa-container');
+  if (!c) return;
+  c.innerHTML = `
+    <div class="crm-map-shell">
+      <div id="crm-google-map"></div>
+      <div class="crm-map-info">
+        <strong>${points.length} punti visualizzati</strong>
+        <span>Colori marker: clienti verde, fornitori arancio, PA blu, consegne rosso.</span>
+      </div>
+    </div>
+  `;
+  const center = { lat: Number(points[0].lat), lng: Number(points[0].lng) };
+  crmMap = new maps.Map(document.getElementById('crm-google-map'), {
+    center,
+    zoom: 6,
+    mapTypeControl: false,
+    streetViewControl: false,
+    fullscreenControl: true
+  });
+  const bounds = new maps.LatLngBounds();
+  crmMapMarkers.forEach(marker => marker.setMap(null));
+  crmMapMarkers = [];
+  const info = new maps.InfoWindow();
+  points.forEach(point => {
+    const position = { lat: Number(point.lat), lng: Number(point.lng) };
+    const marker = new maps.Marker({
+      position,
+      map: crmMap,
+      title: point.title || '',
+      icon: buildMarkerIcon(point.marker_type)
+    });
+    marker.addListener('click', () => {
+      info.setContent(`
+        <div style="min-width:220px;max-width:280px;padding:4px 2px">
+          <div style="font-weight:700;margin-bottom:6px">${point.title || 'Punto CRM'}</div>
+          <div style="font-size:12px;color:#475569;margin-bottom:6px">${point.address || 'Indirizzo non disponibile'}</div>
+          <div style="font-size:12px;color:#64748b;margin-bottom:8px">Tipo: ${point.marker_type || point.category || '—'}</div>
+          <a href="https://maps.google.com/?q=${point.lat},${point.lng}" target="_blank" rel="noopener" style="color:#32477c;font-weight:600;text-decoration:none">Apri in Google Maps</a>
+        </div>
+      `);
+      info.open({ anchor: marker, map: crmMap });
+    });
+    crmMapMarkers.push(marker);
+    bounds.extend(position);
+  });
+  if (points.length > 1) crmMap.fitBounds(bounds, 56);
+  else crmMap.setZoom(12);
+}
+
+async function loadMappa() {
+  const data = await api('GET', '/anagrafiche/mappa/crm');
+  const c = document.getElementById('mappa-container');
+  if (!c) return;
+  const typeFilter = document.getElementById('mappa-filter-type')?.value || '';
+  const q = (document.getElementById('mappa-search')?.value || '').trim().toLowerCase();
+  const allPoints = Array.isArray(data?.points) ? data.points : [];
+  const points = allPoints.filter(point => {
+    const typeOk = !typeFilter || point.marker_type === typeFilter;
+    const haystack = [point.title, point.address, point.citta, point.provincia, point.category, point.marker_type]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    const textOk = !q || haystack.includes(q);
+    return typeOk && textOk;
+  });
+  renderMappaSummary(points, data?.stats || {});
+  if (!points.length) {
+    c.innerHTML = '<div class="crm-map-shell"><div class="crm-map-empty">Nessun punto corrisponde ai filtri selezionati.</div></div>';
+    return;
+  }
+  try {
+    await renderGoogleMap(points);
+  } catch (err) {
+    console.warn('Google Maps fallback', err);
+    renderMappaFallback(points);
+  }
+}
+
 const RUOLI_NOMI = {1:'readonly',2:'editor',3:'admin',4:'superadmin'};
 const RUOLI_LABEL = {1:'Read Only',2:'Editor',3:'Admin',4:'SuperAdmin'};
-const SEZIONI = ['clienti','fornitori','contatti','prodotti','magazzino','ordini','ddt','container','fatture','attivita','documenti','mepa','cig','analytics','statistics','settings','mappa','utenti'];
+const SEZIONI = ['clienti','fornitori','contatti','prodotti','magazzino','preventivi','ordini','ddt','container','fatture-attive','fatture-passive','fatture-fuori-campo','attivita','documenti','mepa','cig','analytics','statistics','settings','mappa','utenti'];
 const SEZIONI_LABEL = {
   clienti: 'Clienti',
   fornitori: 'Fornitori',
   contatti: 'Contatti',
   prodotti: 'Prodotti',
   magazzino: 'Magazzino',
+  preventivi: 'Preventivi',
   ordini: 'Ordini',
   ddt: 'DDT',
   container: 'Container',
-  fatture: 'Fatture',
+  'fatture-attive': 'Fatture attive',
+  'fatture-passive': 'Fatture passive',
+  'fatture-fuori-campo': 'Fuori campo IVA',
   attivita: 'Attività CRM',
   documenti: 'Documenti',
   mepa: 'Analisi MEPA',
@@ -2092,7 +2883,7 @@ const SEZIONI_LABEL = {
   analytics: 'Analisi Incrociata',
   statistics: 'Statistics',
   settings: 'Impostazioni',
-  mappa: 'Mappa',
+  mappa: 'Mappa CRM',
   utenti: 'Utenti'
 };
 async function loadUtenti() {
@@ -2249,17 +3040,25 @@ function closeAllModals() {
 
 function enhanceResponsiveTables() {
   document.querySelectorAll('.data-table').forEach(table => {
+    ensureTableToolbar(table);
+    ensureTableFilterRow(table);
     const headers = [...table.querySelectorAll('thead th')].map(th => th.textContent.trim());
     table.querySelectorAll('tbody tr').forEach(row => {
       [...row.children].forEach((cell, index) => {
         if (cell.tagName === 'TD') cell.setAttribute('data-label', headers[index] || '');
       });
     });
+    applyTableColumnFilters(table);
   });
 }
 
 function scheduleResponsiveEnhancement() {
-  requestAnimationFrame(() => requestAnimationFrame(enhanceResponsiveTables));
+  if (tableEnhancementScheduled) return;
+  tableEnhancementScheduled = true;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    tableEnhancementScheduled = false;
+    enhanceResponsiveTables();
+  }));
 }
 
 window.addEventListener('resize', syncMobileLayoutState);
@@ -2268,6 +3067,11 @@ document.addEventListener('keydown', e => {
     closeMobileSidebar();
   }
 });
+const mainContentObserverTarget = document.getElementById('main-content');
+if (mainContentObserverTarget) {
+  const tableObserver = new MutationObserver(() => scheduleResponsiveEnhancement());
+  tableObserver.observe(mainContentObserverTarget, { childList: true, subtree: true });
+}
 
 // Enter login
 document.addEventListener('keydown', e => {
@@ -2426,3 +3230,9 @@ init();
 syncMobileLayoutState();
 scheduleResponsiveEnhancement();
 registerPwaSupport();
+window.addEventListener('load', () => {
+  organizeNavigationLayout();
+  configureMobileBottomNav();
+  organizeDashboardLayout();
+  syncMobileLayoutState();
+});

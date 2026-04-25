@@ -5,6 +5,7 @@ const SHELL_ASSETS = [
   '/css/style.css',
   '/js/app.js',
   '/manifest.webmanifest',
+  '/icons/logo-horygon.svg',
   '/icons/apple-touch-icon.png',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
