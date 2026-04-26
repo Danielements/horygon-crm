@@ -91,7 +91,7 @@
       <div class="nav-group-label">Intelligence</div>
       <a class="nav-item" data-section="cig"><span class="nav-icon">📉</span> Stagionalità CIG</a>
 
-      <a class="nav-item" data-section="mepa"><span class="nav-icon">📊</span> Analisi MEPA</a>
+      <a class="nav-item" data-section="mepa"><span class="nav-icon">📊</span> Abilitazioni CPV MEPA</a>
       <a class="nav-item" data-section="rdo"><span class="nav-icon">📝</span> RdO</a>
       <a class="nav-item" data-section="analytics"><span class="nav-icon">🔬</span> Analisi Incrociata</a>
       <a class="nav-item" data-section="documenti"><span class="nav-icon">📁</span> Documenti</a>
@@ -321,11 +321,11 @@
     </section>
 
     <!-- ═══════════════════════════════════════ -->
-    <!-- ANALISI MEPA                           -->
+    <!-- ABILITAZIONI CPV MEPA                  -->
     <!-- ═══════════════════════════════════════ -->
     <section id="section-mepa" class="section">
       <div class="page-header">
-        <h1>📊 Analisi MEPA & Trend CPV</h1>
+        <h1>📊 Abilitazioni CPV MEPA</h1>
         <div class="header-actions">
           <span id="mepa-last-sync" style="font-size:12px;color:var(--text-muted)"></span>
           <button class="btn btn-outline btn-sm" onclick="openModal('modal-import-anac')">↑ Upload CSV</button>
@@ -815,20 +815,6 @@
 
   <section id="section-settings" class="section">
     <div class="page-header"><h1>Impostazioni</h1></div>
-    <div class="dash-card" style="margin-bottom:18px">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-        <div>
-          <h3 style="margin:0;font-size:16px">AI</h3>
-          <div style="font-size:12px;color:var(--text-muted)">OpenAI principale, Claude alternativo o fallback. Le chiavi restano lato backend e vengono mostrate solo mascherate.</div>
-        </div>
-        <button class="btn btn-outline btn-sm" onclick="testAiSettings()">Test connessione</button>
-      </div>
-      <div id="ai-settings-status" style="margin-top:12px;font-size:13px;color:var(--text-muted)"></div>
-      <div id="ai-settings-form" class="ai-settings-grid" style="margin-top:14px"></div>
-      <div class="modal-actions" style="margin-top:14px">
-        <button class="btn btn-accent" onclick="saveAiSettingsPage()">Salva impostazioni AI</button>
-      </div>
-    </div>
     <div class="dash-card">
       <h3 style="margin-top:0;font-size:16px">Configurazione sistema</h3>
       <p style="font-size:12px;color:var(--text-muted)">Queste impostazioni servono per attivare comportamenti senza cambiare il database ogni volta.</p>
@@ -896,31 +882,6 @@
     <button class="mobile-tab" data-section="notifiche" onclick="navigateTo('notifiche')"><span>🔔</span><small>Alert</small></button>
   </div>
 
-  <button id="ai-assistant-fab" class="ai-assistant-fab" onclick="toggleAiAssistant()" title="AI Assistant">AI</button>
-  <div id="ai-assistant-panel" class="ai-assistant-panel">
-    <div class="ai-assistant-header">
-      <div>
-        <strong>AI Assistant</strong>
-        <div id="ai-assistant-status" style="font-size:12px;color:var(--text-muted)">Caricamento...</div>
-      </div>
-      <button class="btn-icon" onclick="toggleAiAssistant()" title="Chiudi">×</button>
-    </div>
-    <div class="ai-assistant-body">
-      <div class="dash-card" style="margin-bottom:12px">
-        <div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">Suggerimenti</div>
-        <div id="ai-assistant-suggestions" class="ai-suggestion-list"></div>
-      </div>
-      <div id="ai-assistant-results" class="ai-results-box">Scrivi una richiesta come: <strong>Cerca clienti con CAP 04100</strong>.</div>
-      <div class="form-group" style="margin-top:12px">
-        <label>Prompt libero</label>
-        <textarea id="ai-assistant-prompt" rows="4" style="width:100%;background:var(--bg-input);border:1px solid var(--border);color:var(--text);padding:10px;border-radius:10px;font-family:inherit;font-size:14px" placeholder="Scrivi cosa vuoi cercare o controllare nel CRM..."></textarea>
-      </div>
-      <div class="modal-actions" style="margin-top:8px">
-        <button class="btn btn-outline" onclick="fillAiPrompt('Cerca clienti con CAP 04100')">Esempio</button>
-        <button class="btn btn-accent" onclick="runAiAssistant()">Invia</button>
-      </div>
-    </div>
-  </div>
 </div>
 
 <!-- TOAST -->
@@ -1009,6 +970,14 @@
     <div class="form-group"><label>Descrizione</label><input type="text" id="prod-desc"></div>
     <div class="form-row">
       <div class="form-group"><label>Categoria</label><select id="prod-categoria"></select></div>
+      <div class="form-group">
+        <label>CPV MEPA</label>
+        <input type="hidden" id="prod-cpv-mepa">
+        <div class="picker-input-row">
+          <input type="text" id="prod-cpv-mepa-label" readonly placeholder="Seleziona dalle abilitazioni CPV MEPA">
+          <button type="button" class="btn btn-outline btn-sm" onclick="openRecordPicker('mepa-cpv',{targetId:'prod-cpv-mepa',labelId:'prod-cpv-mepa-label'})">Scegli</button>
+        </div>
+      </div>
       <div class="form-group"><label>U.M.</label><input type="text" id="prod-um" value="pz"></div>
       <div class="form-group"><label>Peso (kg)</label><input type="number" step="0.01" id="prod-peso"></div>
     </div>
@@ -1025,6 +994,14 @@
         <label>Bolle PDF</label>
         <input type="file" id="prod-upload-bolle" accept=".pdf" multiple>
       </div>
+      <div class="form-group">
+        <label>Certificati</label>
+        <input type="file" id="prod-upload-certificati" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png" multiple>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>File salvati</label>
+      <div id="prod-media-links" class="saved-file-links"></div>
     </div>
     <div id="prod-tabs" style="display:none">
       <div style="display:flex;gap:12px;margin:16px 0 12px;border-bottom:1px solid var(--border)">
@@ -1045,21 +1022,48 @@
 
 <!-- MODAL ORDINE -->
 <div id="modal-ordine" class="modal">
-  <div class="modal-box">
+  <div class="modal-box doc-theme-box doc-theme-ordine">
     <div class="modal-title">📋 Ordine</div>
-    <div class="form-row">
-      <div class="form-group"><label>Codice Ordine *</label><input type="text" id="ord-codice"></div>
-      <div class="form-group"><label>Tipo</label><select id="ord-tipo"><option value="vendita">Vendita</option><option value="acquisto">Acquisto</option></select></div>
+    <input type="hidden" id="ord-id">
+    <input type="hidden" id="ord-preventivo-id">
+    <div class="form-section-card">
+      <div class="section-card-title">Anagrafica e dati testata</div>
+      <div class="form-row">
+        <div class="form-group"><label>Codice Ordine *</label><input type="text" id="ord-codice"></div>
+        <div class="form-group"><label>Tipo</label><select id="ord-tipo"><option value="vendita">Vendita</option><option value="acquisto">Acquisto</option></select></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Cliente/Fornitore</label>
+          <input type="hidden" id="ord-anagrafica">
+          <div class="picker-input-row">
+            <input type="text" id="ord-anagrafica-label" readonly placeholder="Seleziona anagrafica dal popup">
+            <button type="button" class="btn btn-outline btn-sm" onclick="openRecordPicker('anagrafiche',{targetId:'ord-anagrafica',labelId:'ord-anagrafica-label'})">Scegli</button>
+          </div>
+        </div>
+        <div class="form-group"><label>Canale</label><select id="ord-canale"><option value="mepa">MEPA</option><option value="diretto">Diretto</option></select></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Origine preventivo</label><input type="text" id="ord-preventivo-label" readonly placeholder="Nessun preventivo collegato"></div>
+        <div class="form-group"><label>Data Ordine</label><input type="date" id="ord-data"></div>
+        <div class="form-group"><label>Consegna Prevista</label><input type="date" id="ord-consegna"></div>
+      </div>
     </div>
-    <div class="form-row">
-      <div class="form-group"><label>Cliente/Fornitore</label><select id="ord-anagrafica"><option value="">Seleziona...</option></select></div>
-      <div class="form-group"><label>Canale</label><select id="ord-canale"><option value="mepa">MEPA</option><option value="diretto">Diretto</option></select></div>
+    <div class="form-section-card">
+      <div class="section-card-title section-card-title-between">
+        <span>Articoli</span>
+        <button type="button" class="btn btn-outline btn-sm" onclick="aggiungiRigaOrdine()">+ Riga</button>
+      </div>
+      <div id="ord-righe" class="dynamic-lines"></div>
     </div>
-    <div class="form-row">
-      <div class="form-group"><label>Data Ordine</label><input type="date" id="ord-data"></div>
-      <div class="form-group"><label>Consegna Prevista</label><input type="date" id="ord-consegna"></div>
+    <div class="form-section-card">
+      <div class="section-card-title">Totali</div>
+      <div class="form-row">
+        <div class="form-group"><label>Imponibile</label><input type="number" step="0.01" id="ord-imponibile"></div>
+        <div class="form-group"><label>IVA</label><input type="number" step="0.01" id="ord-iva"></div>
+        <div class="form-group"><label>Totale (€)</label><input type="number" step="0.01" id="ord-totale"></div>
+      </div>
     </div>
-    <div class="form-group"><label>Totale (€)</label><input type="number" step="0.01" id="ord-totale"></div>
     <div class="form-group"><label>Note</label><input type="text" id="ord-note"></div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
@@ -1070,35 +1074,49 @@
 
 <!-- MODAL PREVENTIVO -->
 <div id="modal-preventivo" class="modal">
-  <div class="modal-box">
+  <div class="modal-box doc-theme-box doc-theme-preventivo">
     <div class="modal-title">🧮 Preventivo</div>
     <input type="hidden" id="prev-id">
-    <div class="form-row">
-      <div class="form-group"><label>Codice Preventivo *</label><input type="text" id="prev-codice"></div>
-      <div class="form-group"><label>Stato</label><select id="prev-stato"><option value="bozza">Bozza</option><option value="inviato">Inviato</option><option value="accettato">Accettato</option><option value="rifiutato">Rifiutato</option><option value="scaduto">Scaduto</option></select></div>
+    <div class="form-section-card">
+      <div class="section-card-title">Anagrafica e dati testata</div>
+      <div class="form-row">
+        <div class="form-group"><label>Codice Preventivo *</label><input type="text" id="prev-codice"></div>
+        <div class="form-group"><label>Stato</label><select id="prev-stato"><option value="bozza">Bozza</option><option value="inviato">Inviato</option><option value="accettato">Accettato</option><option value="rifiutato">Rifiutato</option><option value="scaduto">Scaduto</option></select></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Cliente</label>
+          <input type="hidden" id="prev-anagrafica">
+          <div class="picker-input-row">
+            <input type="text" id="prev-anagrafica-label" readonly placeholder="Seleziona cliente dal popup">
+            <button type="button" class="btn btn-outline btn-sm" onclick="openRecordPicker('anagrafiche',{targetId:'prev-anagrafica',labelId:'prev-anagrafica-label',filterTipo:'cliente'})">Scegli</button>
+          </div>
+        </div>
+        <div class="form-group"><label>Valuta</label><input type="text" id="prev-valuta" value="EUR"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Data Preventivo</label><input type="date" id="prev-data"></div>
+        <div class="form-group"><label>Scadenza</label><input type="date" id="prev-scadenza"></div>
+      </div>
     </div>
-    <div class="form-row">
-      <div class="form-group"><label>Cliente</label><select id="prev-anagrafica"><option value="">Seleziona...</option></select></div>
-      <div class="form-group"><label>Valuta</label><input type="text" id="prev-valuta" value="EUR"></div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label>Data Preventivo</label><input type="date" id="prev-data"></div>
-      <div class="form-group"><label>Scadenza</label><input type="date" id="prev-scadenza"></div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label>Imponibile</label><input type="number" step="0.01" id="prev-imponibile"></div>
-      <div class="form-group"><label>IVA</label><input type="number" step="0.01" id="prev-iva"></div>
-      <div class="form-group"><label>Totale</label><input type="number" step="0.01" id="prev-totale"></div>
-    </div>
-    <div class="form-group">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <label style="margin:0">Righe preventivo</label>
+    <div class="form-section-card">
+      <div class="section-card-title section-card-title-between">
+        <span>Articoli</span>
         <button type="button" class="btn btn-outline btn-sm" onclick="aggiungiRigaPreventivo()">+ Riga</button>
       </div>
       <div id="prev-righe" class="dynamic-lines"></div>
     </div>
+    <div class="form-section-card">
+      <div class="section-card-title">Totali</div>
+      <div class="form-row">
+        <div class="form-group"><label>Imponibile</label><input type="number" step="0.01" id="prev-imponibile"></div>
+        <div class="form-group"><label>IVA</label><input type="number" step="0.01" id="prev-iva"></div>
+        <div class="form-group"><label>Totale</label><input type="number" step="0.01" id="prev-totale"></div>
+      </div>
+    </div>
     <div class="form-group"><label>Note</label><input type="text" id="prev-note"></div>
     <div class="modal-actions">
+      <button class="btn btn-danger btn-sm" id="btn-del-preventivo" style="display:none" onclick="deletePreventivo()">Elimina</button>
       <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
       <button class="btn btn-accent" onclick="salvaPreventivo()">Salva</button>
     </div>
@@ -1107,44 +1125,57 @@
 
 <!-- MODAL FATTURA -->
 <div id="modal-fattura" class="modal">
-  <div class="modal-box">
+  <div class="modal-box doc-theme-box doc-theme-fattura">
     <div class="modal-title">Fattura</div>
     <input type="hidden" id="fatt-id">
-    <div class="form-row">
-      <div class="form-group"><label>Numero *</label><input type="text" id="fatt-numero"></div>
-      <div class="form-group"><label>Tipo</label><select id="fatt-tipo"><option value="emessa">Emessa</option><option value="ricevuta">Ricevuta</option></select></div>
-      <div class="form-group"><label>Documento</label><select id="fatt-tipo-documento"><option value="fattura">Fattura</option><option value="nota_credito">Nota credito</option><option value="nota_debito">Nota debito</option><option value="autofattura">Autofattura</option><option value="integrazione_estero">Integrazione estero</option></select></div>
+    <div class="form-section-card">
+      <div class="section-card-title">Anagrafica e dati testata</div>
+      <div class="form-row">
+        <div class="form-group"><label>Numero *</label><input type="text" id="fatt-numero"></div>
+        <div class="form-group"><label>Tipo</label><select id="fatt-tipo"><option value="emessa">Emessa</option><option value="ricevuta">Ricevuta</option></select></div>
+        <div class="form-group"><label>Documento</label><select id="fatt-tipo-documento"><option value="fattura">Fattura</option><option value="nota_credito">Nota credito</option><option value="nota_debito">Nota debito</option><option value="autofattura">Autofattura</option><option value="integrazione_estero">Integrazione estero</option></select></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Cliente/Fornitore</label>
+          <input type="hidden" id="fatt-anagrafica">
+          <div class="picker-input-row">
+            <input type="text" id="fatt-anagrafica-label" readonly placeholder="Seleziona anagrafica dal popup">
+            <button type="button" class="btn btn-outline btn-sm" onclick="openRecordPicker('anagrafiche',{targetId:'fatt-anagrafica',labelId:'fatt-anagrafica-label'})">Scegli</button>
+          </div>
+        </div>
+        <div class="form-group"><label>Valuta</label><input type="text" id="fatt-valuta" value="EUR"></div>
+        <div class="form-group"><label>Stato pagamento</label><select id="fatt-stato-pagamento"><option value="da_pagare">Da pagare</option><option value="parziale">Parziale</option><option value="pagata">Pagata</option></select></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Data documento</label><input type="date" id="fatt-data"></div>
+        <div class="form-group"><label>Data ricezione</label><input type="date" id="fatt-data-ricezione"></div>
+        <div class="form-group"><label>Scadenza</label><input type="date" id="fatt-scadenza"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>P.IVA</label><input type="text" id="fatt-piva"></div>
+        <div class="form-group"><label>Codice fiscale</label><input type="text" id="fatt-cf"></div>
+        <div class="form-group"><label>SDI ID</label><input type="text" id="fatt-sdi"></div>
+      </div>
     </div>
-    <div class="form-row">
-      <div class="form-group"><label>Cliente/Fornitore</label><select id="fatt-anagrafica"><option value="">Seleziona...</option></select></div>
-      <div class="form-group"><label>Valuta</label><input type="text" id="fatt-valuta" value="EUR"></div>
-      <div class="form-group"><label>Stato pagamento</label><select id="fatt-stato-pagamento"><option value="da_pagare">Da pagare</option><option value="parziale">Parziale</option><option value="pagata">Pagata</option></select></div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label>Data documento</label><input type="date" id="fatt-data"></div>
-      <div class="form-group"><label>Data ricezione</label><input type="date" id="fatt-data-ricezione"></div>
-      <div class="form-group"><label>Scadenza</label><input type="date" id="fatt-scadenza"></div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label>P.IVA</label><input type="text" id="fatt-piva"></div>
-      <div class="form-group"><label>Codice fiscale</label><input type="text" id="fatt-cf"></div>
-      <div class="form-group"><label>SDI ID</label><input type="text" id="fatt-sdi"></div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label>Imponibile</label><input type="number" step="0.01" id="fatt-imponibile"></div>
-      <div class="form-group"><label>IVA</label><input type="number" step="0.01" id="fatt-iva"></div>
-      <div class="form-group"><label>Totale</label><input type="number" step="0.01" id="fatt-totale"></div>
-    </div>
-    <div class="form-group">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <label style="margin:0">Righe fattura</label>
+    <div class="form-section-card">
+      <div class="section-card-title section-card-title-between">
+        <span>Articoli</span>
         <button type="button" class="btn btn-outline btn-sm" onclick="aggiungiRigaFattura()">+ Riga</button>
       </div>
       <div id="fatt-righe" class="dynamic-lines"></div>
     </div>
-    <div class="form-group">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <label style="margin:0">Riepilogo IVA</label>
+    <div class="form-section-card">
+      <div class="section-card-title">Totali documento</div>
+      <div class="form-row">
+        <div class="form-group"><label>Imponibile</label><input type="number" step="0.01" id="fatt-imponibile"></div>
+        <div class="form-group"><label>IVA</label><input type="number" step="0.01" id="fatt-iva"></div>
+        <div class="form-group"><label>Totale</label><input type="number" step="0.01" id="fatt-totale"></div>
+      </div>
+    </div>
+    <div class="form-section-card">
+      <div class="section-card-title section-card-title-between">
+        <span>Riepilogo IVA</span>
         <button type="button" class="btn btn-outline btn-sm" onclick="aggiungiRiepilogoIva()">+ Riga IVA</button>
       </div>
       <div id="fatt-riepilogo-iva" class="dynamic-lines"></div>
@@ -1164,6 +1195,59 @@
     <div id="fatture-sheet-result" style="font-size:13px;color:var(--text-muted)"></div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeAllModals()">Chiudi</button>
+    </div>
+  </div>
+</div>
+
+<div id="modal-record-picker" class="modal">
+  <div class="modal-box modal-box-wide">
+    <div class="modal-title">Seleziona record</div>
+    <div class="form-group">
+      <label>Ricerca</label>
+      <input type="text" id="record-picker-search" placeholder="Cerca per codice, nome, partita IVA..." oninput="filterRecordPicker()">
+    </div>
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead><tr id="record-picker-head"></tr></thead>
+        <tbody id="record-picker-body"></tbody>
+      </table>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAllModals()">Chiudi</button>
+    </div>
+  </div>
+</div>
+
+<div id="modal-send-document" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">Invia documento</div>
+    <input type="hidden" id="send-doc-kind">
+    <input type="hidden" id="send-doc-id">
+    <div class="form-group">
+      <label>Documento</label>
+      <input type="text" id="send-doc-label" readonly>
+    </div>
+    <div class="form-group">
+      <label>Contatto / email da anagrafica</label>
+      <select id="send-doc-recipient-select" onchange="applyDocumentRecipientSelection()">
+        <option value="">Seleziona...</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Email destinatario</label>
+      <input type="email" id="send-doc-email" placeholder="email@destinatario.it">
+    </div>
+    <div class="form-group">
+      <label>Oggetto</label>
+      <input type="text" id="send-doc-subject">
+    </div>
+    <div class="form-group">
+      <label>Messaggio</label>
+      <textarea id="send-doc-body" rows="7" style="width:100%;background:var(--bg-input);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:6px;font-family:inherit;font-size:14px"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
+      <button class="btn btn-accent" onclick="sendDocumentEmail()">Invia PDF</button>
     </div>
   </div>
 </div>

@@ -15,15 +15,12 @@ let googleMapsPromise = null;
 let crmMap = null;
 let crmMapMarkers = [];
 let preventivoProdottiCache = [];
+let ordineProdottiCache = [];
+let ordineAnagraficheCache = [];
 let fatturaProdottiCache = [];
 let fatturaAnagraficheCache = [];
-let aiAssistantSuggestions = [
-  'Cerca clienti con CAP 04100',
-  'Trova fatture passive scadute',
-  'Mostrami ordini aperti',
-  'Elenca spedizioni in transito',
-  'Trova proforme aperte'
-];
+let recordPickerState = null;
+let documentRecipientOptions = [];
 
 // Redirect da Google OAuth
 const urlToken = new URLSearchParams(window.location.search).get('token');
@@ -357,7 +354,7 @@ function organizeNavigationLayout() {
         : section === 'fatture-passive' ? getItem('fatture-passive', 'Fatture passive', '🧾')
         : section === 'fatture-fuori-campo' ? getItem('fatture-fuori-campo', 'Fuori campo IVA', '🧾')
         : section === 'cig' ? getItem('cig', 'Stagionalità CIG', '📉')
-        : section === 'mepa' ? getItem('mepa', 'Analisi MEPA', '📊')
+        : section === 'mepa' ? getItem('mepa', 'Abilitazioni CPV MEPA', '📊')
         : section === 'rdo' ? getItem('rdo', 'RdO', '📝')
         : section === 'analytics' ? getItem('analytics', 'Analisi Incrociata', '🔬')
         : section === 'statistics' ? getItem('statistics', 'Statistiche', '📈')
@@ -469,7 +466,7 @@ function navigateTo(section) {
       'fatture-attive': 'Fatture attive',
       'fatture-passive': 'Fatture passive',
       'fatture-fuori-campo': 'Fuori campo IVA',
-      mepa: 'MEPA',
+      mepa: 'CPV MEPA',
       analytics: 'Analisi',
       notifiche: 'Notifiche',
       automazioni: 'Automazioni',
@@ -478,8 +475,7 @@ function navigateTo(section) {
       settings: 'Impostazioni',
       statistics: 'Statistiche',
       mappa: 'Mappa CRM',
-      utenti: 'Utenti',
-      ai: 'AI Assistant'
+      utenti: 'Utenti'
     };
     mobileTitle.textContent = titleMap[section] || 'Horygon CRM';
   }
@@ -751,9 +747,16 @@ function renderOrdiniMobileCards(rows = []) {
       <div class="mobile-record-meta">
         <span><strong>Data</strong> ${formatDateIt(o.data_ordine)}</span>
         <span><strong>Totale</strong> ${formatCurrencyIt(o.totale)}</span>
-        <span><strong>Stato</strong> ${escapeHtml(o.stato || '—')}</span>
+        <span><strong>Stato</strong> ${escapeHtml(String(o.stato || '-').replace(/_/g, ' '))}</span>
       </div>
+      ${renderDocumentSendMeta(o)}
       <div class="mobile-record-actions">
+        <button class="btn btn-outline btn-sm" onclick="openApiPdf('/ordini/${o.id}/pdf')">PDF</button>
+        <button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('ordine',${o.id})">Invia</button>
+        <button class="btn btn-outline btn-sm" onclick="creaDdtDaOrdine(${o.id})">Crea DDT</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteOrdine(${o.id})">Elimina</button>
+        ${renderDocumentLogButton('ordine', o.id, 'mobile')}
+        ${renderStateBadge(o.stato)}
         <select class="notification-urgency-select order-state-select" onchange="cambiaStatoOrdine(${o.id},this.value)">
           ${['ricevuto','confermato','in_lavorazione','spedito','consegnato','annullato'].map(s => `<option value="${s}"${o.stato === s ? ' selected' : ''}>${s}</option>`).join('')}
         </select>
@@ -1071,7 +1074,7 @@ async function loadProdotti() {
     return `<tr>
       <td><code>${p.codice_interno}</code></td>
       <td>${p.nome}<div style="font-size:11px;color:var(--text-muted)">${p.fatture_count || 0} fatture | ${p.ddt_count || 0} DDT</div></td>
-      <td>${p.categoria_nome || '—'}</td>
+      <td>${p.categoria_nome || '—'}<div style="font-size:11px;color:var(--text-muted)">${p.cpv_mepa ? escapeHtml(formatCpvDisplay(p.cpv_mepa)) : 'CPV non assegnato'}</div></td>
       <td><strong style="color:${(p.giacenza||0) > 0 ? 'var(--success)' : 'var(--danger)'}">${p.giacenza || 0}</strong></td>
       <td>${listino ? '€ ' + listino.prezzo.toFixed(2) : '—'}</td>
       <td>${margine}</td>
@@ -1093,10 +1096,13 @@ async function editProdotto(id) {
   document.getElementById('prod-desc').value = p.descrizione || '';
   document.getElementById('prod-um').value = p.unita_misura || 'pz';
   document.getElementById('prod-peso').value = p.peso_kg || '';
-  ['prod-upload-foto','prod-upload-fatture','prod-upload-bolle'].forEach(id => {
+  document.getElementById('prod-cpv-mepa').value = p.cpv_mepa || '';
+  document.getElementById('prod-cpv-mepa-label').value = p.cpv_mepa_entry ? getRecordLabel('mepa-cpv', p.cpv_mepa_entry) : (p.cpv_mepa ? formatCpvDisplay(p.cpv_mepa) : '');
+  ['prod-upload-foto','prod-upload-fatture','prod-upload-bolle','prod-upload-certificati'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
+  renderProdottoStoredFiles(p.media || []);
   await loadCategorie();
   document.getElementById('prod-categoria').value = p.categoria_id || '';
   // Tab fornitori
@@ -1156,6 +1162,30 @@ function renderProdottoMediaPanel(p) {
     </div>`;
 }
 
+function renderProdottoStoredFiles(media = []) {
+  const box = document.getElementById('prod-media-links');
+  if (!box) return;
+  if (!media.length) {
+    box.innerHTML = '<div style="color:var(--text-muted);font-size:12px">Nessun file salvato.</div>';
+    return;
+  }
+  const labels = {
+    immagine: 'Foto',
+    pdf: 'Documento',
+    certificazione: 'Certificato',
+    scheda_tecnica: 'Scheda tecnica'
+  };
+  box.innerHTML = media.map(file => `
+    <div class="saved-file-link">
+      <div>
+        <strong>${labels[file.tipo] || file.tipo || 'File'}</strong><br>
+        <a href="${file.path}" target="_blank">${escapeHtml(file.nome_file || 'Apri file')}</a>
+      </div>
+      <span style="color:var(--text-muted);font-size:11px">${escapeHtml(file.tipo || '')}</span>
+    </div>
+  `).join('');
+}
+
 function showProdTab(tab) {
   ['fornitori','fatture','listini'].forEach(t => {
     document.getElementById(`prod-tab-${t}`).style.display = t === tab ? 'block' : 'none';
@@ -1173,6 +1203,7 @@ async function salvaProdotto() {
     nome: document.getElementById('prod-nome').value,
     descrizione: document.getElementById('prod-desc').value,
     categoria_id: document.getElementById('prod-categoria').value || null,
+    cpv_mepa: document.getElementById('prod-cpv-mepa').value || null,
     unita_misura: document.getElementById('prod-um').value,
     peso_kg: parseFloat(document.getElementById('prod-peso').value) || null,
     attivo: 1,
@@ -1194,9 +1225,11 @@ async function uploadProdottoFiles(prodottoId) {
   const foto = document.getElementById('prod-upload-foto')?.files;
   const fatture = document.getElementById('prod-upload-fatture')?.files;
   const bolle = document.getElementById('prod-upload-bolle')?.files;
+  const certificati = document.getElementById('prod-upload-certificati')?.files;
   if (foto?.length) await uploadFotoProdotto(prodottoId, foto, 'immagine');
   if (fatture?.length) await uploadFotoProdotto(prodottoId, fatture, 'pdf');
   if (bolle?.length) await uploadFotoProdotto(prodottoId, bolle, 'pdf');
+  if (certificati?.length) await uploadFotoProdotto(prodottoId, certificati, 'certificazione');
 }
 
 function nuovoProdotto() {
@@ -1207,11 +1240,14 @@ function nuovoProdotto() {
   document.getElementById('prod-desc').value = '';
   document.getElementById('prod-um').value = 'pz';
   document.getElementById('prod-peso').value = '';
+  document.getElementById('prod-cpv-mepa').value = '';
+  document.getElementById('prod-cpv-mepa-label').value = '';
   document.getElementById('prod-tabs').style.display = 'none';
-  ['prod-upload-foto','prod-upload-fatture','prod-upload-bolle'].forEach(id => {
+  ['prod-upload-foto','prod-upload-fatture','prod-upload-bolle','prod-upload-certificati'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
+  renderProdottoStoredFiles([]);
   loadCategorie();
   openModal('modal-prodotto');
 }
@@ -1269,6 +1305,92 @@ function escapeAttr(value) {
   return String(value ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function getRecordLabel(entity, row) {
+  if (entity === 'prodotti') return [row.codice_interno, row.nome].filter(Boolean).join(' - ');
+  if (entity === 'anagrafiche') return row.ragione_sociale || row.nome || row.email || '';
+  if (entity === 'mepa-cpv') return [formatCpvDisplay(row.codice_cpv || ''), row.desc || row.descrizione, row.categoria].filter(Boolean).join(' - ');
+  return row.nome || row.ragione_sociale || row.codice_interno || row.id;
+}
+
+async function openRecordPicker(entity, options = {}) {
+  const rows = entity === 'prodotti'
+    ? await api('GET', '/prodotti')
+    : entity === 'mepa-cpv'
+      ? await api('GET', '/mepa/cpv-catalog?attivo=1')
+      : await api('GET', `/anagrafiche${options.filterTipo ? `?tipo=${encodeURIComponent(options.filterTipo)}` : ''}`);
+  recordPickerState = { entity, rows: rows || [], options };
+  const head = document.getElementById('record-picker-head');
+  const search = document.getElementById('record-picker-search');
+  if (search) search.value = '';
+  if (head) {
+    head.innerHTML = entity === 'prodotti'
+      ? '<th>Codice</th><th>Nome</th><th>Categoria</th><th></th>'
+      : entity === 'mepa-cpv'
+        ? '<th>CPV</th><th>Descrizione</th><th>Categoria</th><th></th>'
+        : '<th>Ragione sociale</th><th>Tipo</th><th>P.IVA</th><th></th>';
+  }
+  renderRecordPickerRows(recordPickerState.rows);
+  openModal('modal-record-picker');
+}
+
+function filterRecordPicker() {
+  if (!recordPickerState) return;
+  const q = (document.getElementById('record-picker-search')?.value || '').trim().toLowerCase();
+  const filtered = !q ? recordPickerState.rows : recordPickerState.rows.filter(row => JSON.stringify(row).toLowerCase().includes(q));
+  renderRecordPickerRows(filtered);
+}
+
+function renderRecordPickerRows(rows = []) {
+  const body = document.getElementById('record-picker-body');
+  if (!body || !recordPickerState) return;
+  body.innerHTML = rows.map(row => recordPickerState.entity === 'prodotti'
+    ? `<tr>
+        <td>${escapeHtml(row.codice_interno || '-')}</td>
+        <td>${escapeHtml(row.nome || '-')}</td>
+        <td>${escapeHtml(row.categoria || row.categoria_nome || '-')}</td>
+        <td><button type="button" class="btn btn-outline btn-sm" onclick="selectRecordPicker(${row.id})">Seleziona</button></td>
+      </tr>`
+    : recordPickerState.entity === 'mepa-cpv'
+      ? `<tr>
+          <td><code>${escapeHtml(formatCpvDisplay(row.codice_cpv || '-'))}</code></td>
+          <td>${escapeHtml(row.desc || row.descrizione || '-')}</td>
+          <td>${escapeHtml(row.categoria || '-')}</td>
+          <td><button type="button" class="btn btn-outline btn-sm" onclick="selectRecordPicker('${escapeAttr(row.codice_cpv || '')}')">Seleziona</button></td>
+        </tr>`
+    : `<tr>
+        <td>${escapeHtml(row.ragione_sociale || row.nome || '-')}</td>
+        <td>${escapeHtml(row.tipo || '-')}</td>
+        <td>${escapeHtml(row.piva || '-')}</td>
+        <td><button type="button" class="btn btn-outline btn-sm" onclick="selectRecordPicker(${row.id})">Seleziona</button></td>
+      </tr>`
+  ).join('') || '<tr><td colspan="4" style="color:var(--text-muted)">Nessun record trovato.</td></tr>';
+}
+
+function selectRecordPicker(id) {
+  if (!recordPickerState) return;
+  const row = recordPickerState.rows.find(item => recordPickerState.entity === 'mepa-cpv'
+    ? String(item.codice_cpv) === String(id)
+    : String(item.id) === String(id));
+  if (!row) return;
+  const { targetId, labelId, onSelect } = recordPickerState.options || {};
+  if (targetId) {
+    const target = document.getElementById(targetId);
+    if (target) target.value = recordPickerState.entity === 'mepa-cpv' ? (row.codice_cpv || '') : row.id;
+  }
+  if (labelId) {
+    const label = document.getElementById(labelId);
+    if (label) label.value = getRecordLabel(recordPickerState.entity, row);
+  }
+  if (targetId === 'fatt-anagrafica') {
+    if (document.getElementById('fatt-piva') && !document.getElementById('fatt-piva').value) document.getElementById('fatt-piva').value = row.piva || '';
+    if (document.getElementById('fatt-cf') && !document.getElementById('fatt-cf').value) document.getElementById('fatt-cf').value = row.cf || '';
+  }
+  if (typeof onSelect === 'function') onSelect(row);
+  const picker = document.getElementById('modal-record-picker');
+  if (picker) picker.style.display = 'none';
+  recordPickerState = null;
+}
+
 function getProductOptions(cache, selectedId) {
   return `<option value="">Seleziona...</option>${(cache || []).map(p => `<option value="${p.id}"${String(selectedId || '') === String(p.id) ? ' selected' : ''}>${escapeHtml(p.codice_interno || '')} - ${escapeHtml(p.nome || '')}</option>`).join('')}`;
 }
@@ -1283,10 +1405,18 @@ function calcolaTotaleRiga({ quantita, prezzo_unitario, sconto = 0, aliquota_iva
 }
 
 function buildDocumentoRigaHtml(prefix, cache, data = {}) {
+  const selectedProduct = (cache || []).find(p => String(p.id) === String(data.prodotto_id || ''));
   return `
     <div class="${prefix}-riga dynamic-line-card">
       <div class="form-row">
-        <div class="form-group"><label>Articolo</label><select class="${prefix}-prodotto">${getProductOptions(cache, data.prodotto_id)}</select></div>
+        <div class="form-group">
+          <label>Articolo</label>
+          <select class="${prefix}-prodotto" style="display:none">${getProductOptions(cache, data.prodotto_id)}</select>
+          <div class="picker-input-row">
+            <input type="text" class="${prefix}-prodotto-label" value="${escapeAttr(selectedProduct ? getRecordLabel('prodotti', selectedProduct) : '')}" readonly placeholder="Seleziona articolo">
+            <button type="button" class="btn btn-outline btn-sm" onclick="openProductPickerForRow(this,'${prefix}')">Scegli</button>
+          </div>
+        </div>
         <div class="form-group"><label>Descrizione</label><input type="text" class="${prefix}-descrizione" value="${escapeAttr(data.descrizione)}"></div>
       </div>
       <div class="form-row">
@@ -1302,6 +1432,27 @@ function buildDocumentoRigaHtml(prefix, cache, data = {}) {
       <div style="display:flex;justify-content:flex-end"><button type="button" class="btn btn-danger btn-sm" onclick="this.closest('.dynamic-line-card').remove(); ricalcolaRigheDocumento('${prefix}')">Rimuovi</button></div>
     </div>
   `;
+}
+
+function openProductPickerForRow(button, prefix) {
+  const row = button.closest(`.${prefix}-riga`);
+  if (!row) return;
+  const tempId = `picker-target-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const tempLabelId = `picker-label-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const hidden = row.querySelector(`.${prefix}-prodotto`);
+  const label = row.querySelector(`.${prefix}-prodotto-label`);
+  hidden.id = tempId;
+  label.id = tempLabelId;
+  openRecordPicker('prodotti', {
+    targetId: tempId,
+    labelId: tempLabelId,
+    onSelect: (product) => {
+      hidden.value = product.id;
+      label.value = getRecordLabel('prodotti', product);
+      const desc = row.querySelector(`.${prefix}-descrizione`);
+      if (desc && !desc.value) desc.value = product.nome || product.descrizione || '';
+    }
+  });
 }
 
 function buildVatSummaryRowHtml(data = {}) {
@@ -1340,7 +1491,9 @@ function ricalcolaRigheDocumento(prefix) {
   });
   const map = prefix === 'prev'
     ? { imponibile: 'prev-imponibile', iva: 'prev-iva', totale: 'prev-totale' }
-    : { imponibile: 'fatt-imponibile', iva: 'fatt-iva', totale: 'fatt-totale' };
+    : prefix === 'ord'
+      ? { imponibile: 'ord-imponibile', iva: 'ord-iva', totale: 'ord-totale' }
+      : { imponibile: 'fatt-imponibile', iva: 'fatt-iva', totale: 'fatt-totale' };
   const imponibile = document.getElementById(map.imponibile);
   const iva = document.getElementById(map.iva);
   const totale = document.getElementById(map.totale);
@@ -1392,6 +1545,13 @@ function aggiungiRigaPreventivo(data = {}) {
   ricalcolaRigheDocumento('prev');
 }
 
+function aggiungiRigaOrdine(data = {}) {
+  const wrap = document.getElementById('ord-righe');
+  if (!wrap) return;
+  wrap.insertAdjacentHTML('beforeend', buildDocumentoRigaHtml('ord', ordineProdottiCache, data));
+  ricalcolaRigheDocumento('ord');
+}
+
 function aggiungiRigaFattura(data = {}) {
   const wrap = document.getElementById('fatt-righe');
   if (!wrap) return;
@@ -1408,14 +1568,14 @@ function aggiungiRiepilogoIva(data = {}) {
 async function preparePreventivoModal(id = null) {
   const [anag, prodotti] = await Promise.all([api('GET', '/anagrafiche?tipo=cliente'), api('GET', '/prodotti')]);
   preventivoProdottiCache = prodotti || [];
-  const sel = document.getElementById('prev-anagrafica');
-  if (sel) sel.innerHTML = '<option value="">Seleziona...</option>' + (anag || []).map(a => `<option value="${a.id}">${a.ragione_sociale}</option>`).join('');
   document.getElementById('prev-righe').innerHTML = '';
+  const deleteBtn = document.getElementById('btn-del-preventivo');
   if (!id) {
     document.getElementById('prev-id').value = '';
     document.getElementById('prev-codice').value = `PREV-${new Date().toISOString().slice(0,10).replaceAll('-', '')}-${Math.floor(Math.random() * 1000)}`;
     document.getElementById('prev-stato').value = 'bozza';
     document.getElementById('prev-anagrafica').value = '';
+    document.getElementById('prev-anagrafica-label').value = '';
     document.getElementById('prev-valuta').value = 'EUR';
     document.getElementById('prev-data').value = new Date().toISOString().slice(0,10);
     document.getElementById('prev-scadenza').value = '';
@@ -1423,6 +1583,7 @@ async function preparePreventivoModal(id = null) {
     document.getElementById('prev-iva').value = '';
     document.getElementById('prev-totale').value = '';
     document.getElementById('prev-note').value = '';
+    if (deleteBtn) deleteBtn.style.display = 'none';
     aggiungiRigaPreventivo();
     return;
   }
@@ -1431,6 +1592,7 @@ async function preparePreventivoModal(id = null) {
   document.getElementById('prev-codice').value = p.codice_preventivo || '';
   document.getElementById('prev-stato').value = p.stato || 'bozza';
   document.getElementById('prev-anagrafica').value = p.anagrafica_id || '';
+  document.getElementById('prev-anagrafica-label').value = ((anag || []).find(a => String(a.id) === String(p.anagrafica_id || ''))?.ragione_sociale) || p.ragione_sociale || '';
   document.getElementById('prev-valuta').value = p.valuta || 'EUR';
   document.getElementById('prev-data').value = p.data_preventivo || '';
   document.getElementById('prev-scadenza').value = p.data_scadenza || '';
@@ -1438,6 +1600,7 @@ async function preparePreventivoModal(id = null) {
   document.getElementById('prev-iva').value = p.iva ?? '';
   document.getElementById('prev-totale').value = p.totale ?? '';
   document.getElementById('prev-note').value = p.note || '';
+  if (deleteBtn) deleteBtn.style.display = 'inline-flex';
   (p.righe?.length ? p.righe : [{}]).forEach(aggiungiRigaPreventivo);
   ricalcolaRigheDocumento('prev');
 }
@@ -1446,15 +1609,6 @@ async function prepareFatturaModal(id = null) {
   const [anag, prodotti] = await Promise.all([api('GET', '/anagrafiche'), api('GET', '/prodotti')]);
   fatturaProdottiCache = prodotti || [];
   fatturaAnagraficheCache = anag || [];
-  const sel = document.getElementById('fatt-anagrafica');
-  if (sel) {
-    sel.innerHTML = '<option value="">Seleziona...</option>' + fatturaAnagraficheCache.map(a => `<option value="${a.id}" data-piva="${escapeAttr(a.piva || '')}" data-cf="${escapeAttr(a.cf || '')}">${a.ragione_sociale}</option>`).join('');
-    sel.onchange = () => {
-      const opt = sel.options[sel.selectedIndex];
-      if (document.getElementById('fatt-piva') && !document.getElementById('fatt-piva').value) document.getElementById('fatt-piva').value = opt?.dataset?.piva || '';
-      if (document.getElementById('fatt-cf') && !document.getElementById('fatt-cf').value) document.getElementById('fatt-cf').value = opt?.dataset?.cf || '';
-    };
-  }
   document.getElementById('fatt-righe').innerHTML = '';
   document.getElementById('fatt-riepilogo-iva').innerHTML = '';
   if (!id) {
@@ -1463,6 +1617,7 @@ async function prepareFatturaModal(id = null) {
     document.getElementById('fatt-tipo').value = 'emessa';
     document.getElementById('fatt-tipo-documento').value = 'fattura';
     document.getElementById('fatt-anagrafica').value = '';
+    document.getElementById('fatt-anagrafica-label').value = '';
     document.getElementById('fatt-valuta').value = 'EUR';
     document.getElementById('fatt-stato-pagamento').value = 'da_pagare';
     document.getElementById('fatt-data').value = new Date().toISOString().slice(0,10);
@@ -1485,6 +1640,7 @@ async function prepareFatturaModal(id = null) {
   document.getElementById('fatt-tipo').value = f.tipo || 'emessa';
   document.getElementById('fatt-tipo-documento').value = f.tipo_documento || 'fattura';
   document.getElementById('fatt-anagrafica').value = f.anagrafica_id || '';
+  document.getElementById('fatt-anagrafica-label').value = (fatturaAnagraficheCache.find(a => String(a.id) === String(f.anagrafica_id || ''))?.ragione_sociale) || f.ragione_sociale || '';
   document.getElementById('fatt-valuta').value = f.valuta || 'EUR';
   document.getElementById('fatt-stato-pagamento').value = f.stato_pagamento || 'da_pagare';
   document.getElementById('fatt-data').value = f.data || '';
@@ -1512,10 +1668,10 @@ async function loadPreventivi() {
       <td>${p.ragione_sociale || '—'}</td><td>${p.data_preventivo || '—'}</td>
       <td>${p.data_scadenza || '—'}</td>
       <td>${p.totale ? 'EUR ' + Number(p.totale).toFixed(2) : '—'}</td>
-      <td><span class="badge badge-${p.stato}">${p.stato}</span></td>
-      <td><select class="btn btn-outline btn-sm" onchange="cambiaStatoPreventivo(${p.id},this.value)">
+      <td>${renderStateBadge(p.stato)}</td>
+      <td><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-outline btn-sm" onclick="modificaPreventivo(${p.id})">Apri</button><button class="btn btn-outline btn-sm" onclick="openApiPdf('/preventivi/${p.id}/pdf')">PDF</button><button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('preventivo',${p.id})">Invia</button><select class="btn btn-outline btn-sm" onchange="cambiaStatoPreventivo(${p.id},this.value)">
         ${['bozza','inviato','accettato','rifiutato','scaduto'].map(s=>`<option value="${s}"${p.stato===s?' selected':''}>${s}</option>`).join('')}
-      </select></td></tr>`).join('');
+      </select></div></td></tr>`).join('');
   }
   renderSummaryCards('preventivi-summary', [
     { icon: '🧮', label: 'Preventivi', value: rows?.length || 0, meta: stato ? `Filtro: ${stato}` : 'Tutti gli stati', tone: 'primary' },
@@ -1539,7 +1695,7 @@ function renderPreventiviMobileCards(rows) {
           <strong>${p.codice_preventivo}</strong>
           <div class="mobile-record-subtitle">${p.ragione_sociale || 'Cliente non associato'}</div>
         </div>
-        <span class="badge badge-${p.stato}">${p.stato}</span>
+        ${renderStateBadge(p.stato)}
       </div>
       <div class="mobile-record-grid">
         <div><span>Data</span><strong>${p.data_preventivo || '—'}</strong></div>
@@ -1547,6 +1703,10 @@ function renderPreventiviMobileCards(rows) {
         <div><span>Totale</span><strong>${p.totale ? 'EUR ' + Number(p.totale).toFixed(2) : '—'}</strong></div>
       </div>
       <div class="mobile-record-actions">
+        <button class="btn btn-outline btn-sm" onclick="modificaPreventivo(${p.id})">Apri</button>
+        <button class="btn btn-outline btn-sm" onclick="openApiPdf('/preventivi/${p.id}/pdf')">PDF</button>
+        <button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('preventivo',${p.id})">Invia</button>
+        <button class="btn btn-danger btn-sm" onclick="deletePreventivo(${p.id})">Elimina</button>
         <select class="order-state-select" onchange="cambiaStatoPreventivo(${p.id},this.value)">
           ${['bozza','inviato','accettato','rifiutato','scaduto'].map(s=>`<option value="${s}"${p.stato===s?' selected':''}>${s}</option>`).join('')}
         </select>
@@ -1575,9 +1735,61 @@ async function salvaPreventivo() {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+async function deletePreventivo(id = null) {
+  const targetId = id || document.getElementById('prev-id')?.value;
+  if (!targetId || !confirm('Eliminare questo preventivo?')) return;
+  try {
+    await api('DELETE', `/preventivi/${targetId}`);
+    closeAllModals();
+    toast('Preventivo eliminato', 'success');
+    loadPreventivi();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 async function cambiaStatoPreventivo(id, stato) {
   await api('PATCH', `/preventivi/${id}/stato`, { stato });
   loadPreventivi();
+}
+
+async function prepareOrdineModal(context = null) {
+  const [anag, prodotti] = await Promise.all([api('GET', '/anagrafiche'), api('GET', '/prodotti')]);
+  ordineAnagraficheCache = anag || [];
+  ordineProdottiCache = prodotti || [];
+  document.getElementById('ord-righe').innerHTML = '';
+  document.getElementById('ord-id').value = '';
+  document.getElementById('ord-preventivo-id').value = '';
+  document.getElementById('ord-preventivo-label').value = '';
+  document.getElementById('ord-anagrafica').value = '';
+  document.getElementById('ord-anagrafica-label').value = '';
+  document.getElementById('ord-codice').value = `ORD-${new Date().toISOString().slice(0,10).replaceAll('-', '')}-${Math.floor(Math.random() * 1000)}`;
+  document.getElementById('ord-tipo').value = 'vendita';
+  document.getElementById('ord-canale').value = 'diretto';
+  document.getElementById('ord-data').value = new Date().toISOString().slice(0,10);
+  document.getElementById('ord-consegna').value = '';
+  document.getElementById('ord-imponibile').value = '';
+  document.getElementById('ord-iva').value = '';
+  document.getElementById('ord-totale').value = '';
+  document.getElementById('ord-note').value = '';
+
+  if (context?.fromPreventivoId) {
+    const p = await api('GET', `/preventivi/${context.fromPreventivoId}`);
+    document.getElementById('ord-preventivo-id').value = p.id;
+    document.getElementById('ord-preventivo-label').value = p.codice_preventivo || '';
+    document.getElementById('ord-codice').value = `ORD-${String(p.codice_preventivo || p.id).replace(/[^A-Za-z0-9-]/g, '').slice(-20)}`;
+    document.getElementById('ord-anagrafica').value = p.anagrafica_id || '';
+    document.getElementById('ord-anagrafica-label').value = p.ragione_sociale || '';
+    document.getElementById('ord-data').value = p.data_preventivo || new Date().toISOString().slice(0,10);
+    document.getElementById('ord-consegna').value = p.data_scadenza || '';
+    document.getElementById('ord-imponibile').value = p.imponibile ?? '';
+    document.getElementById('ord-iva').value = p.iva ?? '';
+    document.getElementById('ord-totale').value = p.totale ?? '';
+    document.getElementById('ord-note').value = p.note || '';
+    (p.righe?.length ? p.righe : [{}]).forEach(aggiungiRigaOrdine);
+    ricalcolaRigheDocumento('ord');
+    return;
+  }
+
+  aggiungiRigaOrdine();
 }
 
 async function loadOrdini() {
@@ -1588,10 +1800,10 @@ async function loadOrdini() {
     <td><span class="badge badge-${o.tipo==='vendita'?'cliente':'fornitore'}">${o.tipo}</span></td>
     <td>${o.ragione_sociale||'—'}</td><td>${o.data_ordine||'—'}</td>
     <td>${o.totale ? '€ '+o.totale.toFixed(2) : '—'}</td>
-    <td><span class="badge badge-${o.stato}">${o.stato}</span></td>
-    <td><select class="btn btn-outline btn-sm" onchange="cambiaStatoOrdine(${o.id},this.value)">
+    <td>${renderStateBadge(o.stato)}</td>
+      <td><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start"><button class="btn btn-outline btn-sm" onclick="openApiPdf('/ordini/${o.id}/pdf')">PDF</button><button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('ordine',${o.id})">Invia</button><button class="btn btn-outline btn-sm" onclick="creaDdtDaOrdine(${o.id})">Crea DDT</button><button class="btn btn-danger btn-sm" onclick="deleteOrdine(${o.id})">Elimina</button>${renderDocumentLogButton('ordine', o.id, 'desk')}<select class="btn btn-outline btn-sm" onchange="cambiaStatoOrdine(${o.id},this.value)">
       ${['ricevuto','confermato','in_lavorazione','spedito','consegnato','annullato'].map(s=>`<option value="${s}"${o.stato===s?' selected':''}>${s}</option>`).join('')}
-    </select></td></tr>`).join('');
+    </select>${renderDocumentSendMeta(o)}</div></td></tr>`).join('');
   renderSummaryCards('ordini-summary', [
     { icon: '📦', label: 'Ordini visibili', value: rows?.length || 0, meta: tipo ? `Filtro: ${tipo}` : 'Vendita e acquisto', tone: 'primary' },
     { icon: '🟢', label: 'Vendite', value: (rows || []).filter(o => o.tipo === 'vendita').length, meta: 'Ordini lato cliente', tone: 'success' },
@@ -1599,26 +1811,49 @@ async function loadOrdini() {
     { icon: '🚚', label: 'Da chiudere', value: (rows || []).filter(o => !['consegnato', 'annullato'].includes(String(o.stato || '').toLowerCase())).length, meta: 'Ordini ancora attivi', tone: 'warning' }
   ]);
   renderOrdiniMobileCards(rows || []);
-  const anag = await api('GET', '/anagrafiche');
-  const sel = document.getElementById('ord-anagrafica');
-  sel.innerHTML = '<option value="">Seleziona...</option>' + (anag||[]).map(a=>`<option value="${a.id}">${a.ragione_sociale}</option>`).join('');
 }
 
-async function cambiaStatoOrdine(id, stato) { await api('PATCH', `/ordini/${id}/stato`, { stato }); }
+async function cambiaStatoOrdine(id, stato) { await api('PATCH', `/ordini/${id}/stato`, { stato }); loadOrdini(); }
+
+async function deleteOrdine(id) {
+  if (!confirm('Eliminare questo ordine?')) return;
+  try {
+    await api('DELETE', `/ordini/${id}`);
+    toast('Ordine eliminato', 'success');
+    loadOrdini();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function creaDdtDaOrdine(id) {
+  try {
+    const result = await api('POST', `/ordini/${id}/convert-to-ddt`, {});
+    toast(`DDT creato: ${result?.numero_ddt || result?.ddt_id}`, 'success');
+    loadDdt();
+    loadOrdini();
+  } catch (e) { toast(e.message, 'error'); }
+}
 
 async function salvaOrdine() {
   const body = {
+    preventivo_id: document.getElementById('ord-preventivo-id').value || null,
     codice_ordine: document.getElementById('ord-codice').value,
     tipo: document.getElementById('ord-tipo').value,
     anagrafica_id: document.getElementById('ord-anagrafica').value || null,
     canale: document.getElementById('ord-canale').value,
     data_ordine: document.getElementById('ord-data').value,
     data_consegna_prevista: document.getElementById('ord-consegna').value,
+    imponibile: parseFloat(document.getElementById('ord-imponibile').value) || 0,
+    iva: parseFloat(document.getElementById('ord-iva').value) || 0,
     totale: parseFloat(document.getElementById('ord-totale').value) || null,
     note: document.getElementById('ord-note').value,
+    righe: collectDocumentoRighe('ord')
   };
-  try { await api('POST', '/ordini', body); closeAllModals(); toast('Ordine salvato', 'success'); loadOrdini(); }
+  try { await api('POST', '/ordini', body); closeAllModals(); toast('Ordine salvato', 'success'); loadOrdini(); loadPreventivi(); }
   catch (e) { toast(e.message, 'error'); }
+}
+
+async function creaOrdineDaPreventivo(id) {
+  await openModal('modal-ordine', { fromPreventivoId: id });
 }
 
 // ═══════════════════════════════
@@ -1632,40 +1867,45 @@ function ensureDdtModal() {
   modal.id = 'modal-ddt';
   modal.className = 'modal';
   modal.innerHTML = `
-    <div class="modal-box">
+    <div class="modal-box doc-theme-box doc-theme-ddt">
       <div class="modal-title">DDT</div>
-      <div class="form-row">
-        <div class="form-group"><label>Numero DDT</label><input type="text" id="ddt-numero" placeholder="auto se vuoto"></div>
-        <div class="form-group"><label>Tipo</label><select id="ddt-tipo"><option value="uscita">Uscita</option><option value="entrata">Entrata</option></select></div>
+      <div class="form-section-card">
+        <div class="section-card-title">Anagrafica e dati testata</div>
+        <div class="form-row">
+          <div class="form-group"><label>Numero DDT</label><input type="text" id="ddt-numero" placeholder="auto se vuoto"></div>
+          <div class="form-group"><label>Tipo</label><select id="ddt-tipo"><option value="uscita">Uscita</option><option value="entrata">Entrata</option></select></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Data</label><input type="date" id="ddt-data"></div>
+          <div class="form-group"><label>Destinatario / mittente</label><select id="ddt-destinatario"><option value="">Seleziona...</option></select></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Fattura associata (opzionale)</label><select id="ddt-fattura"><option value="">Nessuna</option></select></div>
+          <div class="form-group"><label>Vettore / note corriere</label><input type="text" id="ddt-vettore"></div>
+        </div>
       </div>
-      <div class="form-row">
-        <div class="form-group"><label>Data</label><input type="date" id="ddt-data"></div>
-        <div class="form-group"><label>Destinatario / mittente</label><select id="ddt-destinatario"><option value="">Seleziona...</option></select></div>
+      <div class="form-section-card">
+        <div class="section-card-title">Trasporto e resa</div>
+        <div class="form-row">
+          <div class="form-group"><label>Causale</label><input type="text" id="ddt-causale" placeholder="Vendita, reso, trasferimento..."></div>
+          <div class="form-group"><label>Porto</label><select id="ddt-porto"><option value="">Non indicato</option><option value="Porto Franco">Porto Franco</option><option value="Porto Assegnato">Porto Assegnato</option><option value="Franco destino">Franco destino</option><option value="Franco partenza">Franco partenza</option></select></div>
+          <div class="form-group"><label>Resa</label><input type="text" id="ddt-resa" placeholder="Es. DAP, EXW, franco magazzino"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Colli</label><input type="number" min="0" id="ddt-colli"></div>
+          <div class="form-group"><label>Peso totale kg</label><input type="number" min="0" step="0.01" id="ddt-peso"></div>
+          <div class="form-group"><label>Aspetto beni</label><input type="text" id="ddt-aspetto" placeholder="Cartoni, pallet, sfuso..."></div>
+        </div>
+        <div class="form-group"><label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ddt-spedizione"> Associa spedizione</label></div>
+        <div class="form-row">
+          <div class="form-group"><label>Corriere</label><select id="ddt-corriere"><option value="">Seleziona...</option><option value="dhl">DHL</option><option value="fedex">FedEx</option><option value="sda">SDA</option><option value="mailboxes">Mail Boxes</option><option value="gls">GLS</option><option value="brt">BRT</option><option value="altro">Altro</option></select></div>
+          <div class="form-group"><label>Tracking</label><input type="text" id="ddt-tracking"></div>
+          <div class="form-group"><label>Data/ora trasporto</label><input type="datetime-local" id="ddt-data-trasporto"></div>
+        </div>
       </div>
-      <div class="form-row">
-        <div class="form-group"><label>Fattura associata (opzionale)</label><select id="ddt-fattura"><option value="">Nessuna</option></select></div>
-        <div class="form-group"><label>Vettore / note corriere</label><input type="text" id="ddt-vettore"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>Causale</label><input type="text" id="ddt-causale" placeholder="Vendita, reso, trasferimento..."></div>
-        <div class="form-group"><label>Porto</label><select id="ddt-porto"><option value="">Non indicato</option><option value="Porto Franco">Porto Franco</option><option value="Porto Assegnato">Porto Assegnato</option><option value="Franco destino">Franco destino</option><option value="Franco partenza">Franco partenza</option></select></div>
-        <div class="form-group"><label>Resa</label><input type="text" id="ddt-resa" placeholder="Es. DAP, EXW, franco magazzino"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>Colli</label><input type="number" min="0" id="ddt-colli"></div>
-        <div class="form-group"><label>Peso totale kg</label><input type="number" min="0" step="0.01" id="ddt-peso"></div>
-        <div class="form-group"><label>Aspetto beni</label><input type="text" id="ddt-aspetto" placeholder="Cartoni, pallet, sfuso..."></div>
-      </div>
-      <div class="form-group"><label style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="ddt-spedizione"> Associa spedizione</label></div>
-      <div class="form-row">
-        <div class="form-group"><label>Corriere</label><select id="ddt-corriere"><option value="">Seleziona...</option><option value="dhl">DHL</option><option value="fedex">FedEx</option><option value="sda">SDA</option><option value="mailboxes">Mail Boxes</option><option value="gls">GLS</option><option value="brt">BRT</option><option value="altro">Altro</option></select></div>
-        <div class="form-group"><label>Tracking</label><input type="text" id="ddt-tracking"></div>
-        <div class="form-group"><label>Data/ora trasporto</label><input type="datetime-local" id="ddt-data-trasporto"></div>
-      </div>
-      <div class="form-group">
-        <label>Articoli</label>
+      <div class="form-section-card">
+        <div class="section-card-title section-card-title-between"><span>Articoli</span><button type="button" class="btn btn-outline btn-sm" onclick="aggiungiRigaDdt()">+ Aggiungi articolo</button></div>
         <div id="ddt-righe"></div>
-        <button type="button" class="btn btn-outline btn-sm" onclick="aggiungiRigaDdt()">+ Aggiungi articolo</button>
       </div>
       <div class="form-group"><label>Note</label><textarea id="ddt-note" rows="3" style="width:100%;background:var(--bg-input);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:6px;font-family:inherit;font-size:14px"></textarea></div>
       <div class="form-group"><label>Note spedizione</label><input type="text" id="ddt-note-spedizione"></div>
@@ -1728,7 +1968,17 @@ async function loadDdt() {
     <td>${d.fattura_numero || '-'}</td>
     <td>${d.spedizione_attiva ? `${d.corriere || '-'} ${d.numero_spedizione || ''}` : '-'}</td>
     <td>${d.righe_count || 0}</td>
-    <td><button class="btn btn-outline btn-sm" onclick="openApiPdf('/ddt/${d.id}/pdf')">PDF</button></td></tr>`).join('');
+    <td><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start"><button class="btn btn-outline btn-sm" onclick="openApiPdf('/ddt/${d.id}/pdf')">PDF</button><button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('ddt',${d.id})">Invia</button><button class="btn btn-danger btn-sm" onclick="deleteDdt(${d.id})">Elimina</button>${renderDocumentLogButton('ddt', d.id, 'desk')}${renderDocumentSendMeta(d)}</div></td></tr>`).join('');
+}
+
+async function deleteDdt(id) {
+  if (!confirm('Eliminare questo DDT?')) return;
+  try {
+    await api('DELETE', `/ddt/${id}`);
+    toast('DDT eliminato', 'success');
+    loadDdt();
+    loadMagazzino();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function openApiPdf(path) {
@@ -1738,6 +1988,177 @@ async function openApiPdf(path) {
   const url = URL.createObjectURL(blob);
   window.open(url, '_blank');
   setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+function getDocumentKindLabel(kind) {
+  if (kind === 'preventivo') return 'Preventivo';
+  if (kind === 'ordine') return 'Ordine';
+  if (kind === 'ddt') return 'DDT';
+  return 'Documento';
+}
+
+function getStateBadgeClass(state = '') {
+  const key = String(state || '').trim().toLowerCase().replace(/\s+/g, '_');
+  const map = {
+    aperta: 'badge-state-open',
+    in_corso: 'badge-state-progress',
+    completata: 'badge-state-success',
+    annullata: 'badge-state-danger',
+    bozza: 'badge-state-draft',
+    inviato: 'badge-state-info',
+    accettato: 'badge-state-success',
+    rifiutato: 'badge-state-danger',
+    scaduto: 'badge-state-danger',
+    ricevuto: 'badge-state-open',
+    confermato: 'badge-state-info',
+    in_lavorazione: 'badge-state-progress',
+    spedito: 'badge-state-shipping',
+    consegnato: 'badge-state-success',
+    in_preparazione: 'badge-state-draft',
+    pronta_al_ritiro: 'badge-state-warning',
+    ritirata: 'badge-state-info',
+    in_transito: 'badge-state-shipping',
+    arrivata_al_porto: 'badge-state-info',
+    in_dogana: 'badge-state-warning',
+    sdoganata: 'badge-state-success',
+    in_consegna: 'badge-state-shipping',
+    bloccata: 'badge-state-danger',
+    chiusa: 'badge-state-success'
+  };
+  return map[key] || 'badge-state-neutral';
+}
+
+function renderStateBadge(state, fallback = '-') {
+  const label = state || fallback;
+  return `<span class="badge ${getStateBadgeClass(state)}">${escapeHtml(String(label).replace(/_/g, ' '))}</span>`;
+}
+
+function renderDocumentSendMeta(row = {}) {
+  const count = Number(row.sent_count || 0);
+  const last = row.last_sent_at ? formatDocumentLogDate(row.last_sent_at) : '';
+  return `<div class="doc-send-meta">
+    <span class="doc-send-chip">${count ? `${count} invii` : 'Mai inviato'}</span>
+    ${last ? `<span class="doc-send-chip">${escapeHtml(last)}</span>` : ''}
+  </div>`;
+}
+
+function formatDocumentLogDate(value) {
+  if (!value) return '-';
+  const d = new Date(String(value).replace(' ', 'T'));
+  if (Number.isNaN(d.getTime())) return escapeHtml(String(value));
+  return d.toLocaleString('it-IT');
+}
+
+function getDocumentLogActionLabel(event) {
+  if (event.action === 'documento_inviato') {
+    const to = event.details?.to ? ` a ${event.details.to}` : '';
+    return `Inviato${to}`;
+  }
+  if (event.action === 'documento_stato') {
+    return `Stato: ${event.details?.from || '-'} -> ${event.details?.to || '-'}`;
+  }
+  return event.action || 'Evento';
+}
+
+function renderDocumentLogButton(kind, id, variant = 'desk') {
+  const panelId = `doc-log-${kind}-${id}-${variant}`;
+  return `<div class="doc-log-wrap">
+    <button class="btn btn-outline btn-sm doc-log-trigger" onclick="toggleDocumentLog('${kind}',${id},'${variant}')">i</button>
+    <div id="${panelId}" class="doc-log-panel" style="display:none"></div>
+  </div>`;
+}
+
+async function toggleDocumentLog(kind, id, variant = 'desk') {
+  const panel = document.getElementById(`doc-log-${kind}-${id}-${variant}`);
+  if (!panel) return;
+  const isHidden = panel.style.display === 'none' || !panel.style.display;
+  if (!isHidden) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = 'block';
+  if (panel.dataset.loaded === '1') return;
+  panel.innerHTML = '<div class="doc-log-loading">Caricamento log...</div>';
+  try {
+    const data = await api('GET', `/documenti/${kind}/${id}/log`);
+    const events = data?.events || [];
+    panel.innerHTML = `
+      <div class="doc-log-summary">
+        <strong>Invii:</strong> ${data?.sent_count || 0}
+        <span>${data?.last_sent_at ? `Ultimo: ${formatDocumentLogDate(data.last_sent_at)}` : 'Mai inviato'}</span>
+      </div>
+      <div class="doc-log-events">
+        ${events.length ? events.map(event => `
+          <div class="doc-log-event">
+            <div class="doc-log-event-title">${escapeHtml(getDocumentLogActionLabel(event))}</div>
+            <div class="doc-log-event-meta">${escapeHtml(event.user || 'Sistema')} • ${escapeHtml(formatDocumentLogDate(event.created_at))}</div>
+          </div>
+        `).join('') : '<div class="doc-log-empty">Nessun log disponibile</div>'}
+      </div>
+    `;
+    panel.dataset.loaded = '1';
+  } catch (e) {
+    panel.innerHTML = `<div class="doc-log-empty" style="color:var(--danger)">${escapeHtml(e.message || 'Errore caricamento log')}</div>`;
+  }
+}
+
+function applyDocumentRecipientSelection() {
+  const select = document.getElementById('send-doc-recipient-select');
+  const emailInput = document.getElementById('send-doc-email');
+  if (!select || !emailInput) return;
+  emailInput.value = select.value || emailInput.value || '';
+}
+
+async function openSendDocumentModal(kind, id) {
+  try {
+    const data = await api('GET', `/documenti/${kind}/${id}/recipients`);
+    if (!data?.document) throw new Error('Documento non trovato');
+    const label = `${getDocumentKindLabel(kind)} ${data.document.codice || `#${id}`}`;
+    document.getElementById('send-doc-kind').value = kind;
+    document.getElementById('send-doc-id').value = id;
+    document.getElementById('send-doc-label').value = label;
+    document.getElementById('send-doc-subject').value = `${label} - Horygon`;
+    document.getElementById('send-doc-body').value = [
+      `Buongiorno,`,
+      ``,
+      `in allegato trovi ${kind === 'ddt' ? 'il' : 'il'} ${getDocumentKindLabel(kind).toLowerCase()} ${data.document.codice || `#${id}`}.`,
+      ``,
+      `Restiamo a disposizione per qualsiasi chiarimento.`,
+      ``,
+      `Horygon S.r.l.`
+    ].join('\n');
+    documentRecipientOptions = data.emails || [];
+    const select = document.getElementById('send-doc-recipient-select');
+    select.innerHTML = '<option value="">Seleziona...</option>' + documentRecipientOptions
+      .map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`)
+      .join('');
+    document.getElementById('send-doc-email').value = data.document.email || '';
+    openModal('modal-send-document');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function sendDocumentEmail() {
+  const kind = document.getElementById('send-doc-kind').value;
+  const id = document.getElementById('send-doc-id').value;
+  const to = document.getElementById('send-doc-email').value.trim();
+  const subject = document.getElementById('send-doc-subject').value.trim();
+  const text = document.getElementById('send-doc-body').value.trim();
+  if (!to || !subject || !text) {
+    toast('Compila destinatario, oggetto e messaggio', 'error');
+    return;
+  }
+  try {
+    await api('POST', '/documenti/send', { kind, id, to, subject, text });
+    closeAllModals();
+    toast('Documento inviato via email', 'success');
+    if (kind === 'preventivo') loadPreventivi();
+    if (kind === 'ordine') loadOrdini();
+    if (kind === 'ddt') loadDdt();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
 }
 
 async function salvaDdt() {
@@ -1903,7 +2324,7 @@ async function loadAttivita() {
             <strong>${escapeHtml(a.oggetto || a.tipo)}</strong>
             ${a.ragione_sociale ? `<span style="color:var(--text-muted)"> — ${escapeHtml(a.ragione_sociale)}</span>` : ''}
           </div>
-          <span class="badge">${escapeHtml(a.stato || 'aperta')}</span>
+          ${renderStateBadge(a.stato || 'aperta')}
         </div>
         <div style="font-size:12px;color:var(--text-muted);margin-top:4px">
           ${a.data_ora ? new Date(a.data_ora).toLocaleString('it-IT') : ''}
@@ -2272,8 +2693,8 @@ async function loadRdoPage() {
       .sort((a, b) => b.count - a.count);
 
     wrap.innerHTML = `
-      <div style="display:grid;grid-template-columns:minmax(260px, 360px) 1fr;gap:16px;align-items:start">
-        <div class="table-wrapper">
+      <div class="rdo-layout-grid">
+        <div class="table-wrapper rdo-side-table">
           <table class="data-table">
             <thead>
               <tr>
@@ -2285,44 +2706,78 @@ async function loadRdoPage() {
             <tbody>
               ${categorie.map(item => `
                 <tr>
-                  <td>${escapeHtml(item.categoria)}</td>
-                  <td>${item.count}</td>
-                  <td>${item.matched}</td>
+                  <td>
+                    <div class="rdo-category-cell">
+                      <strong>${escapeHtml(item.categoria)}</strong>
+                    </div>
+                  </td>
+                  <td><span class="rdo-pill rdo-pill-neutral">${item.count}</span></td>
+                  <td><span class="rdo-pill ${item.matched ? 'rdo-pill-success' : 'rdo-pill-neutral'}">${item.matched}</span></td>
                 </tr>
               `).join('')}
             </tbody>
           </table>
         </div>
-        <div class="table-wrapper">
-          <table class="data-table">
+        <div class="table-wrapper rdo-main-table">
+          <table class="data-table rdo-results-table">
             <thead>
               <tr>
-                <th>Riga</th>
-                <th>Ente</th>
-                <th>Gara / Oggetto</th>
-                <th>Categoria RdO</th>
-                <th>Categorie trovate</th>
+                <th style="width:72px">Riga</th>
+                <th>Dettaglio RdO</th>
+                <th>Categoria e match</th>
                 <th>CPV trovati</th>
-                <th>Scadenza</th>
+                <th style="width:120px">Scadenza</th>
               </tr>
             </thead>
             <tbody>
               ${rows.map(r => {
                 const categorieTrovate = [...new Set((r.cpv_matches || []).map(m => m.categoria_catalogo).filter(Boolean))];
-                const cpvTrovati = (r.cpv_matches || []).map(m => `${m.codice_cpv_display || m.codice_cpv} (${m.score})`);
+                const cpvMatches = r.cpv_matches || [];
+                const cpvTrovati = cpvMatches.map(m => ({
+                  codice: m.codice_cpv_display || m.codice_cpv,
+                  score: m.score,
+                  descrizione: m.descrizione_cpv || ''
+                }));
+                const topCpv = cpvTrovati.slice(0, 3);
                 return `
                   <tr>
-                    <td><strong>${escapeHtml(r.row_index || '-')}</strong></td>
-                    <td style="min-width:180px">${escapeHtml(r.ente || '-')}</td>
-                    <td style="min-width:280px">${escapeHtml(r.gara || '-')}</td>
-                    <td style="min-width:220px">${escapeHtml((r.categoria || '-').substring(0, 180))}</td>
-                    <td style="min-width:220px;font-size:12px">
-                      ${categorieTrovate.length ? categorieTrovate.map(item => `<div>${escapeHtml(item)}</div>`).join('') : '<span style="color:var(--text-muted)">Nessuna</span>'}
+                    <td>
+                      <div class="rdo-row-index">
+                        <strong>#${escapeHtml(r.row_index || '-')}</strong>
+                      </div>
                     </td>
-                    <td style="min-width:220px;font-size:12px">
-                      ${cpvTrovati.length ? cpvTrovati.map(item => `<div><code>${escapeHtml(item)}</code></div>`).join('') : '<span style="color:var(--text-muted)">Nessuno</span>'}
+                    <td>
+                      <div class="rdo-detail-cell">
+                        <div class="rdo-ente">${escapeHtml(r.ente || 'Ente non indicato')}</div>
+                        <div class="rdo-gara">${escapeHtml(r.gara || 'Oggetto non indicato')}</div>
+                      </div>
                     </td>
-                    <td style="color:${getDeadlineColor(r.scadenza)}">${escapeHtml(r.scadenza || '-')}</td>
+                    <td>
+                      <div class="rdo-match-cell">
+                        <div class="rdo-category-main">${escapeHtml((r.categoria || 'Senza categoria').substring(0, 180))}</div>
+                        <div class="rdo-pill-row">
+                          <span class="rdo-pill ${cpvMatches.length ? 'rdo-pill-success' : 'rdo-pill-neutral'}">${cpvMatches.length} match</span>
+                          <span class="rdo-pill rdo-pill-neutral">${categorieTrovate.length} categorie</span>
+                        </div>
+                        <div class="rdo-category-list">
+                          ${categorieTrovate.length ? categorieTrovate.map(item => `<span class="rdo-tag">${escapeHtml(item)}</span>`).join('') : '<span style="color:var(--text-muted)">Nessuna categoria trovata</span>'}
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="rdo-cpv-list">
+                        ${topCpv.length ? topCpv.map(item => `
+                          <div class="rdo-cpv-item">
+                            <div><code>${escapeHtml(item.codice)}</code> <span class="rdo-score">score ${escapeHtml(item.score)}</span></div>
+                            ${item.descrizione ? `<div class="rdo-cpv-desc">${escapeHtml(item.descrizione)}</div>` : ''}
+                          </div>
+                        `).join('') : '<span style="color:var(--text-muted)">Nessun CPV</span>'}
+                        ${cpvTrovati.length > 3 ? `<div class="rdo-more">+${cpvTrovati.length - 3} altri match</div>` : ''}
+                      </div>
+                    </td>
+                    <td>
+                      <span class="rdo-deadline" style="color:${getDeadlineColor(r.scadenza)}">${escapeHtml(r.scadenza || '-')}</span>
+                    </td>
                   </tr>
                 `;
               }).join('')}
@@ -2730,19 +3185,12 @@ async function loadStatistics() {
 }
 
 async function loadSettingsPage() {
-  const [rows, aiSettings, aiStatus] = await Promise.all([
-    api('GET', '/system/settings'),
-    api('GET', '/ai/settings'),
-    api('GET', '/ai/status')
-  ]);
+  const rows = await api('GET', '/system/settings');
   const box = document.getElementById('settings-list');
   box.innerHTML = (rows || []).map(r => `<div style="display:grid;grid-template-columns:220px 1fr;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)">
       <div><strong>${r.key}</strong><div style="font-size:12px;color:var(--text-muted)">${r.type}</div></div>
       <input type="text" data-setting-key="${r.key}" data-setting-type="${r.type}" value="${String(r.value || '').replace(/"/g, '&quot;')}">
     </div>`).join('');
-  renderAiSettingsForm(aiSettings || {});
-  const statusBox = document.getElementById('ai-settings-status');
-  if (statusBox) statusBox.innerHTML = aiStatus?.message || 'Configura un provider AI in Impostazioni > AI';
 }
 
 async function saveSettingsPage() {
@@ -2753,113 +3201,6 @@ async function saveSettingsPage() {
   }));
   await api('PUT', '/system/settings', { items });
   toast('Impostazioni salvate', 'success');
-}
-
-function renderAiSettingsForm(settings = {}) {
-  const box = document.getElementById('ai-settings-form');
-  if (!box) return;
-  box.innerHTML = `
-    ${renderAiProviderCard('OpenAI / ChatGPT', 'openai', settings.openai || {}, true)}
-    ${renderAiProviderCard('Anthropic / Claude', 'claude', settings.claude || {}, false)}
-  `;
-}
-
-function renderAiProviderCard(title, prefix, cfg, isPrimary) {
-  return `
-    <div class="ai-settings-card">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px">
-        <div>
-          <strong>${title}</strong>
-          <div style="font-size:12px;color:var(--text-muted)">${isPrimary ? 'Provider principale consigliato' : 'Provider alternativo o fallback'}</div>
-        </div>
-        <label style="display:flex;align-items:center;gap:8px;font-size:13px"><input type="checkbox" data-ai="${prefix}.enabled" ${cfg.enabled ? 'checked' : ''}> Attivo</label>
-      </div>
-      <div class="form-group"><label>API key</label><input type="password" data-ai="${prefix}.api_key" placeholder="${cfg.api_key || (cfg.api_key_configured ? 'Chiave salvata' : 'Incolla qui la chiave')}"></div>
-      <div class="form-row">
-        <div class="form-group"><label>Base URL</label><input type="text" data-ai="${prefix}.base_url" value="${escapeAttr(cfg.base_url || '')}" placeholder="${prefix === 'openai' ? 'https://api.openai.com/v1' : 'https://api.anthropic.com'}"></div>
-        <div class="form-group"><label>Modello predefinito</label><input type="text" data-ai="${prefix}.default_model" value="${escapeAttr(cfg.default_model || '')}" placeholder="${prefix === 'openai' ? 'gpt-5.5' : 'claude-sonnet-4-5'}"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>Modello fallback</label><input type="text" data-ai="${prefix}.fallback_model" value="${escapeAttr(cfg.fallback_model || '')}"></div>
-        <div class="form-group"><label>Max token</label><input type="number" data-ai="${prefix}.max_tokens" value="${escapeAttr(cfg.max_tokens || 4000)}"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>Temperature</label><input type="number" step="0.1" data-ai="${prefix}.temperature" value="${escapeAttr(cfg.temperature || 0.2)}"></div>
-        <div class="form-group"><label>Limite costo mensile</label><input type="number" step="0.01" data-ai="${prefix}.monthly_cost_limit" value="${escapeAttr(cfg.monthly_cost_limit || '')}"></div>
-      </div>
-      ${prefix === 'claude' ? `<div class="form-group"><label style="display:flex;align-items:center;gap:8px;font-size:13px"><input type="checkbox" data-ai="${prefix}.use_as_fallback" ${cfg.use_as_fallback ? 'checked' : ''}> Usa come fallback</label></div>` : ''}
-    </div>
-  `;
-}
-
-async function saveAiSettingsPage() {
-  const payload = { openai: {}, claude: {}, runtime: {} };
-  document.querySelectorAll('[data-ai]').forEach(el => {
-    const [provider, field] = el.dataset.ai.split('.');
-    let value = el.type === 'checkbox' ? el.checked : el.value;
-    if (el.type === 'number' && value !== '') value = Number(value);
-    if (field === 'api_key' && !String(value || '').trim()) return;
-    payload[provider][field] = value;
-  });
-  await api('PUT', '/ai/settings', payload);
-  toast('Impostazioni AI salvate', 'success');
-  loadSettingsPage();
-}
-
-async function testAiSettings() {
-  const result = await api('POST', '/ai/test', {});
-  toast(result?.message || 'Test completato', result?.ok ? 'success' : 'info');
-  loadAiAssistantStatus();
-}
-
-async function loadAiAssistantStatus() {
-  const status = await api('GET', '/ai/status');
-  const statusBox = document.getElementById('ai-assistant-status');
-  if (statusBox) statusBox.textContent = status?.message || 'AI Assistant';
-}
-
-function renderAiSuggestions(list = aiAssistantSuggestions) {
-  const wrap = document.getElementById('ai-assistant-suggestions');
-  if (!wrap) return;
-  wrap.innerHTML = list.map(item => `<button class="ai-suggestion-chip" onclick="fillAiPrompt('${escapeAttr(item)}')">${escapeHtml(item)}</button>`).join('');
-}
-
-function fillAiPrompt(value) {
-  const box = document.getElementById('ai-assistant-prompt');
-  if (box) box.value = value;
-}
-
-function toggleAiAssistant(force) {
-  const panel = document.getElementById('ai-assistant-panel');
-  if (!panel) return;
-  const shouldOpen = typeof force === 'boolean' ? force : !panel.classList.contains('open');
-  panel.classList.toggle('open', shouldOpen);
-  if (shouldOpen) {
-    renderAiSuggestions();
-    loadAiAssistantStatus();
-  }
-}
-
-async function runAiAssistant() {
-  const prompt = document.getElementById('ai-assistant-prompt')?.value?.trim();
-  if (!prompt) {
-    toast('Scrivi una richiesta', 'error');
-    return;
-  }
-  const box = document.getElementById('ai-assistant-results');
-  if (box) box.textContent = 'Elaborazione in corso...';
-  try {
-    const result = await api('POST', '/ai/assist', { prompt });
-    aiAssistantSuggestions = result?.suggestions?.length ? result.suggestions : aiAssistantSuggestions;
-    renderAiSuggestions();
-    if (box) {
-      const items = (result.items || []).slice(0, 10).map(item => `- ${Object.values(item).filter(v => v !== null && v !== '').slice(0, 5).join(' | ')}`).join('\n');
-      box.textContent = `${result.answer || ''}${items ? `\n\n${items}` : ''}`;
-    }
-  } catch (e) {
-    if (box) box.textContent = e.message;
-    toast(e.message, 'error');
-  }
 }
 
 function driveIcon(mime) {
@@ -3240,7 +3581,7 @@ const SEZIONI_LABEL = {
   'fatture-fuori-campo': 'Fuori campo IVA',
   attivita: 'Attività CRM',
   documenti: 'Documenti',
-  mepa: 'Analisi MEPA',
+  mepa: 'Abilitazioni CPV MEPA',
   cig: 'Stagionalità CIG',
   analytics: 'Analisi Incrociata',
   statistics: 'Statistics',
@@ -3390,10 +3731,11 @@ async function salvaPermessi() {
 // ═══════════════════════════════
 // MODAL UTILS
 // ═══════════════════════════════
-async function openModal(id) {
-  if (id === 'modal-ddt') await preparaDdtModal();
-  if (id === 'modal-preventivo') await preparePreventivoModal();
-  if (id === 'modal-fattura') await prepareFatturaModal();
+async function openModal(id, context = null) {
+  if (id === 'modal-ddt') await preparaDdtModal(context);
+  if (id === 'modal-preventivo') await preparePreventivoModal(context);
+  if (id === 'modal-ordine') await prepareOrdineModal(context);
+  if (id === 'modal-fattura') await prepareFatturaModal(context);
   document.getElementById('overlay').style.display = 'block';
   document.getElementById(id).style.display = 'block';
 }
@@ -3466,7 +3808,7 @@ async function loadAttivita() {
             <strong>${escapeHtml(a.oggetto || a.tipo)}</strong>
             ${a.ragione_sociale ? `<span style="color:var(--text-muted)"> — ${escapeHtml(a.ragione_sociale)}</span>` : ''}
           </div>
-          <span class="badge">${escapeHtml(a.stato || 'aperta')}</span>
+          ${renderStateBadge(a.stato || 'aperta')}
         </div>
         <div style="font-size:12px;color:var(--text-muted);margin-top:4px">
           ${a.data_ora ? new Date(a.data_ora).toLocaleString('it-IT') : ''}
@@ -3600,10 +3942,10 @@ async function loadPreventivi() {
       <td>${p.ragione_sociale || '-'}</td><td>${p.data_preventivo || '-'}</td>
       <td>${p.data_scadenza || '-'}</td>
       <td>${p.totale ? `${p.valuta || 'EUR'} ${Number(p.totale).toFixed(2)}` : '-'}</td>
-      <td><span class="badge badge-${p.stato}">${p.stato}</span></td>
-      <td><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-outline btn-sm" onclick="modificaPreventivo(${p.id})">Apri</button><select class="btn btn-outline btn-sm" onchange="cambiaStatoPreventivo(${p.id},this.value)">
+      <td>${renderStateBadge(p.stato)}</td>
+      <td><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start"><button class="btn btn-outline btn-sm" onclick="modificaPreventivo(${p.id})">Apri</button><button class="btn btn-outline btn-sm" onclick="openApiPdf('/preventivi/${p.id}/pdf')">PDF</button><button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('preventivo',${p.id})">Invia</button><button class="btn btn-outline btn-sm" onclick="creaOrdineDaPreventivo(${p.id})">Crea ordine</button><button class="btn btn-danger btn-sm" onclick="deletePreventivo(${p.id})">Elimina</button>${renderDocumentLogButton('preventivo', p.id, 'desk')}<select class="btn btn-outline btn-sm" onchange="cambiaStatoPreventivo(${p.id},this.value)">
         ${['bozza','inviato','accettato','rifiutato','scaduto'].map(s=>`<option value="${s}"${p.stato===s?' selected':''}>${s}</option>`).join('')}
-      </select></div></td></tr>`).join('');
+      </select>${renderDocumentSendMeta(p)}</div></td></tr>`).join('');
   }
   renderSummaryCards('preventivi-summary', [
     { icon: 'P', label: 'Preventivi', value: rows?.length || 0, meta: stato ? `Filtro: ${stato}` : 'Tutti gli stati', tone: 'primary' },
@@ -3624,15 +3966,20 @@ function renderPreventiviMobileCards(rows) {
           <strong>${p.codice_preventivo}</strong>
           <div class="mobile-record-subtitle">${p.ragione_sociale || 'Cliente non associato'}</div>
         </div>
-        <span class="badge badge-${p.stato}">${p.stato}</span>
+        ${renderStateBadge(p.stato)}
       </div>
       <div class="mobile-record-grid">
         <div><span>Data</span><strong>${p.data_preventivo || '-'}</strong></div>
         <div><span>Scadenza</span><strong>${p.data_scadenza || '-'}</strong></div>
         <div><span>Totale</span><strong>${p.totale ? `${p.valuta || 'EUR'} ${Number(p.totale).toFixed(2)}` : '-'}</strong></div>
       </div>
+      ${renderDocumentSendMeta(p)}
       <div class="mobile-record-actions">
         <button class="btn btn-outline btn-sm" onclick="modificaPreventivo(${p.id})">Apri</button>
+        <button class="btn btn-outline btn-sm" onclick="openApiPdf('/preventivi/${p.id}/pdf')">PDF</button>
+        <button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('preventivo',${p.id})">Invia</button>
+        <button class="btn btn-outline btn-sm" onclick="creaOrdineDaPreventivo(${p.id})">Crea ordine</button>
+        ${renderDocumentLogButton('preventivo', p.id, 'mobile')}
         <select class="order-state-select" onchange="cambiaStatoPreventivo(${p.id},this.value)">
           ${['bozza','inviato','accettato','rifiutato','scaduto'].map(s=>`<option value="${s}"${p.stato===s?' selected':''}>${s}</option>`).join('')}
         </select>
@@ -3666,8 +4013,7 @@ async function salvaPreventivo() {
 }
 
 async function modificaPreventivo(id) {
-  await preparePreventivoModal(id);
-  await openModal('modal-preventivo');
+  await openModal('modal-preventivo', id);
 }
 
 async function salvaFattura() {
