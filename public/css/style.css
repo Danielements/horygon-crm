@@ -1309,8 +1309,108 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
   .mobile-record-actions .order-state-select {
     width: 100%;
   }
-  .table-wrapper {
-    border: none;
+  .ai-settings-grid {
+    grid-template-columns: 1fr;
+  }
+  .ai-assistant-panel {
+    right: 12px;
+    left: 12px;
+    width: auto;
+    bottom: 92px;
+    max-height: 72vh;
+  }
+  .ai-assistant-fab {
+    right: 12px;
+    bottom: 92px;
+  }
+.dynamic-lines {
+  display: grid;
+  gap: 12px;
+}
+.dynamic-line-card {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-card) 82%, white 18%);
+}
+.ai-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.ai-settings-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px;
+  background: var(--bg-card);
+}
+.ai-assistant-fab {
+  position: fixed;
+  right: 18px;
+  bottom: 108px;
+  z-index: 90;
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  box-shadow: var(--shadow-lg);
+}
+.ai-assistant-panel {
+  position: fixed;
+  right: 18px;
+  bottom: 176px;
+  width: min(420px, calc(100vw - 24px));
+  max-height: 70vh;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: var(--shadow-lg);
+  z-index: 91;
+  display: none;
+  overflow: hidden;
+}
+.ai-assistant-panel.open { display: block; }
+.ai-assistant-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.ai-assistant-body {
+  padding: 16px;
+  overflow: auto;
+  max-height: calc(70vh - 66px);
+}
+.ai-suggestion-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ai-suggestion-chip {
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 12px;
+}
+.ai-results-box {
+  min-height: 120px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--bg-input);
+  font-size: 14px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+.table-wrapper {
+  border: none;
     box-shadow: none;
     background: transparent;
     overflow: visible;

@@ -14,6 +14,16 @@ let tableEnhancementScheduled = false;
 let googleMapsPromise = null;
 let crmMap = null;
 let crmMapMarkers = [];
+let preventivoProdottiCache = [];
+let fatturaProdottiCache = [];
+let fatturaAnagraficheCache = [];
+let aiAssistantSuggestions = [
+  'Cerca clienti con CAP 04100',
+  'Trova fatture passive scadute',
+  'Mostrami ordini aperti',
+  'Elenca spedizioni in transito',
+  'Trova proforme aperte'
+];
 
 // Redirect da Google OAuth
 const urlToken = new URLSearchParams(window.location.search).get('token');
@@ -468,7 +478,8 @@ function navigateTo(section) {
       settings: 'Impostazioni',
       statistics: 'Statistiche',
       mappa: 'Mappa CRM',
-      utenti: 'Utenti'
+      utenti: 'Utenti',
+      ai: 'AI Assistant'
     };
     mobileTitle.textContent = titleMap[section] || 'Horygon CRM';
   }
@@ -1254,6 +1265,243 @@ async function salvaMovimento() {
 // ═══════════════════════════════
 // ORDINI
 // ═══════════════════════════════
+function escapeAttr(value) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function getProductOptions(cache, selectedId) {
+  return `<option value="">Seleziona...</option>${(cache || []).map(p => `<option value="${p.id}"${String(selectedId || '') === String(p.id) ? ' selected' : ''}>${escapeHtml(p.codice_interno || '')} - ${escapeHtml(p.nome || '')}</option>`).join('')}`;
+}
+
+function calcolaTotaleRiga({ quantita, prezzo_unitario, sconto = 0, aliquota_iva = 0 }) {
+  const qty = parseFloat(quantita || 0) || 0;
+  const price = parseFloat(prezzo_unitario || 0) || 0;
+  const discount = parseFloat(sconto || 0) || 0;
+  const imponibile = Math.max(0, qty * price - discount);
+  const importo_iva = imponibile * ((parseFloat(aliquota_iva || 0) || 0) / 100);
+  return { imponibile, importo_iva, totale_riga: imponibile + importo_iva };
+}
+
+function buildDocumentoRigaHtml(prefix, cache, data = {}) {
+  return `
+    <div class="${prefix}-riga dynamic-line-card">
+      <div class="form-row">
+        <div class="form-group"><label>Articolo</label><select class="${prefix}-prodotto">${getProductOptions(cache, data.prodotto_id)}</select></div>
+        <div class="form-group"><label>Descrizione</label><input type="text" class="${prefix}-descrizione" value="${escapeAttr(data.descrizione)}"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Quantita</label><input type="number" step="0.01" class="${prefix}-quantita" value="${escapeAttr(data.quantita ?? 1)}" oninput="ricalcolaRigheDocumento('${prefix}')"></div>
+        <div class="form-group"><label>Prezzo unitario</label><input type="number" step="0.01" class="${prefix}-prezzo" value="${escapeAttr(data.prezzo_unitario ?? 0)}" oninput="ricalcolaRigheDocumento('${prefix}')"></div>
+        <div class="form-group"><label>Sconto</label><input type="number" step="0.01" class="${prefix}-sconto" value="${escapeAttr(data.sconto ?? 0)}" oninput="ricalcolaRigheDocumento('${prefix}')"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Aliquota IVA</label><input type="number" step="0.01" class="${prefix}-aliquota" value="${escapeAttr(data.aliquota_iva ?? 22)}" oninput="ricalcolaRigheDocumento('${prefix}')"></div>
+        <div class="form-group"><label>Natura IVA</label><input type="text" class="${prefix}-natura" value="${escapeAttr(data.natura_iva)}"></div>
+        <div class="form-group"><label>Totale riga</label><input type="number" step="0.01" class="${prefix}-totale" value="${escapeAttr(data.totale_riga ?? 0)}" readonly></div>
+      </div>
+      <div style="display:flex;justify-content:flex-end"><button type="button" class="btn btn-danger btn-sm" onclick="this.closest('.dynamic-line-card').remove(); ricalcolaRigheDocumento('${prefix}')">Rimuovi</button></div>
+    </div>
+  `;
+}
+
+function buildVatSummaryRowHtml(data = {}) {
+  return `
+    <div class="iva-riga dynamic-line-card">
+      <div class="form-row">
+        <div class="form-group"><label>Aliquota IVA</label><input type="number" step="0.01" class="iva-aliquota" value="${escapeAttr(data.aliquota_iva ?? 22)}"></div>
+        <div class="form-group"><label>Natura IVA</label><input type="text" class="iva-natura" value="${escapeAttr(data.natura_iva)}"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Imponibile</label><input type="number" step="0.01" class="iva-imponibile" value="${escapeAttr(data.imponibile ?? 0)}"></div>
+        <div class="form-group"><label>Imposta</label><input type="number" step="0.01" class="iva-imposta" value="${escapeAttr(data.imposta ?? data.importo_iva ?? 0)}"></div>
+        <div class="form-group"><label>Riferimento</label><input type="text" class="iva-riferimento" value="${escapeAttr(data.riferimento_normativo)}"></div>
+      </div>
+      <div style="display:flex;justify-content:flex-end"><button type="button" class="btn btn-danger btn-sm" onclick="this.closest('.dynamic-line-card').remove()">Rimuovi</button></div>
+    </div>
+  `;
+}
+
+function ricalcolaRigheDocumento(prefix) {
+  const wrap = document.getElementById(`${prefix}-righe`);
+  if (!wrap) return;
+  let imponibileTot = 0;
+  let ivaTot = 0;
+  [...wrap.querySelectorAll(`.${prefix}-riga`)].forEach(row => {
+    const calc = calcolaTotaleRiga({
+      quantita: row.querySelector(`.${prefix}-quantita`)?.value,
+      prezzo_unitario: row.querySelector(`.${prefix}-prezzo`)?.value,
+      sconto: row.querySelector(`.${prefix}-sconto`)?.value,
+      aliquota_iva: row.querySelector(`.${prefix}-aliquota`)?.value
+    });
+    const totalInput = row.querySelector(`.${prefix}-totale`);
+    if (totalInput) totalInput.value = calc.totale_riga.toFixed(2);
+    imponibileTot += calc.imponibile;
+    ivaTot += calc.importo_iva;
+  });
+  const map = prefix === 'prev'
+    ? { imponibile: 'prev-imponibile', iva: 'prev-iva', totale: 'prev-totale' }
+    : { imponibile: 'fatt-imponibile', iva: 'fatt-iva', totale: 'fatt-totale' };
+  const imponibile = document.getElementById(map.imponibile);
+  const iva = document.getElementById(map.iva);
+  const totale = document.getElementById(map.totale);
+  if (imponibile) imponibile.value = imponibileTot.toFixed(2);
+  if (iva) iva.value = ivaTot.toFixed(2);
+  if (totale) totale.value = (imponibileTot + ivaTot).toFixed(2);
+}
+
+function collectDocumentoRighe(prefix) {
+  const wrap = document.getElementById(`${prefix}-righe`);
+  if (!wrap) return [];
+  return [...wrap.querySelectorAll(`.${prefix}-riga`)].map(row => {
+    const quantita = parseFloat(row.querySelector(`.${prefix}-quantita`)?.value || 0) || 0;
+    const prezzo_unitario = parseFloat(row.querySelector(`.${prefix}-prezzo`)?.value || 0) || 0;
+    const sconto = parseFloat(row.querySelector(`.${prefix}-sconto`)?.value || 0) || 0;
+    const aliquota_iva = parseFloat(row.querySelector(`.${prefix}-aliquota`)?.value || 0) || 0;
+    const calc = calcolaTotaleRiga({ quantita, prezzo_unitario, sconto, aliquota_iva });
+    return {
+      prodotto_id: row.querySelector(`.${prefix}-prodotto`)?.value || null,
+      descrizione: row.querySelector(`.${prefix}-descrizione`)?.value || '',
+      quantita,
+      prezzo_unitario,
+      sconto,
+      imponibile: calc.imponibile,
+      aliquota_iva,
+      natura_iva: row.querySelector(`.${prefix}-natura`)?.value || null,
+      importo_iva: calc.importo_iva,
+      totale_riga: calc.totale_riga
+    };
+  }).filter(r => r.descrizione || r.prodotto_id);
+}
+
+function collectVatSummaryRows() {
+  const wrap = document.getElementById('fatt-riepilogo-iva');
+  if (!wrap) return [];
+  return [...wrap.querySelectorAll('.iva-riga')].map(row => ({
+    aliquota_iva: parseFloat(row.querySelector('.iva-aliquota')?.value || 0) || 0,
+    natura_iva: row.querySelector('.iva-natura')?.value || null,
+    imponibile: parseFloat(row.querySelector('.iva-imponibile')?.value || 0) || 0,
+    imposta: parseFloat(row.querySelector('.iva-imposta')?.value || 0) || 0,
+    riferimento_normativo: row.querySelector('.iva-riferimento')?.value || null
+  })).filter(r => r.imponibile || r.imposta || r.natura_iva || r.riferimento_normativo);
+}
+
+function aggiungiRigaPreventivo(data = {}) {
+  const wrap = document.getElementById('prev-righe');
+  if (!wrap) return;
+  wrap.insertAdjacentHTML('beforeend', buildDocumentoRigaHtml('prev', preventivoProdottiCache, data));
+  ricalcolaRigheDocumento('prev');
+}
+
+function aggiungiRigaFattura(data = {}) {
+  const wrap = document.getElementById('fatt-righe');
+  if (!wrap) return;
+  wrap.insertAdjacentHTML('beforeend', buildDocumentoRigaHtml('fatt', fatturaProdottiCache, data));
+  ricalcolaRigheDocumento('fatt');
+}
+
+function aggiungiRiepilogoIva(data = {}) {
+  const wrap = document.getElementById('fatt-riepilogo-iva');
+  if (!wrap) return;
+  wrap.insertAdjacentHTML('beforeend', buildVatSummaryRowHtml(data));
+}
+
+async function preparePreventivoModal(id = null) {
+  const [anag, prodotti] = await Promise.all([api('GET', '/anagrafiche?tipo=cliente'), api('GET', '/prodotti')]);
+  preventivoProdottiCache = prodotti || [];
+  const sel = document.getElementById('prev-anagrafica');
+  if (sel) sel.innerHTML = '<option value="">Seleziona...</option>' + (anag || []).map(a => `<option value="${a.id}">${a.ragione_sociale}</option>`).join('');
+  document.getElementById('prev-righe').innerHTML = '';
+  if (!id) {
+    document.getElementById('prev-id').value = '';
+    document.getElementById('prev-codice').value = `PREV-${new Date().toISOString().slice(0,10).replaceAll('-', '')}-${Math.floor(Math.random() * 1000)}`;
+    document.getElementById('prev-stato').value = 'bozza';
+    document.getElementById('prev-anagrafica').value = '';
+    document.getElementById('prev-valuta').value = 'EUR';
+    document.getElementById('prev-data').value = new Date().toISOString().slice(0,10);
+    document.getElementById('prev-scadenza').value = '';
+    document.getElementById('prev-imponibile').value = '';
+    document.getElementById('prev-iva').value = '';
+    document.getElementById('prev-totale').value = '';
+    document.getElementById('prev-note').value = '';
+    aggiungiRigaPreventivo();
+    return;
+  }
+  const p = await api('GET', `/preventivi/${id}`);
+  document.getElementById('prev-id').value = p.id;
+  document.getElementById('prev-codice').value = p.codice_preventivo || '';
+  document.getElementById('prev-stato').value = p.stato || 'bozza';
+  document.getElementById('prev-anagrafica').value = p.anagrafica_id || '';
+  document.getElementById('prev-valuta').value = p.valuta || 'EUR';
+  document.getElementById('prev-data').value = p.data_preventivo || '';
+  document.getElementById('prev-scadenza').value = p.data_scadenza || '';
+  document.getElementById('prev-imponibile').value = p.imponibile ?? '';
+  document.getElementById('prev-iva').value = p.iva ?? '';
+  document.getElementById('prev-totale').value = p.totale ?? '';
+  document.getElementById('prev-note').value = p.note || '';
+  (p.righe?.length ? p.righe : [{}]).forEach(aggiungiRigaPreventivo);
+  ricalcolaRigheDocumento('prev');
+}
+
+async function prepareFatturaModal(id = null) {
+  const [anag, prodotti] = await Promise.all([api('GET', '/anagrafiche'), api('GET', '/prodotti')]);
+  fatturaProdottiCache = prodotti || [];
+  fatturaAnagraficheCache = anag || [];
+  const sel = document.getElementById('fatt-anagrafica');
+  if (sel) {
+    sel.innerHTML = '<option value="">Seleziona...</option>' + fatturaAnagraficheCache.map(a => `<option value="${a.id}" data-piva="${escapeAttr(a.piva || '')}" data-cf="${escapeAttr(a.cf || '')}">${a.ragione_sociale}</option>`).join('');
+    sel.onchange = () => {
+      const opt = sel.options[sel.selectedIndex];
+      if (document.getElementById('fatt-piva') && !document.getElementById('fatt-piva').value) document.getElementById('fatt-piva').value = opt?.dataset?.piva || '';
+      if (document.getElementById('fatt-cf') && !document.getElementById('fatt-cf').value) document.getElementById('fatt-cf').value = opt?.dataset?.cf || '';
+    };
+  }
+  document.getElementById('fatt-righe').innerHTML = '';
+  document.getElementById('fatt-riepilogo-iva').innerHTML = '';
+  if (!id) {
+    document.getElementById('fatt-id').value = '';
+    document.getElementById('fatt-numero').value = '';
+    document.getElementById('fatt-tipo').value = 'emessa';
+    document.getElementById('fatt-tipo-documento').value = 'fattura';
+    document.getElementById('fatt-anagrafica').value = '';
+    document.getElementById('fatt-valuta').value = 'EUR';
+    document.getElementById('fatt-stato-pagamento').value = 'da_pagare';
+    document.getElementById('fatt-data').value = new Date().toISOString().slice(0,10);
+    document.getElementById('fatt-data-ricezione').value = '';
+    document.getElementById('fatt-scadenza').value = '';
+    document.getElementById('fatt-piva').value = '';
+    document.getElementById('fatt-cf').value = '';
+    document.getElementById('fatt-sdi').value = '';
+    document.getElementById('fatt-imponibile').value = '';
+    document.getElementById('fatt-iva').value = '';
+    document.getElementById('fatt-totale').value = '';
+    document.getElementById('fatt-note').value = '';
+    aggiungiRigaFattura();
+    aggiungiRiepilogoIva();
+    return;
+  }
+  const f = await api('GET', `/fatture/${id}`);
+  document.getElementById('fatt-id').value = f.id;
+  document.getElementById('fatt-numero').value = f.numero || '';
+  document.getElementById('fatt-tipo').value = f.tipo || 'emessa';
+  document.getElementById('fatt-tipo-documento').value = f.tipo_documento || 'fattura';
+  document.getElementById('fatt-anagrafica').value = f.anagrafica_id || '';
+  document.getElementById('fatt-valuta').value = f.valuta || 'EUR';
+  document.getElementById('fatt-stato-pagamento').value = f.stato_pagamento || 'da_pagare';
+  document.getElementById('fatt-data').value = f.data || '';
+  document.getElementById('fatt-data-ricezione').value = f.data_ricezione || '';
+  document.getElementById('fatt-scadenza').value = f.scadenza || '';
+  document.getElementById('fatt-piva').value = f.partita_iva || '';
+  document.getElementById('fatt-cf').value = f.codice_fiscale || '';
+  document.getElementById('fatt-sdi').value = f.sdi_id || '';
+  document.getElementById('fatt-imponibile').value = f.imponibile ?? '';
+  document.getElementById('fatt-iva').value = f.iva ?? '';
+  document.getElementById('fatt-totale').value = f.totale ?? '';
+  document.getElementById('fatt-note').value = f.note || '';
+  (f.righe?.length ? f.righe : [{}]).forEach(aggiungiRigaFattura);
+  (f.riepilogo_iva?.length ? f.riepilogo_iva : [{}]).forEach(aggiungiRiepilogoIva);
+  ricalcolaRigheDocumento('fatt');
+}
+
 async function loadPreventivi() {
   const stato = document.getElementById('filter-stato-preventivo')?.value || '';
   const rows = await api('GET', `/preventivi${stato ? `?stato=${encodeURIComponent(stato)}` : ''}`);
@@ -2482,12 +2730,19 @@ async function loadStatistics() {
 }
 
 async function loadSettingsPage() {
-  const rows = await api('GET', '/system/settings');
+  const [rows, aiSettings, aiStatus] = await Promise.all([
+    api('GET', '/system/settings'),
+    api('GET', '/ai/settings'),
+    api('GET', '/ai/status')
+  ]);
   const box = document.getElementById('settings-list');
   box.innerHTML = (rows || []).map(r => `<div style="display:grid;grid-template-columns:220px 1fr;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)">
       <div><strong>${r.key}</strong><div style="font-size:12px;color:var(--text-muted)">${r.type}</div></div>
       <input type="text" data-setting-key="${r.key}" data-setting-type="${r.type}" value="${String(r.value || '').replace(/"/g, '&quot;')}">
     </div>`).join('');
+  renderAiSettingsForm(aiSettings || {});
+  const statusBox = document.getElementById('ai-settings-status');
+  if (statusBox) statusBox.innerHTML = aiStatus?.message || 'Configura un provider AI in Impostazioni > AI';
 }
 
 async function saveSettingsPage() {
@@ -2498,6 +2753,113 @@ async function saveSettingsPage() {
   }));
   await api('PUT', '/system/settings', { items });
   toast('Impostazioni salvate', 'success');
+}
+
+function renderAiSettingsForm(settings = {}) {
+  const box = document.getElementById('ai-settings-form');
+  if (!box) return;
+  box.innerHTML = `
+    ${renderAiProviderCard('OpenAI / ChatGPT', 'openai', settings.openai || {}, true)}
+    ${renderAiProviderCard('Anthropic / Claude', 'claude', settings.claude || {}, false)}
+  `;
+}
+
+function renderAiProviderCard(title, prefix, cfg, isPrimary) {
+  return `
+    <div class="ai-settings-card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px">
+        <div>
+          <strong>${title}</strong>
+          <div style="font-size:12px;color:var(--text-muted)">${isPrimary ? 'Provider principale consigliato' : 'Provider alternativo o fallback'}</div>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px"><input type="checkbox" data-ai="${prefix}.enabled" ${cfg.enabled ? 'checked' : ''}> Attivo</label>
+      </div>
+      <div class="form-group"><label>API key</label><input type="password" data-ai="${prefix}.api_key" placeholder="${cfg.api_key || (cfg.api_key_configured ? 'Chiave salvata' : 'Incolla qui la chiave')}"></div>
+      <div class="form-row">
+        <div class="form-group"><label>Base URL</label><input type="text" data-ai="${prefix}.base_url" value="${escapeAttr(cfg.base_url || '')}" placeholder="${prefix === 'openai' ? 'https://api.openai.com/v1' : 'https://api.anthropic.com'}"></div>
+        <div class="form-group"><label>Modello predefinito</label><input type="text" data-ai="${prefix}.default_model" value="${escapeAttr(cfg.default_model || '')}" placeholder="${prefix === 'openai' ? 'gpt-5.5' : 'claude-sonnet-4-5'}"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Modello fallback</label><input type="text" data-ai="${prefix}.fallback_model" value="${escapeAttr(cfg.fallback_model || '')}"></div>
+        <div class="form-group"><label>Max token</label><input type="number" data-ai="${prefix}.max_tokens" value="${escapeAttr(cfg.max_tokens || 4000)}"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Temperature</label><input type="number" step="0.1" data-ai="${prefix}.temperature" value="${escapeAttr(cfg.temperature || 0.2)}"></div>
+        <div class="form-group"><label>Limite costo mensile</label><input type="number" step="0.01" data-ai="${prefix}.monthly_cost_limit" value="${escapeAttr(cfg.monthly_cost_limit || '')}"></div>
+      </div>
+      ${prefix === 'claude' ? `<div class="form-group"><label style="display:flex;align-items:center;gap:8px;font-size:13px"><input type="checkbox" data-ai="${prefix}.use_as_fallback" ${cfg.use_as_fallback ? 'checked' : ''}> Usa come fallback</label></div>` : ''}
+    </div>
+  `;
+}
+
+async function saveAiSettingsPage() {
+  const payload = { openai: {}, claude: {}, runtime: {} };
+  document.querySelectorAll('[data-ai]').forEach(el => {
+    const [provider, field] = el.dataset.ai.split('.');
+    let value = el.type === 'checkbox' ? el.checked : el.value;
+    if (el.type === 'number' && value !== '') value = Number(value);
+    if (field === 'api_key' && !String(value || '').trim()) return;
+    payload[provider][field] = value;
+  });
+  await api('PUT', '/ai/settings', payload);
+  toast('Impostazioni AI salvate', 'success');
+  loadSettingsPage();
+}
+
+async function testAiSettings() {
+  const result = await api('POST', '/ai/test', {});
+  toast(result?.message || 'Test completato', result?.ok ? 'success' : 'info');
+  loadAiAssistantStatus();
+}
+
+async function loadAiAssistantStatus() {
+  const status = await api('GET', '/ai/status');
+  const statusBox = document.getElementById('ai-assistant-status');
+  if (statusBox) statusBox.textContent = status?.message || 'AI Assistant';
+}
+
+function renderAiSuggestions(list = aiAssistantSuggestions) {
+  const wrap = document.getElementById('ai-assistant-suggestions');
+  if (!wrap) return;
+  wrap.innerHTML = list.map(item => `<button class="ai-suggestion-chip" onclick="fillAiPrompt('${escapeAttr(item)}')">${escapeHtml(item)}</button>`).join('');
+}
+
+function fillAiPrompt(value) {
+  const box = document.getElementById('ai-assistant-prompt');
+  if (box) box.value = value;
+}
+
+function toggleAiAssistant(force) {
+  const panel = document.getElementById('ai-assistant-panel');
+  if (!panel) return;
+  const shouldOpen = typeof force === 'boolean' ? force : !panel.classList.contains('open');
+  panel.classList.toggle('open', shouldOpen);
+  if (shouldOpen) {
+    renderAiSuggestions();
+    loadAiAssistantStatus();
+  }
+}
+
+async function runAiAssistant() {
+  const prompt = document.getElementById('ai-assistant-prompt')?.value?.trim();
+  if (!prompt) {
+    toast('Scrivi una richiesta', 'error');
+    return;
+  }
+  const box = document.getElementById('ai-assistant-results');
+  if (box) box.textContent = 'Elaborazione in corso...';
+  try {
+    const result = await api('POST', '/ai/assist', { prompt });
+    aiAssistantSuggestions = result?.suggestions?.length ? result.suggestions : aiAssistantSuggestions;
+    renderAiSuggestions();
+    if (box) {
+      const items = (result.items || []).slice(0, 10).map(item => `- ${Object.values(item).filter(v => v !== null && v !== '').slice(0, 5).join(' | ')}`).join('\n');
+      box.textContent = `${result.answer || ''}${items ? `\n\n${items}` : ''}`;
+    }
+  } catch (e) {
+    if (box) box.textContent = e.message;
+    toast(e.message, 'error');
+  }
 }
 
 function driveIcon(mime) {
@@ -3030,6 +3392,8 @@ async function salvaPermessi() {
 // ═══════════════════════════════
 async function openModal(id) {
   if (id === 'modal-ddt') await preparaDdtModal();
+  if (id === 'modal-preventivo') await preparePreventivoModal();
+  if (id === 'modal-fattura') await prepareFatturaModal();
   document.getElementById('overlay').style.display = 'block';
   document.getElementById(id).style.display = 'block';
 }
@@ -3223,6 +3587,134 @@ async function deleteAttivita(id = null) {
     closeAllModals();
     toast('Attività eliminata', 'success');
     loadAttivita();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function loadPreventivi() {
+  const stato = document.getElementById('filter-stato-preventivo')?.value || '';
+  const rows = await api('GET', `/preventivi${stato ? `?stato=${encodeURIComponent(stato)}` : ''}`);
+  const body = document.getElementById('preventivi-body');
+  if (body) {
+    body.innerHTML = (rows || []).map(p => `
+      <tr><td><strong>${p.codice_preventivo}</strong></td>
+      <td>${p.ragione_sociale || '-'}</td><td>${p.data_preventivo || '-'}</td>
+      <td>${p.data_scadenza || '-'}</td>
+      <td>${p.totale ? `${p.valuta || 'EUR'} ${Number(p.totale).toFixed(2)}` : '-'}</td>
+      <td><span class="badge badge-${p.stato}">${p.stato}</span></td>
+      <td><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-outline btn-sm" onclick="modificaPreventivo(${p.id})">Apri</button><select class="btn btn-outline btn-sm" onchange="cambiaStatoPreventivo(${p.id},this.value)">
+        ${['bozza','inviato','accettato','rifiutato','scaduto'].map(s=>`<option value="${s}"${p.stato===s?' selected':''}>${s}</option>`).join('')}
+      </select></div></td></tr>`).join('');
+  }
+  renderSummaryCards('preventivi-summary', [
+    { icon: 'P', label: 'Preventivi', value: rows?.length || 0, meta: stato ? `Filtro: ${stato}` : 'Tutti gli stati', tone: 'primary' },
+    { icon: 'I', label: 'Inviati', value: (rows || []).filter(p => p.stato === 'inviato').length, meta: 'In attesa di risposta', tone: 'cyan' },
+    { icon: 'A', label: 'Accettati', value: (rows || []).filter(p => p.stato === 'accettato').length, meta: 'Pronti per ordine', tone: 'success' },
+    { icon: 'B', label: 'Bozze', value: (rows || []).filter(p => p.stato === 'bozza').length, meta: 'Da completare', tone: 'warning' }
+  ]);
+  renderPreventiviMobileCards(rows || []);
+}
+
+function renderPreventiviMobileCards(rows) {
+  const wrap = document.getElementById('preventivi-mobile-list');
+  if (!wrap) return;
+  wrap.innerHTML = (rows || []).map(p => `
+    <article class="mobile-record-card">
+      <div class="mobile-record-header">
+        <div>
+          <strong>${p.codice_preventivo}</strong>
+          <div class="mobile-record-subtitle">${p.ragione_sociale || 'Cliente non associato'}</div>
+        </div>
+        <span class="badge badge-${p.stato}">${p.stato}</span>
+      </div>
+      <div class="mobile-record-grid">
+        <div><span>Data</span><strong>${p.data_preventivo || '-'}</strong></div>
+        <div><span>Scadenza</span><strong>${p.data_scadenza || '-'}</strong></div>
+        <div><span>Totale</span><strong>${p.totale ? `${p.valuta || 'EUR'} ${Number(p.totale).toFixed(2)}` : '-'}</strong></div>
+      </div>
+      <div class="mobile-record-actions">
+        <button class="btn btn-outline btn-sm" onclick="modificaPreventivo(${p.id})">Apri</button>
+        <select class="order-state-select" onchange="cambiaStatoPreventivo(${p.id},this.value)">
+          ${['bozza','inviato','accettato','rifiutato','scaduto'].map(s=>`<option value="${s}"${p.stato===s?' selected':''}>${s}</option>`).join('')}
+        </select>
+      </div>
+    </article>
+  `).join('');
+}
+
+async function salvaPreventivo() {
+  const id = document.getElementById('prev-id')?.value;
+  const body = {
+    codice_preventivo: document.getElementById('prev-codice').value,
+    stato: document.getElementById('prev-stato').value,
+    anagrafica_id: document.getElementById('prev-anagrafica').value || null,
+    valuta: document.getElementById('prev-valuta').value || 'EUR',
+    data_preventivo: document.getElementById('prev-data').value,
+    data_scadenza: document.getElementById('prev-scadenza').value,
+    imponibile: parseFloat(document.getElementById('prev-imponibile').value) || 0,
+    iva: parseFloat(document.getElementById('prev-iva').value) || 0,
+    totale: parseFloat(document.getElementById('prev-totale').value) || 0,
+    note: document.getElementById('prev-note').value,
+    righe: collectDocumentoRighe('prev')
+  };
+  try {
+    if (id) await api('PUT', `/preventivi/${id}`, body);
+    else await api('POST', '/preventivi', body);
+    closeAllModals();
+    toast('Preventivo salvato', 'success');
+    loadPreventivi();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function modificaPreventivo(id) {
+  await preparePreventivoModal(id);
+  await openModal('modal-preventivo');
+}
+
+async function salvaFattura() {
+  const id = document.getElementById('fatt-id')?.value;
+  const tipo = document.getElementById('fatt-tipo').value;
+  const body = {
+    numero: document.getElementById('fatt-numero').value,
+    tipo,
+    direzione: tipo === 'emessa' ? 'attiva' : 'passiva',
+    tipo_documento: document.getElementById('fatt-tipo-documento').value,
+    anagrafica_id: document.getElementById('fatt-anagrafica').value || null,
+    valuta: document.getElementById('fatt-valuta').value || 'EUR',
+    stato_pagamento: document.getElementById('fatt-stato-pagamento').value,
+    data: document.getElementById('fatt-data').value,
+    data_ricezione: document.getElementById('fatt-data-ricezione').value || null,
+    scadenza: document.getElementById('fatt-scadenza').value || null,
+    partita_iva: document.getElementById('fatt-piva').value || null,
+    codice_fiscale: document.getElementById('fatt-cf').value || null,
+    sdi_id: document.getElementById('fatt-sdi').value || null,
+    imponibile: parseFloat(document.getElementById('fatt-imponibile').value) || 0,
+    iva: parseFloat(document.getElementById('fatt-iva').value) || 0,
+    totale: parseFloat(document.getElementById('fatt-totale').value) || 0,
+    note: document.getElementById('fatt-note').value || '',
+    righe: collectDocumentoRighe('fatt'),
+    riepilogo_iva: collectVatSummaryRows()
+  };
+  try {
+    if (id) await api('PUT', `/fatture/${id}`, body);
+    else await api('POST', '/fatture', body);
+    closeAllModals();
+    toast('Fattura salvata', 'success');
+    const active = document.querySelector('.section.active')?.id?.replace('section-', '') || 'fatture-attive';
+    loadFattureBySection(active);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function importFattureSpreadsheet(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await apiForm('POST', '/fatture/import/spreadsheet', fd);
+    const target = document.getElementById('fatture-sheet-result');
+    if (target) target.innerHTML = `Importate: <strong>${res.imported?.length || 0}</strong> · Saltate: <strong>${res.skipped?.length || 0}</strong> · Totale righe: <strong>${res.totale || 0}</strong>`;
+    toast('Import fatture completato', 'success');
+    loadFattureBySection(document.querySelector('.section.active')?.id?.replace('section-', '') || 'fatture-attive');
   } catch (e) { toast(e.message, 'error'); }
 }
 

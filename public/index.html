@@ -310,6 +310,7 @@
             <option value="">Tutte</option><option value="ricevuta">Ricevute</option><option value="emessa">Emesse</option>
           </select>
           <button class="btn btn-outline btn-sm" onclick="openModal('modal-import-xml')">↑ Import XML</button>
+          <button class="btn btn-outline btn-sm" onclick="openModal('modal-import-fatture-sheet')">Import CSV/Excel</button>
           <button class="btn btn-accent" onclick="openModal('modal-fattura')">+ Nuova Fattura</button>
         </div>
       </div>
@@ -814,6 +815,20 @@
 
   <section id="section-settings" class="section">
     <div class="page-header"><h1>Impostazioni</h1></div>
+    <div class="dash-card" style="margin-bottom:18px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+        <div>
+          <h3 style="margin:0;font-size:16px">AI</h3>
+          <div style="font-size:12px;color:var(--text-muted)">OpenAI principale, Claude alternativo o fallback. Le chiavi restano lato backend e vengono mostrate solo mascherate.</div>
+        </div>
+        <button class="btn btn-outline btn-sm" onclick="testAiSettings()">Test connessione</button>
+      </div>
+      <div id="ai-settings-status" style="margin-top:12px;font-size:13px;color:var(--text-muted)"></div>
+      <div id="ai-settings-form" class="ai-settings-grid" style="margin-top:14px"></div>
+      <div class="modal-actions" style="margin-top:14px">
+        <button class="btn btn-accent" onclick="saveAiSettingsPage()">Salva impostazioni AI</button>
+      </div>
+    </div>
     <div class="dash-card">
       <h3 style="margin-top:0;font-size:16px">Configurazione sistema</h3>
       <p style="font-size:12px;color:var(--text-muted)">Queste impostazioni servono per attivare comportamenti senza cambiare il database ogni volta.</p>
@@ -879,6 +894,32 @@
     <button class="mobile-tab" data-section="clienti" onclick="navigateTo('clienti')"><span>👥</span><small>Clienti</small></button>
     <button class="mobile-tab" data-section="ordini" onclick="navigateTo('ordini')"><span>📋</span><small>Ordini</small></button>
     <button class="mobile-tab" data-section="notifiche" onclick="navigateTo('notifiche')"><span>🔔</span><small>Alert</small></button>
+  </div>
+
+  <button id="ai-assistant-fab" class="ai-assistant-fab" onclick="toggleAiAssistant()" title="AI Assistant">AI</button>
+  <div id="ai-assistant-panel" class="ai-assistant-panel">
+    <div class="ai-assistant-header">
+      <div>
+        <strong>AI Assistant</strong>
+        <div id="ai-assistant-status" style="font-size:12px;color:var(--text-muted)">Caricamento...</div>
+      </div>
+      <button class="btn-icon" onclick="toggleAiAssistant()" title="Chiudi">×</button>
+    </div>
+    <div class="ai-assistant-body">
+      <div class="dash-card" style="margin-bottom:12px">
+        <div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">Suggerimenti</div>
+        <div id="ai-assistant-suggestions" class="ai-suggestion-list"></div>
+      </div>
+      <div id="ai-assistant-results" class="ai-results-box">Scrivi una richiesta come: <strong>Cerca clienti con CAP 04100</strong>.</div>
+      <div class="form-group" style="margin-top:12px">
+        <label>Prompt libero</label>
+        <textarea id="ai-assistant-prompt" rows="4" style="width:100%;background:var(--bg-input);border:1px solid var(--border);color:var(--text);padding:10px;border-radius:10px;font-family:inherit;font-size:14px" placeholder="Scrivi cosa vuoi cercare o controllare nel CRM..."></textarea>
+      </div>
+      <div class="modal-actions" style="margin-top:8px">
+        <button class="btn btn-outline" onclick="fillAiPrompt('Cerca clienti con CAP 04100')">Esempio</button>
+        <button class="btn btn-accent" onclick="runAiAssistant()">Invia</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1038,16 +1079,91 @@
     </div>
     <div class="form-row">
       <div class="form-group"><label>Cliente</label><select id="prev-anagrafica"><option value="">Seleziona...</option></select></div>
-      <div class="form-group"><label>Totale (EUR)</label><input type="number" step="0.01" id="prev-totale"></div>
+      <div class="form-group"><label>Valuta</label><input type="text" id="prev-valuta" value="EUR"></div>
     </div>
     <div class="form-row">
       <div class="form-group"><label>Data Preventivo</label><input type="date" id="prev-data"></div>
       <div class="form-group"><label>Scadenza</label><input type="date" id="prev-scadenza"></div>
     </div>
+    <div class="form-row">
+      <div class="form-group"><label>Imponibile</label><input type="number" step="0.01" id="prev-imponibile"></div>
+      <div class="form-group"><label>IVA</label><input type="number" step="0.01" id="prev-iva"></div>
+      <div class="form-group"><label>Totale</label><input type="number" step="0.01" id="prev-totale"></div>
+    </div>
+    <div class="form-group">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <label style="margin:0">Righe preventivo</label>
+        <button type="button" class="btn btn-outline btn-sm" onclick="aggiungiRigaPreventivo()">+ Riga</button>
+      </div>
+      <div id="prev-righe" class="dynamic-lines"></div>
+    </div>
     <div class="form-group"><label>Note</label><input type="text" id="prev-note"></div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
       <button class="btn btn-accent" onclick="salvaPreventivo()">Salva</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL FATTURA -->
+<div id="modal-fattura" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">Fattura</div>
+    <input type="hidden" id="fatt-id">
+    <div class="form-row">
+      <div class="form-group"><label>Numero *</label><input type="text" id="fatt-numero"></div>
+      <div class="form-group"><label>Tipo</label><select id="fatt-tipo"><option value="emessa">Emessa</option><option value="ricevuta">Ricevuta</option></select></div>
+      <div class="form-group"><label>Documento</label><select id="fatt-tipo-documento"><option value="fattura">Fattura</option><option value="nota_credito">Nota credito</option><option value="nota_debito">Nota debito</option><option value="autofattura">Autofattura</option><option value="integrazione_estero">Integrazione estero</option></select></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Cliente/Fornitore</label><select id="fatt-anagrafica"><option value="">Seleziona...</option></select></div>
+      <div class="form-group"><label>Valuta</label><input type="text" id="fatt-valuta" value="EUR"></div>
+      <div class="form-group"><label>Stato pagamento</label><select id="fatt-stato-pagamento"><option value="da_pagare">Da pagare</option><option value="parziale">Parziale</option><option value="pagata">Pagata</option></select></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Data documento</label><input type="date" id="fatt-data"></div>
+      <div class="form-group"><label>Data ricezione</label><input type="date" id="fatt-data-ricezione"></div>
+      <div class="form-group"><label>Scadenza</label><input type="date" id="fatt-scadenza"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>P.IVA</label><input type="text" id="fatt-piva"></div>
+      <div class="form-group"><label>Codice fiscale</label><input type="text" id="fatt-cf"></div>
+      <div class="form-group"><label>SDI ID</label><input type="text" id="fatt-sdi"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Imponibile</label><input type="number" step="0.01" id="fatt-imponibile"></div>
+      <div class="form-group"><label>IVA</label><input type="number" step="0.01" id="fatt-iva"></div>
+      <div class="form-group"><label>Totale</label><input type="number" step="0.01" id="fatt-totale"></div>
+    </div>
+    <div class="form-group">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <label style="margin:0">Righe fattura</label>
+        <button type="button" class="btn btn-outline btn-sm" onclick="aggiungiRigaFattura()">+ Riga</button>
+      </div>
+      <div id="fatt-righe" class="dynamic-lines"></div>
+    </div>
+    <div class="form-group">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <label style="margin:0">Riepilogo IVA</label>
+        <button type="button" class="btn btn-outline btn-sm" onclick="aggiungiRiepilogoIva()">+ Riga IVA</button>
+      </div>
+      <div id="fatt-riepilogo-iva" class="dynamic-lines"></div>
+    </div>
+    <div class="form-group"><label>Note</label><textarea id="fatt-note" rows="3" style="width:100%;background:var(--bg-input);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:6px;font-family:inherit;font-size:14px"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
+      <button class="btn btn-accent" onclick="salvaFattura()">Salva</button>
+    </div>
+  </div>
+</div>
+
+<div id="modal-import-fatture-sheet" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">Import fatture da CSV / Excel</div>
+    <div class="form-group"><label>File CSV / XLS / XLSX</label><input type="file" id="fatture-sheet-input" accept=".csv,.xls,.xlsx" onchange="importFattureSpreadsheet(this)"></div>
+    <div id="fatture-sheet-result" style="font-size:13px;color:var(--text-muted)"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAllModals()">Chiudi</button>
     </div>
   </div>
 </div>

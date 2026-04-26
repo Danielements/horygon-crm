@@ -191,6 +191,32 @@ db.exec(`
     FOREIGN KEY (prodotto_id) REFERENCES prodotti(id)
   );
 
+  -- PREVENTIVI
+  CREATE TABLE IF NOT EXISTS preventivi (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    codice_preventivo TEXT NOT NULL UNIQUE,
+    anagrafica_id INTEGER,
+    stato TEXT DEFAULT 'bozza' CHECK(stato IN ('bozza','inviato','accettato','rifiutato','scaduto')),
+    data_preventivo TEXT,
+    data_scadenza TEXT,
+    totale REAL,
+    note TEXT,
+    creato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (anagrafica_id) REFERENCES anagrafiche(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS preventivi_righe (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    preventivo_id INTEGER NOT NULL,
+    prodotto_id INTEGER,
+    descrizione TEXT,
+    quantita REAL,
+    prezzo_unitario REAL,
+    totale_riga REAL,
+    FOREIGN KEY (preventivo_id) REFERENCES preventivi(id) ON DELETE CASCADE,
+    FOREIGN KEY (prodotto_id) REFERENCES prodotti(id)
+  );
+
   -- DDT
   CREATE TABLE IF NOT EXISTS ddt (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -259,6 +285,224 @@ db.exec(`
 
 `);
 
+function ensureColumn(table, definition) {
+  try {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+  } catch {}
+}
+
+[
+  "tipo_documento TEXT DEFAULT 'fattura'",
+  "direzione TEXT DEFAULT 'attiva'",
+  "data_ricezione TEXT",
+  "partita_iva TEXT",
+  "codice_fiscale TEXT",
+  "valuta TEXT DEFAULT 'EUR'",
+  "stato_pagamento TEXT DEFAULT 'da_pagare'",
+  "stato_sdi TEXT",
+  "origine_importazione TEXT DEFAULT 'manuale'",
+  "import_error TEXT",
+  "hash_file TEXT",
+  "hash_documento TEXT",
+  "numero_documento TEXT",
+  "tipo_esteso TEXT",
+  "cliente_fornitore_label TEXT",
+  "proforma_id INTEGER",
+  "spedizione_id INTEGER",
+  "ordine_fornitore_id INTEGER",
+  "ordine_cliente_id INTEGER",
+  "suggerimenti_collegamento TEXT",
+  "alert_generato INTEGER DEFAULT 0",
+  "documento_meta TEXT"
+].forEach(col => ensureColumn('fatture', col));
+
+[
+  "sconto REAL DEFAULT 0",
+  "imponibile REAL",
+  "aliquota_iva REAL",
+  "natura_iva TEXT",
+  "importo_iva REAL"
+].forEach(col => ensureColumn('fatture_righe', col));
+
+[
+  "imponibile REAL DEFAULT 0",
+  "iva REAL DEFAULT 0",
+  "valuta TEXT DEFAULT 'EUR'"
+].forEach(col => ensureColumn('preventivi', col));
+
+[
+  "sconto REAL DEFAULT 0",
+  "aliquota_iva REAL DEFAULT 22",
+  "natura_iva TEXT",
+  "imponibile REAL",
+  "importo_iva REAL"
+].forEach(col => ensureColumn('preventivi_righe', col));
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS fatture_iva_riepilogo (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fattura_id INTEGER NOT NULL,
+    aliquota_iva REAL,
+    natura_iva TEXT,
+    imponibile REAL,
+    imposta REAL,
+    riferimento_normativo TEXT,
+    FOREIGN KEY (fattura_id) REFERENCES fatture(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS proforme_invoice (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    numero_proforma TEXT NOT NULL UNIQUE,
+    data TEXT,
+    fornitore_id INTEGER,
+    valuta TEXT DEFAULT 'USD',
+    importo_merce REAL DEFAULT 0,
+    importo_trasporto REAL DEFAULT 0,
+    assicurazione REAL DEFAULT 0,
+    altri_costi REAL DEFAULT 0,
+    totale REAL DEFAULT 0,
+    acconto_richiesto REAL DEFAULT 0,
+    saldo_richiesto REAL DEFAULT 0,
+    scadenza_acconto TEXT,
+    scadenza_saldo TEXT,
+    incoterm TEXT,
+    porto_partenza TEXT,
+    porto_arrivo TEXT,
+    metodo_spedizione TEXT,
+    stato TEXT DEFAULT 'ricevuta',
+    pdf_path TEXT,
+    excel_path TEXT,
+    packing_list_path TEXT,
+    ordine_cliente_id INTEGER,
+    ordine_fornitore_id INTEGER,
+    spedizione_id INTEGER,
+    note TEXT,
+    creato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (fornitore_id) REFERENCES anagrafiche(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS proforme_righe (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    proforma_id INTEGER NOT NULL,
+    prodotto_id INTEGER,
+    descrizione TEXT,
+    quantita REAL,
+    prezzo_unitario REAL,
+    totale_riga REAL,
+    FOREIGN KEY (proforma_id) REFERENCES proforme_invoice(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS proforme_alert (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    proforma_id INTEGER NOT NULL,
+    tipo TEXT NOT NULL,
+    messaggio TEXT NOT NULL,
+    risolto INTEGER DEFAULT 0,
+    creato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (proforma_id) REFERENCES proforme_invoice(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS spedizioni (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    codice_spedizione TEXT NOT NULL UNIQUE,
+    fornitore_id INTEGER,
+    cliente_id INTEGER,
+    ordine_cliente_id INTEGER,
+    ordine_fornitore_id INTEGER,
+    proforma_id INTEGER,
+    fattura_id INTEGER,
+    metodo_spedizione TEXT,
+    incoterm TEXT,
+    forwarder TEXT,
+    referente_forwarder TEXT,
+    partenza TEXT,
+    arrivo TEXT,
+    etd TEXT,
+    eta TEXT,
+    data_ritiro_merce TEXT,
+    data_partenza_effettiva TEXT,
+    data_arrivo_effettiva TEXT,
+    tracking_number TEXT,
+    container_number TEXT,
+    seal_number TEXT,
+    numero_bl_awb TEXT,
+    numero_colli INTEGER,
+    peso_lordo REAL,
+    peso_netto REAL,
+    volume_cbm REAL,
+    valore_merce REAL DEFAULT 0,
+    valuta TEXT DEFAULT 'USD',
+    assicurazione REAL DEFAULT 0,
+    stato_spedizione TEXT DEFAULT 'in_preparazione',
+    landed_cost REAL DEFAULT 0,
+    margine_previsto REAL DEFAULT 0,
+    margine_reale REAL DEFAULT 0,
+    note TEXT,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS spedizioni_documenti (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    spedizione_id INTEGER NOT NULL,
+    tipo TEXT NOT NULL,
+    nome_file TEXT,
+    path TEXT,
+    note TEXT,
+    creato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (spedizione_id) REFERENCES spedizioni(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS spedizioni_costi (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    spedizione_id INTEGER NOT NULL,
+    tipo TEXT NOT NULL,
+    importo REAL DEFAULT 0,
+    valuta TEXT DEFAULT 'EUR',
+    note TEXT,
+    creato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (spedizione_id) REFERENCES spedizioni(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS email_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chiave TEXT NOT NULL UNIQUE,
+    nome TEXT NOT NULL,
+    oggetto TEXT,
+    corpo TEXT,
+    attivo INTEGER DEFAULT 1,
+    creato_il TEXT DEFAULT (datetime('now')),
+    aggiornato_il TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS ai_usage_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    utente_id INTEGER,
+    provider TEXT NOT NULL,
+    modello TEXT,
+    operazione TEXT,
+    token_input INTEGER DEFAULT 0,
+    token_output INTEGER DEFAULT 0,
+    token_totali INTEGER DEFAULT 0,
+    costo_stimato REAL DEFAULT 0,
+    stato TEXT,
+    errore TEXT,
+    durata_ms INTEGER,
+    creato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (utente_id) REFERENCES utenti(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    utente_id INTEGER,
+    azione TEXT NOT NULL,
+    entita_tipo TEXT,
+    entita_id INTEGER,
+    dettagli TEXT,
+    creato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (utente_id) REFERENCES utenti(id)
+  );
+`);
+
 const ROLE_DEFS = [
   { id: 1, nome: 'readonly', descrizione: 'Solo lettura' },
   { id: 2, nome: 'editor', descrizione: 'Lettura e modifica operativa' },
@@ -267,9 +511,10 @@ const ROLE_DEFS = [
 ];
 
 const APP_SECTIONS = [
-  'clienti', 'fornitori', 'contatti', 'prodotti', 'magazzino', 'ordini', 'ddt',
-  'container', 'fatture', 'attivita', 'documenti', 'mepa', 'cig', 'analytics',
-  'statistics', 'settings', 'mappa', 'utenti'
+  'clienti', 'fornitori', 'contatti', 'prodotti', 'magazzino', 'preventivi',
+  'ordini', 'ddt', 'container', 'fatture', 'proforme', 'spedizioni',
+  'attivita', 'documenti', 'mepa', 'cig', 'analytics', 'statistics',
+  'settings', 'mappa', 'utenti', 'ai'
 ];
 
 const upsertRole = db.prepare(`
