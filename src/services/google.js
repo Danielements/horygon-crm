@@ -36,6 +36,7 @@ try { db.exec(`ALTER TABLE anagrafiche ADD COLUMN pa_rdo INTEGER DEFAULT 0`); } 
 try { db.exec(`ALTER TABLE anagrafiche ADD COLUMN canale_cliente TEXT DEFAULT 'privato'`); } catch {}
 try { db.exec(`ALTER TABLE notifiche_app ADD COLUMN pinned INTEGER DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE notifiche_app ADD COLUMN eliminata INTEGER DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE notifiche_app ADD COLUMN livello_urgenza TEXT DEFAULT 'media'`); } catch {}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS notifiche_app (
@@ -44,6 +45,7 @@ db.exec(`
     tipo TEXT,
     titolo TEXT NOT NULL,
     messaggio TEXT,
+    livello_urgenza TEXT DEFAULT 'media',
     entita_tipo TEXT,
     entita_id INTEGER,
     unique_key TEXT UNIQUE,
@@ -70,6 +72,11 @@ seedSetting.run('notifications.email_enabled', '0', 'boolean');
 seedSetting.run('notifications.deadline_days', '3,1', 'string');
 seedSetting.run('notifications.recipient_mode', 'all_active_users', 'string');
 seedSetting.run('company.notification_sender_name', 'Horygon CRM', 'string');
+seedSetting.run('automation.email_users_activity_assignments', '1', 'boolean');
+seedSetting.run('automation.email_users_activity_updates', '1', 'boolean');
+seedSetting.run('automation.email_users_order_status', '1', 'boolean');
+seedSetting.run('automation.email_clients_order_status', '0', 'boolean');
+seedSetting.run('automation.email_clients_activity_updates', '0', 'boolean');
 
 function getClient(utente_id) {
   const tokens = db.prepare('SELECT * FROM google_tokens WHERE utente_id = ?').get(utente_id);
@@ -90,6 +97,10 @@ function getClient(utente_id) {
   return client;
 }
 
+function getCalendarId() {
+  return process.env.GOOGLE_SHARED_CALENDAR_ID || 'info@horygon.com';
+}
+
 // ═══════════════════════════════
 // CALENDAR
 // ═══════════════════════════════
@@ -99,7 +110,7 @@ async function getEvents(utente_id, timeMin, timeMax) {
   const calendar = google.calendar({ version: 'v3', auth: client });
   try {
     const res = await calendar.events.list({
-      calendarId: 'primary',
+      calendarId: getCalendarId(),
       timeMin: timeMin || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
       timeMax: timeMax || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
       maxResults: 250,
@@ -117,7 +128,7 @@ async function createEvent(utente_id, evento) {
   const client = getClient(utente_id);
   if (!client) throw new Error('Google non connesso');
   const calendar = google.calendar({ version: 'v3', auth: client });
-  const res = await calendar.events.insert({ calendarId: 'primary', requestBody: evento });
+  const res = await calendar.events.insert({ calendarId: getCalendarId(), requestBody: evento });
   return res.data;
 }
 
@@ -125,7 +136,7 @@ async function updateEvent(utente_id, eventId, evento) {
   const client = getClient(utente_id);
   if (!client) throw new Error('Google non connesso');
   const calendar = google.calendar({ version: 'v3', auth: client });
-  const res = await calendar.events.update({ calendarId: 'primary', eventId, requestBody: evento });
+  const res = await calendar.events.update({ calendarId: getCalendarId(), eventId, requestBody: evento });
   return res.data;
 }
 
@@ -133,7 +144,7 @@ async function deleteEvent(utente_id, eventId) {
   const client = getClient(utente_id);
   if (!client) throw new Error('Google non connesso');
   const calendar = google.calendar({ version: 'v3', auth: client });
-  await calendar.events.delete({ calendarId: 'primary', eventId });
+  await calendar.events.delete({ calendarId: getCalendarId(), eventId });
 }
 
 // ═══════════════════════════════
@@ -464,28 +475,175 @@ function findOrCreatePaAnagrafica(ente) {
   return inserted.lastInsertRowid;
 }
 
-async function sendMail(utente_id, to, subject, text) {
+function chunkBase64(value) {
+  return String(value || '').match(/.{1,76}/g)?.join('\r\n') || '';
+}
+
+function buildRawEmail({ to, subject, text, attachments = [] }) {
+  const cleanAttachments = Array.isArray(attachments) ? attachments.filter(a => a?.content && a?.filename) : [];
+  if (!cleanAttachments.length) {
+    return Buffer.from(
+      `To: ${to}\r\nSubject: ${subject}\r\nContent-Type: text/plain; charset="UTF-8"\r\n\r\n${text}`,
+      'utf8'
+    ).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  }
+
+  const boundary = `horygon-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const lines = [
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset="UTF-8"',
+    'Content-Transfer-Encoding: 8bit',
+    '',
+    text || ''
+  ];
+
+  cleanAttachments.forEach((attachment) => {
+    const contentType = attachment.contentType || 'application/octet-stream';
+    const base64Content = chunkBase64(Buffer.isBuffer(attachment.content)
+      ? attachment.content.toString('base64')
+      : Buffer.from(String(attachment.content), 'utf8').toString('base64'));
+    lines.push(
+      `--${boundary}`,
+      `Content-Type: ${contentType}; name="${attachment.filename}"`,
+      `Content-Disposition: attachment; filename="${attachment.filename}"`,
+      'Content-Transfer-Encoding: base64',
+      '',
+      base64Content
+    );
+  });
+
+  lines.push(`--${boundary}--`);
+  return Buffer.from(lines.join('\r\n'), 'utf8')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+async function sendMail(utente_id, to, subject, text, attachments = []) {
   const client = getClient(utente_id);
   if (!client) throw new Error('Google non connesso');
   const gmail = google.gmail({ version: 'v1', auth: client });
-  const raw = Buffer.from(
-    `To: ${to}\r\nSubject: ${subject}\r\nContent-Type: text/plain; charset="UTF-8"\r\n\r\n${text}`,
-    'utf8'
-  ).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  const raw = buildRawEmail({ to, subject, text, attachments });
   const res = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
   return res.data;
 }
 
-function createNotificationForUsers({ tipo = 'info', titolo, messaggio, entita_tipo = null, entita_id = null, uniqueSuffix = '' }) {
+function createNotificationForUsers({ tipo = 'info', titolo, messaggio, livello_urgenza = 'media', entita_tipo = null, entita_id = null, uniqueSuffix = '' }) {
   const users = db.prepare('SELECT id, email FROM utenti WHERE attivo = 1').all();
   const ins = db.prepare(`
-    INSERT OR IGNORE INTO notifiche_app (utente_id, tipo, titolo, messaggio, entita_tipo, entita_id, unique_key)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO notifiche_app (utente_id, tipo, titolo, messaggio, livello_urgenza, entita_tipo, entita_id, unique_key)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
   users.forEach(u => {
     const uniqueKey = [u.id, tipo, entita_tipo || '', entita_id || '', uniqueSuffix].join(':');
-    ins.run(u.id, tipo, titolo, messaggio, entita_tipo, entita_id, uniqueKey);
+    ins.run(u.id, tipo, titolo, messaggio, livello_urgenza, entita_tipo, entita_id, uniqueKey);
   });
+}
+
+function createNotificationsForUserIds(userIds = [], { tipo = 'info', titolo, messaggio, livello_urgenza = 'media', entita_tipo = null, entita_id = null, uniqueSuffix = '' }) {
+  const resolvedUserIds = [...new Set(
+    (Array.isArray(userIds) ? userIds : [])
+      .map(v => parseInt(v, 10))
+      .filter(v => !Number.isNaN(v) && v > 0)
+  )];
+  if (!resolvedUserIds.length) return [];
+  const ins = db.prepare(`
+    INSERT OR IGNORE INTO notifiche_app (utente_id, tipo, titolo, messaggio, livello_urgenza, entita_tipo, entita_id, unique_key)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertedIds = [];
+  resolvedUserIds.forEach(userId => {
+    const uniqueKey = [userId, tipo, entita_tipo || '', entita_id || '', uniqueSuffix].join(':');
+    const result = ins.run(userId, tipo, titolo, messaggio, livello_urgenza, entita_tipo, entita_id, uniqueKey);
+    if (result.lastInsertRowid) insertedIds.push(result.lastInsertRowid);
+  });
+  return resolvedUserIds;
+}
+
+function getActiveUserIds() {
+  return db.prepare('SELECT id FROM utenti WHERE attivo = 1 ORDER BY id').all().map(row => row.id);
+}
+
+async function sendMailToRecipients(senderUserId, recipients = [], subject, text, attachments = []) {
+  const cleanRecipients = [...new Set(
+    (Array.isArray(recipients) ? recipients : [])
+      .map(v => String(v || '').trim())
+      .filter(Boolean)
+  )];
+  if (!senderUserId || !cleanRecipients.length) return { sent: 0, failed: 0 };
+  let sent = 0;
+  let failed = 0;
+  for (const recipient of cleanRecipients) {
+    try {
+      await sendMail(senderUserId, recipient, subject, text, attachments);
+      sent += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  return { sent, failed };
+}
+
+async function notifyUsersWithEmail({
+  senderUserId,
+  userIds = null,
+  tipo = 'info',
+  titolo,
+  messaggio,
+  livello_urgenza = 'media',
+  entita_tipo = null,
+  entita_id = null,
+  uniqueSuffix = '',
+  emailSettingKey = null,
+  emailSubject = null,
+  emailText = null
+}) {
+  const resolvedUserIds = Array.isArray(userIds) && userIds.length ? userIds : getActiveUserIds();
+  const recipients = createNotificationsForUserIds(resolvedUserIds, {
+    tipo,
+    titolo,
+    messaggio,
+    livello_urgenza,
+    entita_tipo,
+    entita_id,
+    uniqueSuffix
+  });
+  let email = { sent: 0, failed: 0, skipped: true };
+  if (emailSettingKey && getSetting(emailSettingKey, '0') === '1' && recipients.length) {
+    const placeholders = recipients.map(() => '?').join(',');
+    const rows = db.prepare(`
+      SELECT email
+      FROM utenti
+      WHERE attivo = 1 AND email IS NOT NULL AND TRIM(email) <> '' AND id IN (${placeholders})
+    `).all(...recipients);
+    email = await sendMailToRecipients(
+      senderUserId,
+      rows.map(row => row.email),
+      emailSubject || `[Horygon] ${titolo}`,
+      emailText || `${titolo}\n\n${messaggio || ''}`
+    );
+    email.skipped = false;
+  }
+  return { notifiedUsers: recipients.length, email };
+}
+
+async function emailCustomerIfEnabled({
+  senderUserId,
+  to,
+  subject,
+  text,
+  settingKey = null
+}) {
+  if (!to) return { sent: 0, skipped: true };
+  if (settingKey && getSetting(settingKey, '0') !== '1') return { sent: 0, skipped: true };
+  const result = await sendMailToRecipients(senderUserId, [to], subject, text);
+  return { ...result, skipped: false };
 }
 
 async function dispatchPendingNotificationEmails(senderUserId) {
@@ -545,6 +703,7 @@ async function upsertMepaAlertAutomation(utente_id, alertId) {
     tipo: 'mepa_mail',
     titolo: `Nuova mail PA: ${alert.ente || 'PA'}`,
     messaggio: `${alert.gara_id || ''} ${alert.nome_gara || alert.oggetto || ''}`.trim(),
+    livello_urgenza: 'media',
     entita_tipo: 'mepa_mail',
     entita_id: alertId,
     uniqueSuffix: 'new'
@@ -576,6 +735,7 @@ async function processMepaAutomation(utente_id) {
         tipo: 'deadline',
         titolo: `Scadenza MEPA in arrivo (${diffDays}g)`,
         messaggio: `${alert.gara_id || ''} ${alert.nome_gara || alert.oggetto || ''}`.trim(),
+        livello_urgenza: 'media',
         entita_tipo: 'mepa_mail',
         entita_id: alert.id,
         uniqueSuffix: '3d'
@@ -587,6 +747,7 @@ async function processMepaAutomation(utente_id) {
         tipo: 'deadline',
         titolo: `Scadenza MEPA imminente (${diffDays}g)`,
         messaggio: `${alert.gara_id || ''} ${alert.nome_gara || alert.oggetto || ''}`.trim(),
+        livello_urgenza: 'alta',
         entita_tipo: 'mepa_mail',
         entita_id: alert.id,
         uniqueSuffix: '1d'
@@ -604,7 +765,16 @@ function listNotifications(userId) {
   return db.prepare(`
     SELECT * FROM notifiche_app
     WHERE utente_id = ? AND eliminata = 0
-    ORDER BY pinned DESC, letta ASC, creato_il DESC, id DESC
+    ORDER BY
+      pinned DESC,
+      CASE livello_urgenza
+        WHEN 'alta' THEN 3
+        WHEN 'media' THEN 2
+        ELSE 1
+      END DESC,
+      letta ASC,
+      creato_il DESC,
+      id DESC
     LIMIT 100
   `).all(userId);
 }
@@ -618,12 +788,14 @@ function updateNotification(userId, id, patch = {}) {
     UPDATE notifiche_app
     SET letta = COALESCE(?, letta),
         pinned = COALESCE(?, pinned),
-        eliminata = COALESCE(?, eliminata)
+        eliminata = COALESCE(?, eliminata),
+        livello_urgenza = COALESCE(?, livello_urgenza)
     WHERE id = ? AND utente_id = ?
   `).run(
     patch.letta === undefined ? null : (patch.letta ? 1 : 0),
     patch.pinned === undefined ? null : (patch.pinned ? 1 : 0),
     patch.eliminata === undefined ? null : (patch.eliminata ? 1 : 0),
+    patch.livello_urgenza === undefined ? null : patch.livello_urgenza,
     id,
     userId
   );
@@ -635,5 +807,6 @@ module.exports = {
   getGoogleContacts, syncLocalContactsToGoogle, syncSingleContactToGoogle,
   syncMepaGmail, listMepaMailAlerts, getMepaMailAlertById, updateMepaMailAlert,
   processMepaAutomation, listNotifications, markNotificationRead, updateNotification,
-  listSettings, saveSettings, getSetting, sendMail
+  listSettings, saveSettings, getSetting, sendMail, sendMailToRecipients,
+  createNotificationsForUserIds, notifyUsersWithEmail, emailCustomerIfEnabled
 };

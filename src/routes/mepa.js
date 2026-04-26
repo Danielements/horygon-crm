@@ -120,12 +120,15 @@ router.get('/cpv-operativi', (req, res) => {
             ELSE 0
           END),0) as giacenza
         FROM prodotti p
-        JOIN prodotti_listini l ON l.prodotto_id = p.id
+        LEFT JOIN prodotti_listini l ON l.prodotto_id = p.id
         LEFT JOIN magazzino_movimenti m ON m.prodotto_id = p.id
-        WHERE p.attivo = 1 AND REPLACE(IFNULL(l.cpv,''),'-','') LIKE ?
+        WHERE p.attivo = 1 AND (
+          REPLACE(IFNULL(l.cpv,''),'-','') LIKE ?
+          OR REPLACE(IFNULL(p.cpv_mepa,''),'-','') LIKE ?
+        )
         GROUP BY p.id
         ORDER BY p.nome
-      `).all(`${prefix}%`);
+      `).all(`${prefix}%`, `${prefix}%`);
       const mercato = db.prepare(`
         SELECT SUM(valore_economico) as valore, SUM(n_ordini) as ordini
         FROM mepa_ordini WHERE codice_cpv LIKE ?

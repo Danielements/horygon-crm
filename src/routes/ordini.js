@@ -7,6 +7,9 @@ const https = require('https');
 const http = require('http');
 const db = require('../db/database');
 const { authMiddleware, requirePermesso } = require('../middleware/auth');
+const { notifyUsersWithEmail, emailCustomerIfEnabled } = require('../services/google');
+const { createOrdinePdfBuffer } = require('../services/document-pdf');
+const { writeAudit } = require('../services/audit');
 
 const s = (v) => (v === undefined || v === '' || v === null) ? null : v;
 const n = (v) => { const p = parseFloat(v); return isNaN(p) ? null : p; };
@@ -50,7 +53,18 @@ router.use(authMiddleware);
 // Lista ordini
 router.get('/', (req, res) => {
   const { tipo, stato, anagrafica_id } = req.query;
-  let sql = `SELECT o.*, a.ragione_sociale FROM ordini o
+  let sql = `SELECT o.*, a.ragione_sociale,
+    (
+      SELECT COUNT(*)
+      FROM audit_log l
+      WHERE l.entita_tipo = 'ordine' AND l.entita_id = o.id AND l.azione = 'documento_inviato'
+    ) AS sent_count,
+    (
+      SELECT MAX(l.creato_il)
+      FROM audit_log l
+      WHERE l.entita_tipo = 'ordine' AND l.entita_id = o.id AND l.azione = 'documento_inviato'
+    ) AS last_sent_at
+    FROM ordini o
     LEFT JOIN anagrafiche a ON a.id = o.anagrafica_id WHERE 1=1`;
   const params = [];
   if (tipo) { sql += ' AND o.tipo = ?'; params.push(tipo); }
@@ -70,16 +84,27 @@ router.get('/:id', (req, res) => {
   res.json(o);
 });
 
+router.get('/:id/pdf', requirePermesso('ordini', 'read'), async (req, res) => {
+  try {
+    const pdf = await createOrdinePdfBuffer(req.params.id);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename=${pdf.filename}`);
+    res.send(pdf.buffer);
+  } catch (e) {
+    res.status(404).json({ error: e.message });
+  }
+});
+
 // Crea ordine
 router.post('/', requirePermesso('ordini', 'edit'), (req, res) => {
   const b = req.body || {};
   try {
     const r = db.prepare(`
-      INSERT INTO ordini (codice_ordine,tipo,anagrafica_id,canale,data_ordine,data_consegna_prevista,totale,note,numero_spedizione,corriere)
-      VALUES (?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO ordini (codice_ordine,tipo,anagrafica_id,canale,data_ordine,data_consegna_prevista,imponibile,iva,totale,note,numero_spedizione,corriere,preventivo_id)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(s(b.codice_ordine), s(b.tipo), i(b.anagrafica_id), s(b.canale),
-           s(b.data_ordine), s(b.data_consegna_prevista), n(b.totale), s(b.note),
-           s(b.numero_spedizione), s(b.corriere));
+           s(b.data_ordine), s(b.data_consegna_prevista), n(b.imponibile) || 0, n(b.iva) || 0, n(b.totale), s(b.note),
+           s(b.numero_spedizione), s(b.corriere), i(b.preventivo_id));
     const id = r.lastInsertRowid;
     if (b.righe?.length) {
       const ins = db.prepare('INSERT INTO ordini_righe (ordine_id,prodotto_id,quantita,prezzo_unitario,sconto) VALUES (?,?,?,?,?)');
@@ -93,6 +118,65 @@ router.post('/', requirePermesso('ordini', 'edit'), (req, res) => {
     }
     res.json({ id });
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Aggiorna stato con automazioni
+router.patch('/:id/stato', requirePermesso('ordini', 'edit'), async (req, res, next) => {
+  try {
+    const nextState = s(req.body.stato);
+    if (!nextState) return res.status(400).json({ error: 'Stato obbligatorio' });
+    const current = db.prepare(`
+      SELECT o.*, a.ragione_sociale, a.email
+      FROM ordini o
+      LEFT JOIN anagrafiche a ON a.id = o.anagrafica_id
+      WHERE o.id = ?
+    `).get(req.params.id);
+    if (!current) return res.status(404).json({ error: 'Ordine non trovato' });
+
+    db.prepare('UPDATE ordini SET stato=? WHERE id=?').run(nextState, req.params.id);
+    if ((current.stato || '') !== nextState) {
+      writeAudit({
+        utente_id: req.user.id,
+        azione: 'documento_stato',
+        entita_tipo: 'ordine',
+        entita_id: Number(req.params.id),
+        dettagli: {
+          codice: current.codice_ordine,
+          from: current.stato || null,
+          to: nextState
+        }
+      });
+      const codiceOrdine = current.codice_ordine || `#${current.id}`;
+      const customerName = current.ragione_sociale || 'cliente';
+      await notifyUsersWithEmail({
+        senderUserId: req.user.id,
+        tipo: 'ordine_stato',
+        titolo: `Ordine ${codiceOrdine} aggiornato`,
+        messaggio: `${customerName} • stato ${current.stato || '-'} -> ${nextState}`,
+        livello_urgenza: nextState === 'annullato' ? 'alta' : 'media',
+        entita_tipo: 'ordine',
+        entita_id: current.id,
+        uniqueSuffix: `status:${nextState}`,
+        emailSettingKey: 'automation.email_users_order_status',
+        emailSubject: `[Horygon] Ordine ${codiceOrdine} aggiornato`,
+        emailText: `Lo stato di un ordine e stato aggiornato.\n\nOrdine: ${codiceOrdine}\nCliente: ${customerName}\nStato: ${current.stato || '-'} -> ${nextState}\n\nAggiornato da: ${req.user.nome || 'Horygon CRM'}`
+      });
+
+      if (current.email) {
+        await emailCustomerIfEnabled({
+          senderUserId: req.user.id,
+          to: current.email,
+          settingKey: 'automation.email_clients_order_status',
+          subject: `Aggiornamento ordine ${codiceOrdine}`,
+          text: `Gentile ${customerName},\n\nil vostro ordine ${codiceOrdine} e stato aggiornato.\n\nNuovo stato: ${nextState}\n\nPer qualsiasi informazione potete rispondere a questa email.\n\nHorygon CRM`
+        });
+      }
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    if (e.code === 'SQLITE_CONSTRAINT') return next();
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // Aggiorna stato
@@ -127,6 +211,26 @@ router.delete('/:id/allegati/:allegId', requirePermesso('ordini', 'edit'), (req,
   const all = db.prepare('SELECT * FROM ordini_allegati WHERE id = ?').get(req.params.allegId);
   if (all?.path) { const fp = '.' + all.path; if (fs.existsSync(fp)) fs.unlinkSync(fp); }
   db.prepare('DELETE FROM ordini_allegati WHERE id = ?').run(req.params.allegId);
+  res.json({ ok: true });
+});
+
+router.delete('/:id', requirePermesso('ordini', 'delete'), (req, res) => {
+  const linkedDdt = db.prepare('SELECT id, numero_ddt FROM ddt WHERE ordine_id = ? LIMIT 1').get(req.params.id);
+  if (linkedDdt) {
+    return res.status(400).json({ error: `Ordine collegato al DDT ${linkedDdt.numero_ddt || linkedDdt.id}` });
+  }
+  const attachments = db.prepare('SELECT path FROM ordini_allegati WHERE ordine_id = ?').all(req.params.id);
+  attachments.forEach((attachment) => {
+    if (!attachment?.path) return;
+    const filePath = '.' + attachment.path;
+    if (fs.existsSync(filePath)) {
+      try { fs.unlinkSync(filePath); } catch {}
+    }
+  });
+  db.prepare('DELETE FROM magazzino_movimenti WHERE riferimento_tipo = ? AND riferimento_id = ?').run('ordine', req.params.id);
+  db.prepare('DELETE FROM ordini_allegati WHERE ordine_id = ?').run(req.params.id);
+  const result = db.prepare('DELETE FROM ordini WHERE id = ?').run(req.params.id);
+  if (!result.changes) return res.status(404).json({ error: 'Ordine non trovato' });
   res.json({ ok: true });
 });
 
