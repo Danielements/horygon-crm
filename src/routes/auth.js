@@ -21,6 +21,10 @@ const SCOPES = [
   'openid', 'email', 'profile'
 ];
 
+function getCalendarOwnerEmail() {
+  return process.env.GOOGLE_CALENDAR_OWNER_EMAIL || 'info@horygon.com';
+}
+
 function makeToken(user) {
   return jwt.sign(
     { id: user.id, nome: user.nome, ruolo_id: user.ruolo_id, tema: user.tema },
@@ -110,7 +114,15 @@ router.get('/google/callback', async (req, res) => {
 router.get('/me', authMiddleware, (req, res) => {
   const user = db.prepare('SELECT id,nome,email,ruolo_id,tema FROM utenti WHERE id = ?').get(req.user.id);
   const permessi = db.prepare('SELECT * FROM permessi WHERE ruolo_id = ?').all(user.ruolo_id);
-  const hasGoogle = !!db.prepare('SELECT id FROM google_tokens WHERE utente_id = ?').get(user.id);
+  const ownGoogle = !!db.prepare('SELECT id FROM google_tokens WHERE utente_id = ?').get(user.id);
+  const ownerGoogle = !!db.prepare(`
+    SELECT gt.id
+    FROM google_tokens gt
+    JOIN utenti u ON u.id = gt.utente_id
+    WHERE LOWER(u.email) = LOWER(?)
+    LIMIT 1
+  `).get(getCalendarOwnerEmail());
+  const hasGoogle = ownGoogle || ownerGoogle;
   res.json({ ...user, permessi, hasGoogle });
 });
 

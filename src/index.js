@@ -51,6 +51,7 @@ app.use('/api/preventivi',  require('./routes/preventivi'));
 app.use('/api/fatture',     require('./routes/fatture'));
 app.use('/api/proforme',    require('./routes/proforme'));
 app.use('/api/spedizioni',  require('./routes/spedizioni'));
+app.use('/api/documenti',   require('./routes/documenti'));
 app.use('/api/ai',          require('./routes/ai'));
 app.use('/api/google',      require('./routes/google'));
 app.use('/api/contatti',    require('./routes/contatti'));

@@ -33,6 +33,60 @@ router.get('/pa/mappa', (req, res) => {
   `).all());
 });
 
+router.get('/mappa/crm', (req, res) => {
+  const anagrafiche = db.prepare(`
+    SELECT
+      'anagrafica' as source,
+      a.id,
+      a.tipo,
+      COALESCE(a.tipologia_cliente, a.tipo, 'anagrafica') as category,
+      a.ragione_sociale as title,
+      TRIM(COALESCE(a.indirizzo, '') || ' ' || COALESCE(a.cap, '') || ' ' || COALESCE(a.citta, '') || ' ' || COALESCE(a.provincia, '')) as address,
+      a.citta,
+      a.provincia,
+      a.email,
+      a.telefono,
+      a.lat,
+      a.lng,
+      CASE
+        WHEN a.tipo = 'fornitore' THEN 'fornitore'
+        WHEN a.tipologia_cliente = 'pa' THEN 'pa'
+        ELSE 'cliente'
+      END as marker_type
+    FROM anagrafiche a
+    WHERE a.attivo = 1
+      AND a.lat IS NOT NULL AND a.lng IS NOT NULL
+  `).all();
+
+  const consegne = db.prepare(`
+    SELECT
+      'ddt' as source,
+      d.id,
+      'ddt' as tipo,
+      'consegna' as category,
+      COALESCE(d.numero_ddt, 'DDT #' || d.id) as title,
+      COALESCE(d.indirizzo_consegna, '') as address,
+      NULL as citta,
+      NULL as provincia,
+      NULL as email,
+      NULL as telefono,
+      d.lat_consegna as lat,
+      d.lng_consegna as lng,
+      'consegna' as marker_type
+    FROM ddt d
+    WHERE d.lat_consegna IS NOT NULL AND d.lng_consegna IS NOT NULL
+  `).all();
+
+  res.json({
+    points: [...anagrafiche, ...consegne],
+    stats: {
+      anagrafiche: anagrafiche.length,
+      consegne: consegne.length,
+      totale: anagrafiche.length + consegne.length
+    }
+  });
+});
+
 router.get('/:id', (req, res) => {
   const a = db.prepare('SELECT * FROM anagrafiche WHERE id = ?').get(req.params.id);
   if (!a) return res.status(404).json({ error: 'Non trovato' });

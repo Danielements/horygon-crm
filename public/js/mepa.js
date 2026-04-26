@@ -1,6 +1,6 @@
-// ═══════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // MEPA ANALYTICS DASHBOARD v4
-// ═══════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 let mepaCharts = {};
 let mepaData = null;
 let mepaSelectedCategoryId = localStorage.getItem('mepa_selected_category_id') || '';
@@ -24,7 +24,8 @@ function getTopCpvRows(data) {
 }
 
 function getCpvLabel(c) {
-  return (c.target_desc || c.desc || c.descrizione_cpv || c.codice_cpv || '').substring(0, 32);
+  const raw = String(c.target_desc || c.desc || c.descrizione_cpv || c.codice_cpv || '').trim();
+  return raw.length > 44 ? (raw.substring(0, 41) + '...') : raw;
 }
 
 function renderMepaViews() {
@@ -111,33 +112,33 @@ function renderMepaEmptyState(mode, stato) {
 
   if (mode === 'governance') {
     noData.innerHTML = `
-      <div style="font-size:52px;margin-bottom:16px">🧭</div>
+      <div style="font-size:52px;margin-bottom:16px">CPV</div>
       <h2 style="margin-bottom:12px;font-size:20px">Configura prima i CPV da monitorare</h2>
       <p style="color:var(--text-muted);margin-bottom:24px;max-width:620px;margin-left:auto;margin-right:auto;line-height:1.6">
-        La pagina Analisi MEPA ora lavora solo sui CPV caricati da voi. Finché non aggiungete almeno una categoria abilitata con i relativi CPV dal pop-up, i CSV non vengono analizzati.
+        La pagina Abilitazioni CPV MEPA ora lavora solo sui CPV caricati da voi. Finche non aggiungete almeno una categoria abilitata con i relativi CPV dal pop-up, i CSV non vengono analizzati.
       </p>
       <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
         <button class="btn btn-accent" onclick="openMepaCategoryModal()">Aggiungi categoria abilitata</button>
       </div>
       <div style="font-size:12px;color:var(--text-muted);margin-top:18px">
-        Categorie attive: ${(stato?.categorieAbilitate || 0).toLocaleString('it')} · CPV monitorati: ${(stato?.cpvMonitorati || 0).toLocaleString('it')}
+        Categorie attive: ${(stato?.categorieAbilitate || 0).toLocaleString('it')} - CPV monitorati: ${(stato?.cpvMonitorati || 0).toLocaleString('it')}
       </div>
     `;
     return;
   }
 
   noData.innerHTML = `
-    <div style="font-size:52px;margin-bottom:16px">📄</div>
+    <div style="font-size:52px;margin-bottom:16px">CSV</div>
     <h2 style="margin-bottom:12px;font-size:20px">Governance pronta, ora carica i CSV MEPA</h2>
     <p style="color:var(--text-muted);margin-bottom:24px;max-width:620px;margin-left:auto;margin-right:auto;line-height:1.6">
-      Le categorie e i CPV sono configurati. Puoi caricare i file CSV oppure fare la scansione della cartella <code>data/mepa</code>: l’analisi userà solo i CPV governati nel catalogo.
+      Le categorie e i CPV sono configurati. Puoi caricare i file CSV oppure fare la scansione della cartella <code>data/mepa</code>: l'analisi usera solo i CPV governati nel catalogo.
     </p>
     <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
       <button class="btn btn-accent" onclick="openModal('modal-import-anac')">Upload CSV</button>
       <button class="btn btn-outline" onclick="syncAnac()">Scan cartella MEPA</button>
     </div>
     <div style="font-size:12px;color:var(--text-muted);margin-top:18px">
-      CPV monitorati: ${(stato?.cpvMonitorati || 0).toLocaleString('it')} · File duplicati rilevati: ${(stato?.fileDuplicati || 0).toLocaleString('it')}
+      CPV monitorati: ${(stato?.cpvMonitorati || 0).toLocaleString('it')} - File duplicati rilevati: ${(stato?.fileDuplicati || 0).toLocaleString('it')}
     </div>
   `;
 }
@@ -196,8 +197,8 @@ async function loadMepaCategoryManager() {
   setSelectedMepaCategoryId(selectedCategory ? selectedCategory.id : '');
 
   if (summary && stato) {
-    summary.textContent = (stato.categorieAbilitate || categorie.length || 0) + ' categorie abilitate · ' +
-      (stato.cpvMonitorati || 0) + ' CPV monitorati · ' +
+    summary.textContent = (stato.categorieAbilitate || categorie.length || 0) + ' categorie abilitate - ' +
+      (stato.cpvMonitorati || 0) + ' CPV monitorati - ' +
       (stato.fileDuplicati || 0) + ' file doppioni rilevati';
   }
 
@@ -210,7 +211,7 @@ async function loadMepaCategoryManager() {
 
   if (activeInfo) {
     activeInfo.textContent = selectedCategory
-      ? ('Dashboard filtrata su: ' + selectedCategory.nome + ' · ' + ((selectedCategory.cpv_attivi || 0).toLocaleString('it')) + ' CPV attivi')
+      ? ('Dashboard filtrata su: ' + selectedCategory.nome + ' - ' + ((selectedCategory.cpv_attivi || 0).toLocaleString('it')) + ' CPV attivi')
       : 'Nessuna categoria attiva selezionabile';
   }
 
@@ -254,12 +255,12 @@ async function searchMepaCpv() {
     '<div style="padding:12px 14px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px">' +
       '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">' +
         '<div>' +
-          '<div style="font-weight:700"><code>' + escapeHtml(formatCpvDisplay(row.codice_cpv_display || row.codice_cpv)) + '</code> · ' + escapeHtml(row.categoria || 'Senza categoria') + '</div>' +
+          '<div style="font-weight:700"><code>' + escapeHtml(formatCpvDisplay(row.codice_cpv_display || row.codice_cpv)) + '</code> - ' + escapeHtml(row.categoria || 'Senza categoria') + '</div>' +
           '<div style="font-size:12px;color:var(--text-muted);margin-top:4px">' + escapeHtml(row.desc || row.descrizione || '-') + '</div>' +
         '</div>' +
         '<div style="text-align:right;font-size:12px;min-width:180px">' +
           '<div><strong>' + formatEuro(row.valore_totale || 0) + '</strong></div>' +
-          '<div style="color:var(--text-muted);margin-top:4px">' + ((row.ordini_totali || 0).toLocaleString('it')) + ' ordini · ' + ((row.anni_coperti || 0).toLocaleString('it')) + ' anni</div>' +
+          '<div style="color:var(--text-muted);margin-top:4px">' + ((row.ordini_totali || 0).toLocaleString('it')) + ' ordini - ' + ((row.anni_coperti || 0).toLocaleString('it')) + ' anni</div>' +
         '</div>' +
       '</div>' +
     '</div>'
@@ -360,7 +361,7 @@ async function previewMepaCpvs() {
     const result = await apiForm('POST', '/mepa/cpv-preview', fd);
     if (!result || !result.ok) return;
     if (resultEl) {
-      resultEl.textContent = 'Anteprima pronta: ' + result.totaleLetti + ' CPV riconosciuti · ' + result.nuovi + ' nuovi · ' + result.esistenti + ' gia presenti';
+      resultEl.textContent = 'Anteprima pronta: ' + result.totaleLetti + ' CPV riconosciuti - ' + result.nuovi + ' nuovi - ' + result.esistenti + ' gia presenti';
     }
     if (previewEl) {
       previewEl.style.display = 'block';
@@ -408,7 +409,7 @@ async function selectMepaCategory(categoryId) {
 }
 
 async function toggleMepaCategoryState(categoryId, attiva) {
-  const message = attiva ? 'Riattivo questa categoria per l’analisi?' : 'Escludo questa categoria dalla dashboard MEPA?';
+  const message = attiva ? 'Riattivo questa categoria per l\'analisi?' : 'Escludo questa categoria dalla dashboard MEPA?';
   if (!confirm(message)) return;
   await api('PATCH', '/mepa/categorie-abilitate/' + encodeURIComponent(categoryId), { attiva });
   if (!attiva && String(getSelectedMepaCategoryId()) === String(categoryId)) {
@@ -499,7 +500,7 @@ function ensureMepaCpvDetail(data) {
   const sel = document.getElementById('mepa-cpv-detail-sel');
   if (!sel || sel.dataset.loaded === '1') return;
   const rows = (data.topCpv || []).filter(c => c.codice_cpv);
-  sel.innerHTML = rows.map(c => '<option value="' + c.codice_cpv + '">' + c.codice_cpv + ' - ' + getCpvLabel(c) + '</option>').join('');
+  sel.innerHTML = rows.map(c => '<option value="' + c.codice_cpv + '">' + formatCpvDisplay(c.codice_cpv_display || c.codice_cpv) + ' - ' + getCpvLabel(c) + '</option>').join('');
   sel.dataset.loaded = '1';
   if (rows.length) loadMepaCpvDetail();
 }
@@ -558,7 +559,7 @@ async function loadMepa() {
     setMepaDashboardVisibility(false);
     renderMepaEmptyState('csv', stato);
     const el = document.getElementById('mepa-last-sync');
-    if (el) el.textContent = 'Governance pronta · nessun CSV analizzato';
+    if (el) el.textContent = 'Governance pronta - nessun CSV analizzato';
     await loadMepaCategoryManager();
     return;
   }
@@ -566,13 +567,13 @@ async function loadMepa() {
   setMepaDashboardVisibility(true);
   if (stato.anni && stato.anni.length) {
     const el = document.getElementById('mepa-last-sync');
-    if (el) el.textContent = stato.anni.join(', ') + ' · ' + stato.totalRecords + ' righe · ' + formatEuro(stato.totValore);
+    if (el) el.textContent = stato.anni.join(', ') + ' - ' + stato.totalRecords + ' ordini - ' + formatEuro(stato.totValore);
   }
   if (stato.anni && stato.anni.length) {
     const el = document.getElementById('mepa-last-sync');
-    const righeVista = stato.totalRecordsHorygon || stato.totalRecords || 0;
+    const ordiniVista = stato.totalRecordsHorygon || stato.totalRecords || 0;
     const valoreVista = stato.totValoreHorygon || stato.totValore || 0;
-    if (el) el.textContent = stato.anni.join(', ') + ' - vista Horygon: ' + righeVista + ' righe - ' + formatEuro(valoreVista);
+    if (el) el.textContent = stato.anni.join(', ') + ' - vista Horygon: ' + ordiniVista + ' ordini - ' + formatEuro(valoreVista);
   }
   const data = await api('GET', '/mepa/analytics' + getMepaCategoryQuery());
   if (!data) return;
@@ -595,15 +596,15 @@ function renderMepaKPI(data) {
   const ultimo = data.kpiAnni ? data.kpiAnni[data.kpiAnni.length - 1] : null;
   const penultimo = data.kpiAnni ? data.kpiAnni[data.kpiAnni.length - 2] : null;
   const set = (id, val) => { const el = document.getElementById(id); if (el) el.innerHTML = val; };
-  set('mk-gare', ultimo ? (ultimo.tot_ordini || 0).toLocaleString('it') : '—');
-  set('mk-importo', ultimo ? formatEuro(ultimo.tot_valore) : '—');
-  set('mk-cpv', ultimo ? (ultimo.num_cpv || 0) : '—');
+  set('mk-gare', ultimo ? (ultimo.tot_ordini || 0).toLocaleString('it') : '-');
+  set('mk-importo', ultimo ? formatEuro(ultimo.tot_valore) : '-');
+  set('mk-cpv', ultimo ? (ultimo.num_cpv || 0) : '-');
   if (ultimo && penultimo && penultimo.tot_valore > 0) {
     const cr = ((ultimo.tot_valore - penultimo.tot_valore) / penultimo.tot_valore * 100).toFixed(1);
     const col = cr > 0 ? '#10b981' : '#ef4444';
-    set('mk-trend', '<span style="color:' + col + '">' + (cr > 0 ? '↑' : '↓') + ' ' + Math.abs(cr) + '%</span>');
+    set('mk-trend', '<span style="color:' + col + '">' + (cr > 0 ? 'UP' : 'DOWN') + ' ' + Math.abs(cr) + '%</span>');
   }
-  set('mk-anni', anni.length > 0 ? anni.join(' · ') : '—');
+  set('mk-anni', anni.length > 0 ? anni.join(' - ') : '-');
 }
 
 function renderSerieAnniChart(data) {
@@ -698,11 +699,12 @@ function renderOpportunita(data) {
   el.innerHTML = opps.map(c => {
     const cr = c.crescita_pct;
     const col = cr > 50 ? '#10b981' : cr > 20 ? '#0057ff' : '#f59e0b';
+    const codice = formatCpvDisplay(c.codice_cpv_display || c.codice_cpv);
     return '<div style="display:flex;align-items:center;gap:12px;padding:11px;border:1px solid var(--border);border-left:3px solid ' + col + ';border-radius:8px;margin-bottom:7px">' +
       '<div style="font-size:20px;font-weight:800;color:' + col + ';min-width:55px;text-align:center">+' + cr + '%</div>' +
       '<div style="flex:1"><div style="font-weight:600;font-size:13px">' + getCpvLabel(c) + '</div>' +
-      '<div style="font-size:11px;color:var(--text-muted)">' + c.codice_cpv + ' · ' + formatEuro(c.v_ultimo) + '</div></div>' +
-      '<div style="color:#10b981;font-weight:700;font-size:12px">▲ COMPRA</div></div>';
+      '<div style="font-size:11px;color:var(--text-muted)">' + codice + ' - ' + formatEuro(c.v_ultimo) + '</div></div>' +
+      '<div style="color:#10b981;font-weight:700;font-size:12px">COMPRA</div></div>';
   }).join('');
 }
 
@@ -713,11 +715,12 @@ function renderDeclino(data) {
   if (!decl.length) { el.innerHTML = '<p style="color:var(--text-muted);font-size:13px">Nessun declino significativo</p>'; return; }
   el.innerHTML = decl.map(c => {
     const cr = c.crescita_pct;
+    const codice = formatCpvDisplay(c.codice_cpv_display || c.codice_cpv);
     return '<div style="display:flex;align-items:center;gap:12px;padding:11px;border:1px solid var(--border);border-left:3px solid #ef4444;border-radius:8px;margin-bottom:7px">' +
       '<div style="font-size:20px;font-weight:800;color:#ef4444;min-width:55px;text-align:center">' + cr + '%</div>' +
       '<div style="flex:1"><div style="font-weight:600;font-size:13px">' + getCpvLabel(c) + '</div>' +
-      '<div style="font-size:11px;color:var(--text-muted)">' + c.codice_cpv + ' · ' + formatEuro(c.v_ultimo) + '</div></div>' +
-      '<div style="color:#ef4444;font-weight:700;font-size:12px">▼ EVITA</div></div>';
+      '<div style="font-size:11px;color:var(--text-muted)">' + codice + ' - ' + formatEuro(c.v_ultimo) + '</div></div>' +
+      '<div style="color:#ef4444;font-weight:700;font-size:12px">EVITA</div></div>';
   }).join('');
 }
 
@@ -729,8 +732,8 @@ function renderPredizioni(data) {
   el.innerHTML = pred.map(c => {
     const delta = c.v_pred - c.v_ultimo;
     const col = delta > 0 ? '#10b981' : delta < 0 ? '#ef4444' : '#f59e0b';
-    const icon = delta > 0 ? '↑' : delta < 0 ? '↓' : '→';
-    return '<tr><td><code style="font-size:11px">' + c.codice_cpv + '</code></td>' +
+    const icon = delta > 0 ? 'UP' : delta < 0 ? 'DOWN' : 'FLAT';
+    return '<tr><td><code style="font-size:11px">' + formatCpvDisplay(c.codice_cpv_display || c.codice_cpv) + '</code></td>' +
       '<td style="font-size:12px">' + getCpvLabel(c) + '</td>' +
       '<td style="text-align:right">' + formatEuro(c.v_ultimo) + '</td>' +
       '<td style="text-align:right"><strong style="color:' + col + '">' + formatEuro(c.v_pred) + '</strong></td>' +
@@ -744,17 +747,17 @@ function renderTopCpvTable(data) {
   el.innerHTML = getTopCpvRows(data).map(c => {
     const cr = c.crescita_pct;
     const crCol = cr === null ? '#7d8590' : cr > 0 ? '#10b981' : '#ef4444';
-    const crStr = cr !== null ? (cr > 0 ? '+' : '') + cr + '%' : '—';
+    const crStr = cr !== null ? (cr > 0 ? '+' : '') + cr + '%' : '-';
     const prio = c.priorita;
     const prioCol = prio === 'alta' ? '#10b981' : prio === 'media' ? '#f59e0b' : '#7d8590';
-    return '<tr><td><code style="font-size:11px">' + (c.codice_cpv||'—') + '</code></td>' +
-      '<td style="font-size:12px">' + (c.descrizione_cpv||'—').substring(0,28) + '</td>' +
-      '<td style="font-size:11px;color:var(--text-muted)">' + (c.categoria||'—') + '</td>' +
+    return '<tr><td><code style="font-size:11px">' + formatCpvDisplay(c.codice_cpv_display || c.codice_cpv || '-') + '</code></td>' +
+      '<td style="font-size:12px">' + getCpvLabel(c) + '</td>' +
+      '<td style="font-size:11px;color:var(--text-muted)">' + (c.categoria||'-') + '</td>' +
       '<td style="text-align:right;font-size:12px">' + formatEuro(c.v_primo||0) + '</td>' +
       '<td style="text-align:right;font-size:12px">' + formatEuro(c.v_medio||0) + '</td>' +
       '<td style="text-align:right"><strong>' + formatEuro(c.v_ultimo||0) + '</strong></td>' +
       '<td style="text-align:right;color:' + crCol + ';font-weight:700">' + crStr + '</td>' +
-      '<td><span style="color:' + prioCol + ';font-size:11px;font-weight:600">' + (prio||'—') + '</span></td></tr>';
+      '<td><span style="color:' + prioCol + ';font-size:11px;font-weight:600">' + (prio||'-') + '</span></td></tr>';
   }).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:20px">Nessun dato</td></tr>';
 }
 
@@ -762,7 +765,7 @@ function renderTipologiePA(data) {
   const el = document.getElementById('tipologie-body');
   if (!el) return;
   el.innerHTML = (data.topTipologie || []).map((t, i) =>
-    '<tr><td><strong>#' + (i+1) + '</strong></td><td style="font-size:12px">' + (t.tipologia_pa||'—').substring(0,35) + '</td>' +
+    '<tr><td><strong>#' + (i+1) + '</strong></td><td style="font-size:12px">' + ((t.tipologia_pa||'-').substring(0,35)) + '</td>' +
     '<td style="text-align:right"><strong>' + formatEuro(t.v_ultimo||0) + '</strong></td>' +
     '<td style="text-align:right;color:var(--text-muted)">' + formatEuro(t.tot_valore||0) + '</td></tr>'
   ).join('');
@@ -772,44 +775,44 @@ function renderRegioniFocus(data) {
   const el = document.getElementById('regioni-focus');
   if (!el) return;
   const target = data.regioniTarget || (data.topRegioni||[]).filter(r => r.v_ultimo > 0).slice(0, 5);
-  if (!target.length) { el.innerHTML = '<p style="color:var(--text-muted);font-size:13px">Carica più anni per analisi</p>'; return; }
+  if (!target.length) { el.innerHTML = '<p style="color:var(--text-muted);font-size:13px">Carica piu anni per analisi</p>'; return; }
   el.innerHTML = target.map(r => {
     const cr = r.crescita_pct;
     const col = cr > 10 ? '#10b981' : cr > 0 ? '#f59e0b' : '#ef4444';
     const isBase = r.regione_pa === 'LAZIO' || r.regione_pa === 'LIGURIA';
-    const icon = r.regione_pa === 'LAZIO' ? '🏛️' : r.regione_pa === 'LIGURIA' ? '⚓' : r.regione_pa === 'LOMBARDIA' ? '🏙️' : '📍';
+    const icon = r.regione_pa === 'LAZIO' ? 'LAZ' : r.regione_pa === 'LIGURIA' ? 'LIG' : r.regione_pa === 'LOMBARDIA' ? 'LOM' : 'REG';
     return '<div style="display:flex;align-items:center;gap:10px;padding:10px;border:1px solid var(--border)' + (isBase ? ';border-left:3px solid var(--accent)' : '') + ';border-radius:8px;margin-bottom:7px">' +
       '<div style="font-size:16px">' + icon + '</div>' +
-      '<div style="flex:1"><div style="font-weight:600;font-size:13px">' + r.regione_pa + (isBase ? ' <span style="font-size:10px;color:var(--accent)">●</span>' : '') + '</div>' +
+      '<div style="flex:1"><div style="font-weight:600;font-size:13px">' + r.regione_pa + (isBase ? ' <span style="font-size:10px;color:var(--accent)">*</span>' : '') + '</div>' +
       '<div style="font-size:11px;color:var(--text-muted)">' + (r.tot_ordini||0).toLocaleString('it') + ' ordini</div></div>' +
       '<div style="text-align:right"><div style="font-weight:700;font-size:13px">' + formatEuro(r.v_ultimo||r.tot_valore) + '</div>' +
-      '<div style="font-size:12px;color:' + col + ';font-weight:600">' + (cr !== null ? (cr > 0 ? '+' : '') + cr + '%' : '—') + '</div></div></div>';
+      '<div style="font-size:12px;color:' + col + ';font-weight:600">' + (cr !== null ? (cr > 0 ? '+' : '') + cr + '%' : '-') + '</div></div></div>';
   }).join('');
 }
 
 async function syncAnac() {
   const btn = document.getElementById('btn-sync-anac');
-  if (btn) { btn.textContent = '⏳ Scan...'; btn.disabled = true; }
+  if (btn) { btn.textContent = 'Scan...'; btn.disabled = true; }
   try {
     const result = await api('POST', '/mepa/scan');
     if (result && result.ok) {
       const imp = (result.results || []).filter(r => r.status === 'importato');
       if (imp.length > 0) { toast('Importati ' + imp.length + ' file MEPA', 'success'); await loadMepa(); }
       else {
-        const gia = (result.results || []).filter(r => r.status === 'già importato');
-        toast(gia.length > 0 ? gia.length + ' file già presenti — aggiungi nuovi CSV in data/mepa/' : 'Nessun file in data/mepa/', 'info');
+        const gia = (result.results || []).filter(r => r.status === 'già importato' || r.status === 'gia importato');
+        toast(gia.length > 0 ? gia.length + ' file gia presenti - aggiungi nuovi CSV in data/mepa/' : 'Nessun file in data/mepa/', 'info');
         await loadMepa();
       }
     }
   } catch (e) { toast('Errore: ' + e.message, 'error'); }
-  if (btn) { btn.textContent = '🔄 Scan MEPA'; btn.disabled = false; }
+  if (btn) { btn.textContent = 'Scan MEPA'; btn.disabled = false; }
 }
 
 async function importAnacCSV(input) {
   const files = input.files;
   if (!files.length) return;
   const res = document.getElementById('anac-import-result');
-  if (res) { res.style.display = 'block'; res.textContent = '⏳ Caricamento ' + files.length + ' file...'; }
+  if (res) { res.style.display = 'block'; res.textContent = 'Caricamento ' + files.length + ' file...'; }
   let ok = 0, totRighe = 0, totValore = 0;
   for (const file of Array.from(files)) {
     const fd = new FormData(); fd.append('file', file);
@@ -818,7 +821,7 @@ async function importAnacCSV(input) {
       if (result && result.ok) { ok++; totRighe += result.horygon || 0; totValore += result.valoreHorygon || 0; }
     } catch {}
   }
-  if (res) { res.style.background = 'rgba(16,185,129,0.1)'; res.innerHTML = '✅ ' + ok + '/' + files.length + ' file importati · ' + totRighe.toLocaleString('it') + ' righe · ' + formatEuro(totValore); }
+  if (res) { res.style.background = 'rgba(16,185,129,0.1)'; res.innerHTML = ok + '/' + files.length + ' file importati - ' + totRighe.toLocaleString('it') + ' righe - ' + formatEuro(totValore); }
   toast(ok + ' file MEPA importati', 'success');
   setTimeout(() => { closeAllModals(); loadMepa(); }, 1500);
 }
@@ -826,12 +829,12 @@ async function importAnacCSV(input) {
 function checkSyncStatus() { loadMepa(); }
 
 function formatEuro(v) {
-  if (!v && v !== 0) return '—';
+  if (!v && v !== 0) return '-';
   const n = parseFloat(v);
-  if (isNaN(n)) return '—';
-  if (n >= 1000000) return '€' + (n/1000000).toFixed(1) + 'M';
-  if (n >= 1000) return '€' + (n/1000).toFixed(0) + 'K';
-  return '€' + n.toFixed(0);
+  if (isNaN(n)) return '-';
+  if (n >= 1000000) return 'EUR ' + (n/1000000).toFixed(1) + 'M';
+  if (n >= 1000) return 'EUR ' + (n/1000).toFixed(0) + 'K';
+  return 'EUR ' + n.toFixed(0);
 }
 
 function destroyChart(id) {
@@ -984,3 +987,4 @@ window.selectMepaCategory = selectMepaCategory;
 window.toggleMepaCategoryState = toggleMepaCategoryState;
 window.deleteMepaCategory = deleteMepaCategory;
 window.rebuildMepaStats = rebuildMepaStats;
+

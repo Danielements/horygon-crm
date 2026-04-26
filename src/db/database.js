@@ -338,6 +338,16 @@ function ensureColumn(table, definition) {
   "importo_iva REAL"
 ].forEach(col => ensureColumn('preventivi_righe', col));
 
+[
+  "preventivo_id INTEGER",
+  "imponibile REAL DEFAULT 0",
+  "iva REAL DEFAULT 0"
+].forEach(col => ensureColumn('ordini', col));
+
+[
+  "cpv_mepa TEXT"
+].forEach(col => ensureColumn('prodotti', col));
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS fatture_iva_riepilogo (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

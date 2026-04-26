@@ -101,11 +101,25 @@ function getCalendarId() {
   return process.env.GOOGLE_SHARED_CALENDAR_ID || 'info@horygon.com';
 }
 
+function getCalendarOwnerEmail() {
+  return process.env.GOOGLE_CALENDAR_OWNER_EMAIL || 'info@horygon.com';
+}
+
+function getCalendarClient(utente_id) {
+  const ownerEmail = getCalendarOwnerEmail();
+  const ownerUser = db.prepare('SELECT id FROM utenti WHERE LOWER(email) = LOWER(?) LIMIT 1').get(ownerEmail);
+  if (ownerUser?.id) {
+    const ownerClient = getClient(ownerUser.id);
+    if (ownerClient) return ownerClient;
+  }
+  return getClient(utente_id);
+}
+
 // ═══════════════════════════════
 // CALENDAR
 // ═══════════════════════════════
 async function getEvents(utente_id, timeMin, timeMax) {
-  const client = getClient(utente_id);
+  const client = getCalendarClient(utente_id);
   if (!client) return [];
   const calendar = google.calendar({ version: 'v3', auth: client });
   try {
@@ -125,7 +139,7 @@ async function getEvents(utente_id, timeMin, timeMax) {
 }
 
 async function createEvent(utente_id, evento) {
-  const client = getClient(utente_id);
+  const client = getCalendarClient(utente_id);
   if (!client) throw new Error('Google non connesso');
   const calendar = google.calendar({ version: 'v3', auth: client });
   const res = await calendar.events.insert({ calendarId: getCalendarId(), requestBody: evento });
@@ -133,7 +147,7 @@ async function createEvent(utente_id, evento) {
 }
 
 async function updateEvent(utente_id, eventId, evento) {
-  const client = getClient(utente_id);
+  const client = getCalendarClient(utente_id);
   if (!client) throw new Error('Google non connesso');
   const calendar = google.calendar({ version: 'v3', auth: client });
   const res = await calendar.events.update({ calendarId: getCalendarId(), eventId, requestBody: evento });
@@ -141,7 +155,7 @@ async function updateEvent(utente_id, eventId, evento) {
 }
 
 async function deleteEvent(utente_id, eventId) {
-  const client = getClient(utente_id);
+  const client = getCalendarClient(utente_id);
   if (!client) throw new Error('Google non connesso');
   const calendar = google.calendar({ version: 'v3', auth: client });
   await calendar.events.delete({ calendarId: getCalendarId(), eventId });

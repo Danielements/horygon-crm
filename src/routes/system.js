@@ -43,4 +43,10 @@ router.put('/settings', requirePermesso('utenti', 'admin'), (req, res) => {
   res.json(saveSettings(req.body?.items || []));
 });
 
+router.get('/public-config', (req, res) => {
+  res.json({
+    googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY || ''
+  });
+});
+
 module.exports = router;

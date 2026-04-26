@@ -1,0 +1,3 @@
+git add src/services/google.js src/routes/operativo.js src/routes/documenti.js src/routes/preventivi.js src/routes/ordini.js src/routes/mepa.js src/services/mepa-parser.js public/js/app.js public/css/style.css
+git commit -m "Fix CRM activity notifications, shared Google calendar, and document logs"
+git push origin main

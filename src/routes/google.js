@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const { authMiddleware } = require('../middleware/auth');
-const { getEvents, createEvent, updateEvent, deleteEvent, getDriveFiles, uploadToDrive, deleteFromDrive, getGoogleContacts, syncLocalContactsToGoogle, syncMepaGmail, listMepaMailAlerts, getMepaMailAlertById, updateMepaMailAlert, processMepaAutomation, listNotifications, markNotificationRead, updateNotification } = require('../services/google');
+const { getEvents, createEvent, updateEvent, deleteEvent, getDriveFiles, uploadToDrive, deleteFromDrive, getGoogleContacts, syncLocalContactsToGoogle, syncMepaGmail, listMepaMailAlerts, getMepaMailAlertById, updateMepaMailAlert, processMepaAutomation, listNotifications, markNotificationRead, updateNotification, listSettings, saveSettings } = require('../services/google');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -134,6 +134,18 @@ router.patch('/notifications/:id', async (req, res) => {
   try {
     updateNotification(req.user.id, req.params.id, req.body || {});
     res.json({ ok: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.get('/settings', (req, res) => {
+  try {
+    res.json(listSettings());
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.put('/settings', (req, res) => {
+  try {
+    res.json(saveSettings(req.body?.items || []));
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 

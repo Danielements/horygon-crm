@@ -866,7 +866,8 @@ function getMepaAnalytics(categoryId = null) {
 
   // Top CPV con trend 3 anni
   const topCpv = db.prepare(`
-    SELECT codice_cpv, descrizione_cpv,
+    SELECT substr(codice_cpv, 1, 8) as codice_cpv_match,
+      MAX(descrizione_cpv) as descrizione_cpv,
       SUM(CASE WHEN anno = ${anni[0] || 2023} THEN valore_economico ELSE 0 END) as v_primo,
       SUM(CASE WHEN anno = ${anni[1] || 2024} THEN valore_economico ELSE 0 END) as v_medio,
       SUM(CASE WHEN anno = ${anni[anni.length-1] || 2025} THEN valore_economico ELSE 0 END) as v_ultimo,
@@ -875,15 +876,21 @@ function getMepaAnalytics(categoryId = null) {
       SUM(valore_economico) as tot_valore,
       SUM(n_ordini) as tot_ordini
     FROM mepa_ordini WHERE ${activeFilter.where}
-    GROUP BY codice_cpv
+    GROUP BY substr(codice_cpv, 1, 8)
     ORDER BY tot_valore DESC LIMIT 100
   `).all(...activeFilter.params);
 
   // Aggiungi metadati CPV Horygon e calcola crescita
   const topCpvArricchiti = topCpv.map(c => {
-    const meta = getCpvMeta(c.codice_cpv);
+    const meta = getCpvMeta(c.codice_cpv_match);
     const crescita = c.v_primo > 0 ? ((c.v_ultimo - c.v_primo) / c.v_primo * 100) : null;
-    return { ...c, ...meta, crescita_pct: crescita ? parseFloat(crescita.toFixed(1)) : null };
+    return {
+      ...c,
+      ...meta,
+      codice_cpv: c.codice_cpv_match,
+      codice_cpv_display: meta.codice_cpv_display || formatCpvCode(c.codice_cpv_match),
+      crescita_pct: crescita ? parseFloat(crescita.toFixed(1)) : null
+    };
   });
 
   // Top regioni con trend

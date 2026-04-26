@@ -35,14 +35,18 @@ router.get('/stato', (req, res) => {
     const { where: cpvWhere, params: cpvParams } = getActiveCpvFilter('', categoryId);
     const totRighe = db.prepare('SELECT COUNT(*) as n FROM mepa_ordini').get();
     const totRigheHorygon = db.prepare(`SELECT COUNT(*) as n FROM mepa_ordini WHERE ${cpvWhere}`).get(...cpvParams);
+    const totOrdini = db.prepare('SELECT SUM(n_ordini) as n FROM mepa_ordini').get();
+    const totOrdiniHorygon = db.prepare(`SELECT SUM(n_ordini) as n FROM mepa_ordini WHERE ${cpvWhere}`).get(...cpvParams);
     const anni = db.prepare('SELECT DISTINCT anno FROM mepa_ordini ORDER BY anno DESC').all().map(r => r.anno);
     const importLog = db.prepare('SELECT * FROM mepa_import_log ORDER BY data_import DESC').all();
     const totValore = db.prepare('SELECT SUM(valore_economico) as tot FROM mepa_ordini').get();
     const totValoreHorygon = db.prepare(`SELECT SUM(valore_economico) as tot FROM mepa_ordini WHERE ${cpvWhere}`).get(...cpvParams);
     const fileStats = listUniqueMepaFiles();
     res.json({
-      totalRecords: totRighe.n,
-      totalRecordsHorygon: totRigheHorygon.n,
+      totalRecords: totOrdini.n || 0,
+      totalRecordsHorygon: totOrdiniHorygon.n || 0,
+      totalRows: totRighe.n || 0,
+      totalRowsHorygon: totRigheHorygon.n || 0,
       anni,
       importLog,
       totValore: totValore.tot || 0,

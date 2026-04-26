@@ -52,6 +52,11 @@ router.get('/', (req, res) => {
   // Aggiungi giacenza e prima immagine
   rows.forEach(p => {
     p.giacenza = getGiacenza(p.id);
+    p.cpv_mepa_entry = p.cpv_mepa ? db.prepare(`
+      SELECT codice_cpv, descrizione, categoria
+      FROM mepa_cpv_catalog
+      WHERE codice_cpv = ?
+    `).get(p.cpv_mepa) : null;
     const img = db.prepare(`SELECT path FROM prodotti_media WHERE prodotto_id = ? AND tipo = 'immagine' LIMIT 1`).get(p.id);
     p.immagine = img ? img.path : null;
     p.listini = db.prepare('SELECT * FROM prodotti_listini WHERE prodotto_id = ? ORDER BY canale, valido_dal DESC').all(p.id);
@@ -96,6 +101,11 @@ router.get('/:id', (req, res) => {
     LIMIT 50
   `).all(req.params.id);
   p.giacenza = getGiacenza(req.params.id);
+  p.cpv_mepa_entry = p.cpv_mepa ? db.prepare(`
+    SELECT codice_cpv, descrizione, categoria
+    FROM mepa_cpv_catalog
+    WHERE codice_cpv = ?
+  `).get(p.cpv_mepa) : null;
   res.json(p);
 });
 
@@ -104,10 +114,10 @@ router.post('/', requirePermesso('prodotti', 'edit'), (req, res) => {
   const b = req.body || {};
   try {
     const r = db.prepare(`
-      INSERT INTO prodotti (codice_interno,barcode,nome,descrizione,categoria_id,unita_misura,peso_kg)
-      VALUES (?,?,?,?,?,?,?)
+      INSERT INTO prodotti (codice_interno,barcode,nome,descrizione,categoria_id,unita_misura,peso_kg,cpv_mepa)
+      VALUES (?,?,?,?,?,?,?,?)
     `).run(s(b.codice_interno), s(b.barcode), s(b.nome), s(b.descrizione),
-          i(b.categoria_id), s(b.unita_misura) || 'pz', n(b.peso_kg));
+          i(b.categoria_id), s(b.unita_misura) || 'pz', n(b.peso_kg), s(b.cpv_mepa));
     res.json({ id: r.lastInsertRowid });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -117,10 +127,10 @@ router.put('/:id', requirePermesso('prodotti', 'edit'), (req, res) => {
   const b = req.body || {};
   try {
     db.prepare(`
-      UPDATE prodotti SET codice_interno=?,barcode=?,nome=?,descrizione=?,categoria_id=?,unita_misura=?,peso_kg=?,attivo=?
+      UPDATE prodotti SET codice_interno=?,barcode=?,nome=?,descrizione=?,categoria_id=?,unita_misura=?,peso_kg=?,cpv_mepa=?,attivo=?
       WHERE id=?
     `).run(s(b.codice_interno), s(b.barcode), s(b.nome), s(b.descrizione),
-           i(b.categoria_id), s(b.unita_misura), n(b.peso_kg),
+           i(b.categoria_id), s(b.unita_misura), n(b.peso_kg), s(b.cpv_mepa),
            b.attivo !== undefined ? i(b.attivo) : 1,
            req.params.id);
     res.json({ ok: true });
