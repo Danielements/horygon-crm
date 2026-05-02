@@ -717,6 +717,22 @@ async function notifyUsersWithEmail({
   if (emailSettingKey && getSetting(emailSettingKey, '0') === '1' && recipients.length) {
     const resolvedRecipients = resolveUserNotificationEmails(recipients);
     const resolvedIds = new Set(resolvedRecipients.map(recipient => Number(recipient.id)));
+    const unresolvedTargets = notificationTargets.filter(target => !resolvedIds.has(Number(target.userId)));
+    if (unresolvedTargets.length) {
+      writeSystemLog({
+        livello: 'warning',
+        origine: 'notifications.notifyUsersWithEmail',
+        utente_id: senderUserId || null,
+        messaggio: 'Destinatari senza email risolvibile per invio notifica',
+        dettagli: {
+          tipo,
+          titolo,
+          requestedUserIds: recipients,
+          unresolvedUserIds: unresolvedTargets.map(target => target.userId),
+          emailSettingKey
+        }
+      });
+    }
     notificationTargets
       .filter(target => !resolvedIds.has(Number(target.userId)))
       .forEach(target => {

@@ -359,7 +359,7 @@ function organizeNavigationLayout() {
     { label: 'Logistica', sections: ['prodotti', 'magazzino', 'preventivi', 'ordini', 'ddt', 'container', 'documenti'] },
     { label: 'Contabilita', sections: ['fatture-attive', 'fatture-passive', 'fatture-fuori-campo'] },
     { label: 'Statistica', sections: ['cig', 'mepa', 'rdo', 'analytics', 'statistics'] },
-    { label: 'Impostazioni', sections: ['utenti', 'audit-log', 'system-log', 'automazioni', 'settings'] }
+    { label: 'Amministrazione', sections: ['utenti', 'audit-log', 'system-log', 'automazioni'] }
   ];
   nav.innerHTML = '';
   groups.forEach(group => {
@@ -394,7 +394,6 @@ function organizeNavigationLayout() {
         : section === 'statistics' ? getItem('statistics', 'Statistiche', '📈')
         : section === 'utenti' ? getItem('utenti', 'Utenti', '⚙️', 'nav-utenti')
         : section === 'automazioni' ? getItem('automazioni', 'Automazioni', '⚡')
-        : section === 'settings' ? getItem('settings', 'Impostazioni', '🛠️')
         : null;
       if (item) {
         nav.appendChild(item);
@@ -430,7 +429,7 @@ function configureMobileBottomNav() {
     <button class="mobile-tab" data-section="clienti" onclick="navigateTo('clienti')"><span>👥</span><small>Anagr.</small></button>
     <button class="mobile-tab" data-section="ordini" onclick="navigateTo('ordini')"><span>📋</span><small>Logistica</small></button>
     <button class="mobile-tab" data-section="fatture-attive" onclick="navigateTo('fatture-attive')"><span>🧾</span><small>Contab.</small></button>
-    <button class="mobile-tab" data-section="settings" onclick="navigateTo('settings')"><span>⚙️</span><small>Impost.</small></button>
+    <button class="mobile-tab" data-section="automazioni" onclick="navigateTo('automazioni')"><span>⚡</span><small>Auto.</small></button>
   `;
 }
 
