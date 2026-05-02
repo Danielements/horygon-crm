@@ -148,6 +148,7 @@ router.get('/google/callback', async (req, res) => {
 
 router.get('/me', authMiddleware, (req, res) => {
   const user = db.prepare('SELECT id,nome,email,ruolo_id,tema,force_password_change FROM utenti WHERE id = ?').get(req.user.id);
+  if (!user) return res.status(401).json({ error: 'Utente non trovato o non piu attivo' });
   const permessi = db.prepare('SELECT * FROM permessi WHERE ruolo_id = ?').all(user.ruolo_id);
   const ownGoogle = !!db.prepare('SELECT id FROM google_tokens WHERE utente_id = ?').get(user.id);
   const ownerGoogle = !!db.prepare(`
