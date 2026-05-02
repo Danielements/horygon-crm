@@ -4,6 +4,8 @@ const bcrypt = require('bcrypt');
 const QRCode = require('qrcode');
 const db = require('../db/database');
 const { authMiddleware, requirePermesso } = require('../middleware/auth');
+const { sendMail } = require('../services/google');
+const { writeAudit } = require('../services/audit');
 
 router.use(authMiddleware);
 
@@ -14,6 +16,25 @@ try { db.exec(`ALTER TABLE utenti ADD COLUMN linkedin TEXT`); } catch {}
 try { db.exec(`ALTER TABLE utenti ADD COLUMN note_biglietto TEXT`); } catch {}
 
 const s = (v) => (v === undefined || v === '' || v === null) ? null : v;
+
+async function sendCredentialsEmail(senderUserId, user, plainPassword) {
+  const loginUrl = process.env.APP_URL || 'https://crm.horygon.it';
+  const subject = 'Credenziali di accesso Horygon CRM';
+  const text = [
+    `Ciao ${user.nome || ''},`,
+    '',
+    'ti abbiamo creato un accesso al CRM Horygon.',
+    '',
+    `URL: ${loginUrl}`,
+    `Email: ${user.email}`,
+    `Password temporanea: ${plainPassword}`,
+    '',
+    'Al primo accesso ti verra richiesto di cambiare subito la password.',
+    '',
+    'Questo messaggio e generato dalla piattaforma Horygon.'
+  ].join('\n');
+  await sendMail(senderUserId, user.email, subject, text);
+}
 
 function buildVCard(u) {
   return [
@@ -32,7 +53,7 @@ function buildVCard(u) {
 
 router.get('/', requirePermesso('utenti', 'read'), (req, res) => {
   const rows = db.prepare(`
-    SELECT u.id, u.nome, u.email, u.ruolo_id, u.tema, u.attivo, u.creato_il,
+    SELECT u.id, u.nome, u.email, u.ruolo_id, u.tema, u.attivo, u.force_password_change, u.credentials_sent_at, u.creato_il,
            u.telefono, u.qualifica, u.reparto, u.linkedin, u.note_biglietto,
            r.nome as ruolo_nome
     FROM utenti u LEFT JOIN ruoli r ON r.id = u.ruolo_id ORDER BY u.nome
@@ -41,7 +62,10 @@ router.get('/', requirePermesso('utenti', 'read'), (req, res) => {
 });
 
 router.post('/', requirePermesso('utenti', 'admin'), async (req, res) => {
-  const { nome, email, password, ruolo_id, tema, telefono, qualifica, reparto, linkedin, note_biglietto } = req.body;
+  const {
+    nome, email, password, ruolo_id, tema, telefono, qualifica, reparto, linkedin, note_biglietto,
+    send_credentials_email, force_password_change
+  } = req.body;
   try {
     if (req.user.ruolo_id !== 4 && Number(ruolo_id) === 4) {
       return res.status(403).json({ error: 'Solo un SuperAdmin può creare un altro SuperAdmin' });
@@ -49,28 +73,71 @@ router.post('/', requirePermesso('utenti', 'admin'), async (req, res) => {
     if (!password) return res.status(400).json({ error: 'Password obbligatoria per nuovo utente' });
     const hash = await bcrypt.hash(password, 10);
     const r = db.prepare(
-      'INSERT INTO utenti (nome, email, password_hash, ruolo_id, tema, telefono, qualifica, reparto, linkedin, note_biglietto) VALUES (?,?,?,?,?,?,?,?,?,?)'
-    ).run(nome, email, hash, ruolo_id || 1, tema || 'dark', s(telefono), s(qualifica), s(reparto), s(linkedin), s(note_biglietto));
-    res.json({ id: r.lastInsertRowid });
+      'INSERT INTO utenti (nome, email, password_hash, ruolo_id, tema, telefono, qualifica, reparto, linkedin, note_biglietto, force_password_change) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+    ).run(nome, email, hash, ruolo_id || 1, tema || 'dark', s(telefono), s(qualifica), s(reparto), s(linkedin), s(note_biglietto), force_password_change ? 1 : 0);
+    const userId = r.lastInsertRowid;
+    let email_sent = false;
+    let email_error = null;
+    if (send_credentials_email) {
+      try {
+        await sendCredentialsEmail(req.user.id, { nome, email }, password);
+        db.prepare(`UPDATE utenti SET credentials_sent_at = datetime('now') WHERE id = ?`).run(userId);
+        email_sent = true;
+      } catch (err) {
+        email_error = err.message;
+      }
+    }
+    writeAudit({
+      utente_id: req.user.id,
+      azione: 'utente.create',
+      entita_tipo: 'utente',
+      entita_id: userId,
+      dettagli: { nome, email, ruolo_id: ruolo_id || 1, email_sent, force_password_change: !!force_password_change }
+    });
+    res.json({ id: userId, email_sent, email_error });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 router.put('/:id', requirePermesso('utenti', 'admin'), async (req, res) => {
-  const { nome, email, password, ruolo_id, tema, attivo, telefono, qualifica, reparto, linkedin, note_biglietto } = req.body;
+  const {
+    nome, email, password, ruolo_id, tema, attivo, telefono, qualifica, reparto, linkedin, note_biglietto,
+    send_credentials_email, force_password_change
+  } = req.body;
   const current = db.prepare('SELECT ruolo_id FROM utenti WHERE id = ?').get(req.params.id);
   if (!current) return res.status(404).json({ error: 'Utente non trovato' });
   if (req.user.ruolo_id !== 4 && (Number(ruolo_id) === 4 || Number(current.ruolo_id) === 4)) {
     return res.status(403).json({ error: 'Solo un SuperAdmin può modificare un SuperAdmin' });
   }
+  if (send_credentials_email && !password) {
+    return res.status(400).json({ error: 'Per inviare nuove credenziali devi impostare una password temporanea' });
+  }
   if (password) {
     const hash = await bcrypt.hash(password, 10);
-    db.prepare('UPDATE utenti SET nome=?,email=?,password_hash=?,ruolo_id=?,tema=?,attivo=?,telefono=?,qualifica=?,reparto=?,linkedin=?,note_biglietto=? WHERE id=?')
-      .run(nome, email, hash, ruolo_id, tema, attivo, s(telefono), s(qualifica), s(reparto), s(linkedin), s(note_biglietto), req.params.id);
+    db.prepare('UPDATE utenti SET nome=?,email=?,password_hash=?,ruolo_id=?,tema=?,attivo=?,telefono=?,qualifica=?,reparto=?,linkedin=?,note_biglietto=?,force_password_change=? WHERE id=?')
+      .run(nome, email, hash, ruolo_id, tema, attivo, s(telefono), s(qualifica), s(reparto), s(linkedin), s(note_biglietto), force_password_change ? 1 : 0, req.params.id);
   } else {
-    db.prepare('UPDATE utenti SET nome=?,email=?,ruolo_id=?,tema=?,attivo=?,telefono=?,qualifica=?,reparto=?,linkedin=?,note_biglietto=? WHERE id=?')
-      .run(nome, email, ruolo_id, tema, attivo, s(telefono), s(qualifica), s(reparto), s(linkedin), s(note_biglietto), req.params.id);
+    db.prepare('UPDATE utenti SET nome=?,email=?,ruolo_id=?,tema=?,attivo=?,telefono=?,qualifica=?,reparto=?,linkedin=?,note_biglietto=?,force_password_change=? WHERE id=?')
+      .run(nome, email, ruolo_id, tema, attivo, s(telefono), s(qualifica), s(reparto), s(linkedin), s(note_biglietto), force_password_change ? 1 : 0, req.params.id);
   }
-  res.json({ ok: true });
+  let email_sent = false;
+  let email_error = null;
+  if (send_credentials_email) {
+    try {
+      await sendCredentialsEmail(req.user.id, { nome, email }, password);
+      db.prepare(`UPDATE utenti SET credentials_sent_at = datetime('now') WHERE id = ?`).run(req.params.id);
+      email_sent = true;
+    } catch (err) {
+      email_error = err.message;
+    }
+  }
+  writeAudit({
+    utente_id: req.user.id,
+    azione: 'utente.update',
+    entita_tipo: 'utente',
+    entita_id: req.params.id,
+    dettagli: { nome, email, ruolo_id, attivo, email_sent, force_password_change: !!force_password_change }
+  });
+  res.json({ ok: true, email_sent, email_error });
 });
 
 router.delete('/:id', requirePermesso('utenti', 'admin'), (req, res) => {
@@ -81,6 +148,7 @@ router.delete('/:id', requirePermesso('utenti', 'admin'), (req, res) => {
     return res.status(403).json({ error: 'Solo un SuperAdmin può disabilitare un SuperAdmin' });
   }
   db.prepare('UPDATE utenti SET attivo = 0 WHERE id = ?').run(req.params.id);
+  writeAudit({ utente_id: req.user.id, azione: 'utente.disable', entita_tipo: 'utente', entita_id: req.params.id });
   res.json({ ok: true });
 });
 
@@ -112,6 +180,7 @@ router.put('/permessi/:ruolo_id', requirePermesso('utenti', 'admin'), (req, res)
     VALUES (?,?,?,?,?,?)
   `);
   permessi.forEach(p => upsert.run(req.params.ruolo_id, p.sezione, p.can_read, p.can_edit, p.can_delete, p.can_admin));
+  writeAudit({ utente_id: req.user.id, azione: 'permessi.update', entita_tipo: 'ruolo', entita_id: req.params.ruolo_id, dettagli: { count: permessi.length } });
   res.json({ ok: true });
 });
 

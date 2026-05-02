@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const { authMiddleware } = require('../middleware/auth');
-const { getEvents, createEvent, updateEvent, deleteEvent, getDriveFiles, uploadToDrive, deleteFromDrive, getGoogleContacts, syncLocalContactsToGoogle, syncMepaGmail, listMepaMailAlerts, getMepaMailAlertById, updateMepaMailAlert, processMepaAutomation, listNotifications, markNotificationRead, updateNotification, listSettings, saveSettings } = require('../services/google');
+const { getEvents, createEvent, updateEvent, deleteEvent, getDriveFiles, uploadToDrive, deleteFromDrive, getGoogleContacts, syncLocalContactsToGoogle, syncMepaGmail, listMepaMailAlerts, getMepaMailAlertById, updateMepaMailAlert, processMepaAutomation, processAllAutomations, listNotifications, markNotificationRead, updateNotification, listSettings, saveSettings } = require('../services/google');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -125,7 +125,7 @@ router.patch('/gmail/mepa/messages/:id', async (req, res) => {
 
 router.get('/notifications', async (req, res) => {
   try {
-    await processMepaAutomation(req.user.id);
+    await processAllAutomations(req.user.id);
     res.json(listNotifications(req.user.id));
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
