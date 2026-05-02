@@ -542,17 +542,6 @@ router.post('/attivita', async (req, res, next) => {
         });
       }
     }
-    if (s(data_ora)) {
-      try {
-        const created = await createEvent(req.user.id, buildGoogleEventPayload({
-          title: titoloAttivita,
-          description: s(note) || '',
-          start: s(data_ora),
-          end: s(data_ora)
-        }));
-        if (created?.id) db.prepare('UPDATE attivita SET google_event_id = ? WHERE id = ?').run(created.id, activityId);
-      } catch {}
-    }
     res.json({ id: activityId, notificationResult });
   } catch (e) {
     if (e.code === 'SQLITE_CONSTRAINT') return next();
@@ -729,28 +718,6 @@ router.put('/attivita/:id', async (req, res, next) => {
           text: `Gentile ${updated.ragione_sociale || 'cliente'},\n\nla vostra attivita collegata al CRM e stata aggiornata.\n\nTitolo: ${updated.oggetto || 'Attivita'}\nStato: ${updated.stato || '-'}\nData: ${updated.data_ora || '-'}\n\nPer qualsiasi esigenza potete contattarci rispondendo a questa email.\n\nHorygon CRM`
         });
       }
-    }
-    if (updated.data_ora) {
-      try {
-        if (updated.google_event_id) {
-          await updateEvent(req.user.id, updated.google_event_id, buildGoogleEventPayload({
-            title: updated.oggetto || 'Attivita CRM',
-            description: updated.note || '',
-            start: updated.data_ora,
-            end: updated.data_ora
-          }));
-        } else {
-          const created = await createEvent(req.user.id, buildGoogleEventPayload({
-            title: updated.oggetto || 'Attivita CRM',
-            description: updated.note || '',
-            start: updated.data_ora,
-            end: updated.data_ora
-          }));
-          if (created?.id) {
-            db.prepare('UPDATE attivita SET google_event_id = ? WHERE id = ?').run(created.id, updated.id);
-          }
-        }
-      } catch {}
     }
     res.json({ ok: true });
   } catch (e) {
