@@ -515,15 +515,15 @@ router.post('/attivita', async (req, res, next) => {
         senderUserId: req.user.id,
         userIds: recipientIds,
         tipo: assegnatoId ? 'attivita_assegnata' : 'attivita_creata',
-        titolo: assegnatoId ? `Assegnazione attivita a ${assegnatoUser?.nome || 'utente'}` : `Nuova attivita CRM: ${titoloAttivita}`,
-        messaggio: `${titoloAttivita}${data_ora ? ` • ${data_ora}` : ''}`,
+        titolo: assegnatoId ? `Nuova attivita CRM per ${assegnatoUser?.nome || 'utente'}` : `Nuova attivita CRM: ${titoloAttivita}`,
+        messaggio: `${assegnatoId ? 'Attivita assegnata' : 'Nuova attivita'}: ${titoloAttivita}${data_ora ? ` • ${data_ora}` : ''}`,
         livello_urgenza: 'alta',
         entita_tipo: 'attivita',
         entita_id: activityId,
         uniqueSuffix: assegnatoId ? 'assigned' : 'created',
         emailSettingKey: assegnatoId ? 'automation.email_users_activity_assignments' : 'automation.email_users_activity_updates',
         emailSubject: assegnatoId ? `[Horygon] Assegnazione attivita a ${assegnatoUser?.nome || 'utente'}` : `[Horygon] Nuova attivita CRM: ${titoloAttivita}`,
-        emailText: `${assegnatoId ? `Ti e stata assegnata l'attivita "${titoloAttivita}".` : 'E stata creata una nuova attivita CRM.'}\n\nTitolo: ${titoloAttivita}\nData: ${data_ora || '-'}\nStato: ${nextState}\n\n${note ? `Note:\n${note}\n\n` : ''}Operatore: ${req.user.nome || 'Horygon CRM'}`
+        emailText: `${assegnatoId ? `Ti e stata assegnata l'attivita "${titoloAttivita}".` : 'E stata creata una nuova attivita CRM.'}\n\nAttivita assegnata a: ${assegnatoUser?.nome || req.user.nome || 'Utente'}\nTitolo: ${titoloAttivita}\nData: ${data_ora || '-'}\nStato: ${nextState}\n\n${note ? `Note:\n${note}\n\n` : ''}Operatore: ${req.user.nome || 'Horygon CRM'}`
       });
     }
     if (s(data_ora)) {
@@ -672,15 +672,15 @@ router.put('/attivita/:id', async (req, res, next) => {
         senderUserId: req.user.id,
         userIds: [updated.assegnato_a],
         tipo: 'attivita_assegnata',
-        titolo: `Assegnazione attivita a ${assignedUser?.nome || 'utente'}`,
-        messaggio: `${updated.oggetto || 'Attivita CRM'}${updated.data_ora ? ` • ${updated.data_ora}` : ''}`,
+        titolo: `Nuova attivita CRM per ${assignedUser?.nome || 'utente'}`,
+        messaggio: `Attivita assegnata: ${updated.oggetto || 'Attivita CRM'}${updated.data_ora ? ` • ${updated.data_ora}` : ''}`,
         livello_urgenza: 'alta',
         entita_tipo: 'attivita',
         entita_id: updated.id,
         uniqueSuffix: `assigned:${updated.assegnato_a}`,
         emailSettingKey: 'automation.email_users_activity_assignments',
         emailSubject: `[Horygon] Assegnazione attivita a ${assignedUser?.nome || 'utente'}`,
-        emailText: `Ti e stata assegnata l'attivita "${updated.oggetto || 'Attivita CRM'}".\n\nTitolo: ${updated.oggetto || 'Attivita CRM'}\nData: ${updated.data_ora || '-'}\nStato: ${updated.stato || '-'}\n\nAggiornata da: ${req.user.nome || 'Horygon CRM'}`
+        emailText: `Ti e stata assegnata l'attivita "${updated.oggetto || 'Attivita CRM'}".\n\nAttivita assegnata a: ${assignedUser?.nome || 'Utente'}\nTitolo: ${updated.oggetto || 'Attivita CRM'}\nData: ${updated.data_ora || '-'}\nStato: ${updated.stato || '-'}\n\nAggiornata da: ${req.user.nome || 'Horygon CRM'}`
       });
     }
 

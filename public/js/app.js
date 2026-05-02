@@ -2388,13 +2388,15 @@ async function loadAttivita() {
   document.getElementById('attivita-list').innerHTML = (rows || []).map(a => {
     const noteFull = normalizeMailBody(a.note || '');
     const notePreview = compactText(noteFull, 220);
+    const mine = Number(a.assegnato_a || 0) === Number(USER?.id || 0);
     return `
-    <div class="attivita-item">
+    <div class="attivita-item ${mine ? 'is-mine' : ''}">
       <div class="att-icon att-${a.tipo}">${ICONE[a.tipo] || '◎'}</div>
       <div style="min-width:0;flex:1">
         <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
           <div>
             <strong>${escapeHtml(a.oggetto || a.tipo)}</strong>
+            ${mine ? `<div style="margin-top:6px"><span class="attivita-assigned-pill">Da gestire da te</span></div>` : ''}
             ${a.ragione_sociale ? `<span style="color:var(--text-muted)"> — ${escapeHtml(a.ragione_sociale)}</span>` : ''}
           </div>
           ${renderStateBadge(a.stato || 'aperta')}

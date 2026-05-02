@@ -614,17 +614,45 @@ function createNotificationsForUserIds(userIds = [], { tipo = 'info', titolo, me
     INSERT OR IGNORE INTO notifiche_app (utente_id, tipo, titolo, messaggio, livello_urgenza, entita_tipo, entita_id, unique_key)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const insertedIds = [];
+  const targets = [];
   resolvedUserIds.forEach(userId => {
     const uniqueKey = [userId, tipo, entita_tipo || '', entita_id || '', uniqueSuffix].join(':');
     const result = ins.run(userId, tipo, titolo, messaggio, livello_urgenza, entita_tipo, entita_id, uniqueKey);
-    if (result.lastInsertRowid) insertedIds.push(result.lastInsertRowid);
+    const existing = db.prepare('SELECT id FROM notifiche_app WHERE unique_key = ? LIMIT 1').get(uniqueKey);
+    targets.push({ userId, notificationId: existing?.id || null, uniqueKey, inserted: !!result.lastInsertRowid });
   });
-  return resolvedUserIds;
+  return targets;
 }
 
 function getActiveUserIds() {
   return db.prepare('SELECT id FROM utenti WHERE attivo = 1 ORDER BY id').all().map(row => row.id);
+}
+
+function resolveUserNotificationEmails(userIds = []) {
+  const ids = [...new Set((Array.isArray(userIds) ? userIds : []).map(v => parseInt(v, 10)).filter(v => !Number.isNaN(v) && v > 0))];
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = db.prepare(`
+    SELECT
+      u.id,
+      u.nome,
+      u.email AS user_email,
+      (
+        SELECT c.email
+        FROM anagrafiche_contatti c
+        WHERE c.linked_user_id = u.id
+          AND COALESCE(c.attivo, 1) = 1
+          AND c.email IS NOT NULL
+          AND TRIM(c.email) <> ''
+        ORDER BY c.id DESC
+        LIMIT 1
+      ) AS contact_email
+    FROM utenti u
+    WHERE u.attivo = 1 AND u.id IN (${placeholders})
+  `).all(...ids);
+  return rows
+    .map(row => ({ id: row.id, nome: row.nome, email: (row.user_email || row.contact_email || '').trim() }))
+    .filter(row => !!row.email);
 }
 
 async function sendMailToRecipients(senderUserId, recipients = [], subject, text, attachments = []) {
@@ -663,7 +691,7 @@ async function notifyUsersWithEmail({
   emailText = null
 }) {
   const resolvedUserIds = Array.isArray(userIds) && userIds.length ? userIds : getActiveUserIds();
-  const recipients = createNotificationsForUserIds(resolvedUserIds, {
+  const notificationTargets = createNotificationsForUserIds(resolvedUserIds, {
     tipo,
     titolo,
     messaggio,
@@ -672,20 +700,38 @@ async function notifyUsersWithEmail({
     entita_id,
     uniqueSuffix
   });
+  const recipients = notificationTargets.map(target => target.userId);
   let email = { sent: 0, failed: 0, skipped: true };
   if (emailSettingKey && getSetting(emailSettingKey, '0') === '1' && recipients.length) {
-    const placeholders = recipients.map(() => '?').join(',');
-    const rows = db.prepare(`
-      SELECT email
-      FROM utenti
-      WHERE attivo = 1 AND email IS NOT NULL AND TRIM(email) <> '' AND id IN (${placeholders})
-    `).all(...recipients);
-    email = await sendMailToRecipients(
-      senderUserId,
-      rows.map(row => row.email),
-      emailSubject || `[Horygon] ${titolo}`,
-      emailText || `${titolo}\n\n${messaggio || ''}`
-    );
+    const resolvedRecipients = resolveUserNotificationEmails(recipients);
+    const resolvedIds = new Set(resolvedRecipients.map(recipient => Number(recipient.id)));
+    notificationTargets
+      .filter(target => !resolvedIds.has(Number(target.userId)))
+      .forEach(target => {
+        if (target.notificationId) {
+          db.prepare('UPDATE notifiche_app SET invio_email_tentato = 1, invio_email_ok = 0 WHERE id = ?').run(target.notificationId);
+        }
+      });
+    for (const recipient of resolvedRecipients) {
+      const target = notificationTargets.find(item => Number(item.userId) === Number(recipient.id));
+      let ok = 0;
+      try {
+        await sendMail(
+          senderUserId,
+          recipient.email,
+          emailSubject || `[Horygon] ${titolo}`,
+          emailText || `${titolo}\n\n${messaggio || ''}`
+        );
+        ok = 1;
+        email.sent += 1;
+      } catch (e) {
+        logGoogleError('notifications.notifyUsersWithEmail', e, { senderUserId, to: recipient.email, title: titolo, userId: recipient.id });
+        email.failed += 1;
+      }
+      if (target?.notificationId) {
+        db.prepare('UPDATE notifiche_app SET invio_email_tentato = 1, invio_email_ok = ? WHERE id = ?').run(ok, target.notificationId);
+      }
+    }
     email.skipped = false;
   }
   return { notifiedUsers: recipients.length, email };
@@ -707,7 +753,7 @@ async function emailCustomerIfEnabled({
 async function dispatchPendingNotificationEmails(senderUserId) {
   if (getSetting('notifications.email_enabled', '0') !== '1') return { sent: 0 };
   const rows = db.prepare(`
-    SELECT n.*, u.email
+    SELECT n.*, u.id as user_id
     FROM notifiche_app n
     JOIN utenti u ON u.id = n.utente_id
     WHERE n.letta = 0 AND n.invio_email_tentato = 0 AND u.attivo = 1
@@ -717,12 +763,14 @@ async function dispatchPendingNotificationEmails(senderUserId) {
   let sent = 0;
   for (const row of rows) {
     let ok = 0;
+    const recipient = resolveUserNotificationEmails([row.user_id])[0];
     try {
-      await sendMail(senderUserId, row.email, `[Horygon] ${row.titolo}`, `${row.titolo}\n\n${row.messaggio || ''}`);
+      if (!recipient?.email) throw new Error('Email destinatario non trovata');
+      await sendMail(senderUserId, recipient.email, `[Horygon] ${row.titolo}`, `${row.titolo}\n\n${row.messaggio || ''}`);
       ok = 1;
       sent += 1;
     } catch (e) {
-      logGoogleError('notifications.dispatchPendingEmail', e, { senderUserId, notification_id: row.id, to: row.email, title: row.titolo });
+      logGoogleError('notifications.dispatchPendingEmail', e, { senderUserId, notification_id: row.id, to: recipient?.email || null, title: row.titolo, userId: row.user_id });
     }
     db.prepare('UPDATE notifiche_app SET invio_email_tentato = 1, invio_email_ok = ? WHERE id = ?').run(ok, row.id);
   }
