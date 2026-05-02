@@ -4145,6 +4145,9 @@ async function salvaAttivita() {
     } else {
       const created = await api('POST', '/attivita', body);
       savedId = created?.id || null;
+      if (body.assegnato_a && created?.notificationResult?.email && created.notificationResult.email.sent < 1) {
+        toast('Attività salvata, ma email assegnazione non inviata', 'warning');
+      }
     }
     if (body.sync_google && USER.hasGoogle && (savedId || id)) {
       await api('POST', `/attivita/${savedId || id}/google-sync`, body.google_event);

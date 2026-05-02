@@ -3,6 +3,7 @@ const router = express.Router();
 const db = require('../db/database');
 const { authMiddleware, requirePermesso } = require('../middleware/auth');
 const { createEvent, updateEvent, deleteEvent, processMepaAutomation, notifyUsersWithEmail, emailCustomerIfEnabled } = require('../services/google');
+const { writeSystemLog } = require('../services/system-log');
 const QRCode = require('qrcode');
 const PDFDocument = require('pdfkit');
 
@@ -510,8 +511,9 @@ router.post('/attivita', async (req, res, next) => {
       );
     const activityId = r.lastInsertRowid;
     const recipientIds = assegnatoId ? [assegnatoId] : [req.user.id];
+    let notificationResult = null;
     if (recipientIds.length) {
-      await notifyUsersWithEmail({
+      notificationResult = await notifyUsersWithEmail({
         senderUserId: req.user.id,
         userIds: recipientIds,
         tipo: assegnatoId ? 'attivita_assegnata' : 'attivita_creata',
@@ -525,6 +527,20 @@ router.post('/attivita', async (req, res, next) => {
         emailSubject: assegnatoId ? `[Horygon] Assegnazione attivita a ${assegnatoUser?.nome || 'utente'}` : `[Horygon] Nuova attivita CRM: ${titoloAttivita}`,
         emailText: `${assegnatoId ? `Ti e stata assegnata l'attivita "${titoloAttivita}".` : 'E stata creata una nuova attivita CRM.'}\n\nAttivita assegnata a: ${assegnatoUser?.nome || req.user.nome || 'Utente'}\nTitolo: ${titoloAttivita}\nData: ${data_ora || '-'}\nStato: ${nextState}\n\n${note ? `Note:\n${note}\n\n` : ''}Operatore: ${req.user.nome || 'Horygon CRM'}`
       });
+      if (assegnatoId && (!notificationResult?.email || notificationResult.email.sent < 1)) {
+        writeSystemLog({
+          livello: 'warning',
+          origine: 'crm.attivita.create.assignment',
+          utente_id: req.user.id,
+          messaggio: 'Creazione attività assegnata senza invio email riuscito',
+          dettagli: {
+            activityId,
+            assegnatoId,
+            assigneeName: assegnatoUser?.nome || null,
+            result: notificationResult
+          }
+        });
+      }
     }
     if (s(data_ora)) {
       try {
@@ -537,7 +553,7 @@ router.post('/attivita', async (req, res, next) => {
         if (created?.id) db.prepare('UPDATE attivita SET google_event_id = ? WHERE id = ?').run(created.id, activityId);
       } catch {}
     }
-    res.json({ id: activityId });
+    res.json({ id: activityId, notificationResult });
   } catch (e) {
     if (e.code === 'SQLITE_CONSTRAINT') return next();
     res.status(400).json({ error: e.message });
