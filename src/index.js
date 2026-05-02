@@ -9,6 +9,8 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const IS_PROD = process.env.NODE_ENV === 'production';
 
+app.set('trust proxy', 1);
+
 // CORS
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3001').split(',').map(o => o.trim());
 app.use(cors({
@@ -60,6 +62,7 @@ app.use('/api/mepa',        require('./routes/mepa'));
 app.use('/api/rdo',         require('./routes/rdo'));
 app.use('/api/cig',         require('./routes/cig'));
 app.use('/api/analytics',   require('./routes/analytics'));
+app.use('/api/audit',       require('./routes/audit'));
 app.use('/api',             require('./routes/operativo'));
 
 // Error handler

@@ -42,6 +42,14 @@ function looksLikeBcryptHash(value = '') {
   return /^\$2[aby]\$\d{2}\$/.test(String(value || ''));
 }
 
+function ensureUtentiAuthColumns() {
+  try { db.exec(`ALTER TABLE utenti ADD COLUMN force_password_change INTEGER DEFAULT 0`); } catch {}
+  try { db.exec(`ALTER TABLE utenti ADD COLUMN password_changed_il TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE utenti ADD COLUMN credentials_sent_at TEXT`); } catch {}
+}
+
+ensureUtentiAuthColumns();
+
 router.post('/setup', async (req, res) => {
   if (hasAnyUser()) return res.status(403).json({ error: 'Setup già completato' });
   const { nome, email, password } = req.body;
