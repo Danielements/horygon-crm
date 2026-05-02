@@ -260,6 +260,35 @@ function getActiveCpvFilter(alias = '', categoryId = null) {
   };
 }
 
+function getCanonicalMepaSource(alias = 'm') {
+  return `(
+    SELECT
+      anno,
+      tipologia_pa,
+      regione_pa,
+      provincia_pa,
+      regione_fornitore,
+      bando_mepa,
+      categoria_mepa,
+      substr(codice_cpv, 1, 8) AS codice_cpv,
+      MAX(descrizione_cpv) AS descrizione_cpv,
+      MAX(COALESCE(n_ordini, 0)) AS n_ordini,
+      MAX(COALESCE(valore_economico, 0)) AS valore_economico,
+      MAX(COALESCE(n_pa, 0)) AS n_pa,
+      MAX(COALESCE(n_fornitori, 0)) AS n_fornitori
+    FROM mepa_ordini
+    GROUP BY
+      anno,
+      tipologia_pa,
+      regione_pa,
+      provincia_pa,
+      regione_fornitore,
+      bando_mepa,
+      categoria_mepa,
+      substr(codice_cpv, 1, 8)
+  ) ${alias}`;
+}
+
 function saveCpvCatalogEntry(input = {}) {
   const codice = normalizeCpvCode(input.codice_cpv, { keepCheckDigit: true });
   if (codice.length < 6) throw new Error('Codice CPV non valido');
@@ -851,15 +880,16 @@ function getMepaAnalytics(categoryId = null) {
     };
   }
   const activeFilter = getActiveCpvFilter('', categoryId);
+  const source = getCanonicalMepaSource('m');
   // Anni disponibili
-  const anni = db.prepare(`SELECT DISTINCT anno FROM mepa_ordini WHERE ${activeFilter.where} ORDER BY anno ASC`).all(...activeFilter.params).map(r => r.anno);
+  const anni = db.prepare(`SELECT DISTINCT anno FROM ${source} WHERE ${activeFilter.where} ORDER BY anno ASC`).all(...activeFilter.params).map(r => r.anno);
 
   // KPI per anno
   const kpiAnni = anni.map(anno => {
     const row = db.prepare(`
       SELECT anno, COUNT(DISTINCT codice_cpv) as num_cpv,
         SUM(n_ordini) as tot_ordini, SUM(valore_economico) as tot_valore
-      FROM mepa_ordini WHERE anno = ? AND ${activeFilter.where}
+      FROM ${source} WHERE anno = ? AND ${activeFilter.where}
     `).get(anno, ...activeFilter.params);
     return row;
   });
@@ -875,8 +905,8 @@ function getMepaAnalytics(categoryId = null) {
       SUM(CASE WHEN anno = ${anni[anni.length-1] || 2025} THEN n_ordini ELSE 0 END) as n_ultimo,
       SUM(valore_economico) as tot_valore,
       SUM(n_ordini) as tot_ordini
-    FROM mepa_ordini WHERE ${activeFilter.where}
-    GROUP BY substr(codice_cpv, 1, 8)
+    FROM ${source} WHERE ${activeFilter.where}
+    GROUP BY codice_cpv
     ORDER BY tot_valore DESC LIMIT 100
   `).all(...activeFilter.params);
 
@@ -901,7 +931,7 @@ function getMepaAnalytics(categoryId = null) {
       SUM(valore_economico) as tot_valore,
       SUM(n_ordini) as tot_ordini,
       COUNT(DISTINCT codice_cpv) as n_cpv
-    FROM mepa_ordini WHERE regione_pa != '' AND ${activeFilter.where}
+    FROM ${source} WHERE regione_pa != '' AND ${activeFilter.where}
     GROUP BY regione_pa ORDER BY v_ultimo DESC LIMIT 20
   `).all(...activeFilter.params).map(r => ({
     ...r,
@@ -913,7 +943,7 @@ function getMepaAnalytics(categoryId = null) {
     SELECT tipologia_pa,
       SUM(CASE WHEN anno = ${anni[anni.length-1]||2025} THEN valore_economico ELSE 0 END) as v_ultimo,
       SUM(valore_economico) as tot_valore
-    FROM mepa_ordini WHERE tipologia_pa != '' AND ${activeFilter.where}
+    FROM ${source} WHERE tipologia_pa != '' AND ${activeFilter.where}
     GROUP BY tipologia_pa ORDER BY v_ultimo DESC LIMIT 15
   `).all(...activeFilter.params);
 
@@ -922,14 +952,14 @@ function getMepaAnalytics(categoryId = null) {
     SELECT categoria_mepa,
       SUM(valore_economico) as tot_valore,
       SUM(n_ordini) as tot_ordini
-    FROM mepa_ordini WHERE categoria_mepa != '' AND ${activeFilter.where}
+    FROM ${source} WHERE categoria_mepa != '' AND ${activeFilter.where}
     GROUP BY categoria_mepa ORDER BY tot_valore DESC LIMIT 10
   `).all(...activeFilter.params);
 
   // Serie temporale per anno
   const serieAnni = db.prepare(`
     SELECT anno, SUM(valore_economico) as tot_valore, SUM(n_ordini) as tot_ordini
-    FROM mepa_ordini WHERE ${activeFilter.where}
+    FROM ${source} WHERE ${activeFilter.where}
     GROUP BY anno ORDER BY anno ASC
   `).all(...activeFilter.params);
 
@@ -1035,6 +1065,7 @@ module.exports = {
   previewCpvCatalogText,
   importCpvCatalogText,
   listUniqueMepaFiles,
+  getCanonicalMepaSource,
   normalizeCpvCode,
   formatCpvCode,
   CPV_HORYGON,

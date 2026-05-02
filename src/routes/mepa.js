@@ -22,6 +22,7 @@ const {
   previewCpvCatalogText,
   importCpvCatalogText,
   listUniqueMepaFiles,
+  getCanonicalMepaSource,
   normalizeCpvCode,
   formatCpvCode,
 } = require('../services/mepa-parser');
@@ -33,14 +34,15 @@ router.get('/stato', (req, res) => {
   try {
     const categoryId = req.query.categoria_id ? Number(req.query.categoria_id) : null;
     const { where: cpvWhere, params: cpvParams } = getActiveCpvFilter('', categoryId);
-    const totRighe = db.prepare('SELECT COUNT(*) as n FROM mepa_ordini').get();
-    const totRigheHorygon = db.prepare(`SELECT COUNT(*) as n FROM mepa_ordini WHERE ${cpvWhere}`).get(...cpvParams);
-    const totOrdini = db.prepare('SELECT SUM(n_ordini) as n FROM mepa_ordini').get();
-    const totOrdiniHorygon = db.prepare(`SELECT SUM(n_ordini) as n FROM mepa_ordini WHERE ${cpvWhere}`).get(...cpvParams);
-    const anni = db.prepare('SELECT DISTINCT anno FROM mepa_ordini ORDER BY anno DESC').all().map(r => r.anno);
+    const source = getCanonicalMepaSource('m');
+    const totRighe = db.prepare(`SELECT COUNT(*) as n FROM ${source}`).get();
+    const totRigheHorygon = db.prepare(`SELECT COUNT(*) as n FROM ${source} WHERE ${cpvWhere}`).get(...cpvParams);
+    const totOrdini = db.prepare(`SELECT SUM(n_ordini) as n FROM ${source}`).get();
+    const totOrdiniHorygon = db.prepare(`SELECT SUM(n_ordini) as n FROM ${source} WHERE ${cpvWhere}`).get(...cpvParams);
+    const anni = db.prepare(`SELECT DISTINCT anno FROM ${source} ORDER BY anno DESC`).all().map(r => r.anno);
     const importLog = db.prepare('SELECT * FROM mepa_import_log ORDER BY data_import DESC').all();
-    const totValore = db.prepare('SELECT SUM(valore_economico) as tot FROM mepa_ordini').get();
-    const totValoreHorygon = db.prepare(`SELECT SUM(valore_economico) as tot FROM mepa_ordini WHERE ${cpvWhere}`).get(...cpvParams);
+    const totValore = db.prepare(`SELECT SUM(valore_economico) as tot FROM ${source}`).get();
+    const totValoreHorygon = db.prepare(`SELECT SUM(valore_economico) as tot FROM ${source} WHERE ${cpvWhere}`).get(...cpvParams);
     const fileStats = listUniqueMepaFiles();
     res.json({
       totalRecords: totOrdini.n || 0,
@@ -113,6 +115,7 @@ router.delete('/categorie-abilitate/:id', (req, res) => {
 router.get('/cpv-operativi', (req, res) => {
   try {
     const entries = getCpvCatalogEntries({ activeOnly: true });
+    const source = getCanonicalMepaSource('m');
     const rows = entries.map(entry => {
       const prefix = normalizeCpvCode(entry.codice_cpv, { keepCheckDigit: true }).substring(0, 8);
       const prodotti = db.prepare(`
@@ -135,7 +138,7 @@ router.get('/cpv-operativi', (req, res) => {
       `).all(`${prefix}%`, `${prefix}%`);
       const mercato = db.prepare(`
         SELECT SUM(valore_economico) as valore, SUM(n_ordini) as ordini
-        FROM mepa_ordini WHERE codice_cpv LIKE ?
+        FROM ${source} WHERE codice_cpv LIKE ?
       `).get(`${prefix}%`);
       const scorta = prodotti.reduce((sum, p) => sum + (p.giacenza || 0), 0);
       return {
@@ -160,6 +163,7 @@ router.get('/cpv-search', (req, res) => {
     const matchKey = normalized.substring(0, 8);
 
     const catalog = getCpvCatalogEntries({ activeOnly: true, categoryId });
+    const source = getCanonicalMepaSource('m');
     const filtered = catalog
       .filter(entry => {
         const entryDisplay = formatCpvCode(entry.codice_cpv);
@@ -176,7 +180,7 @@ router.get('/cpv-search', (req, res) => {
             SUM(valore_economico) as valore_totale,
             SUM(n_ordini) as ordini_totali,
             COUNT(DISTINCT anno) as anni_coperti
-          FROM mepa_ordini
+          FROM ${source}
           WHERE codice_cpv LIKE ?
         `).get(`${entryKey}%`);
 
@@ -270,10 +274,11 @@ router.post('/upload', (req, res) => {
 router.get('/cpv/:cpv', (req, res) => {
   try {
     const p = normalizeCpvCode(req.params.cpv, { keepCheckDigit: true }).substring(0, 8) + '%';
+    const source = getCanonicalMepaSource('m');
     res.json({
-      anni: db.prepare('SELECT anno, SUM(n_ordini) as n_ordini, SUM(valore_economico) as valore FROM mepa_ordini WHERE codice_cpv LIKE ? GROUP BY anno ORDER BY anno').all(p),
-      regioni: db.prepare('SELECT regione_pa, SUM(valore_economico) as valore, SUM(n_ordini) as n_ordini FROM mepa_ordini WHERE codice_cpv LIKE ? GROUP BY regione_pa ORDER BY valore DESC').all(p),
-      tipologie: db.prepare('SELECT tipologia_pa, SUM(valore_economico) as valore FROM mepa_ordini WHERE codice_cpv LIKE ? GROUP BY tipologia_pa ORDER BY valore DESC LIMIT 10').all(p),
+      anni: db.prepare(`SELECT anno, SUM(n_ordini) as n_ordini, SUM(valore_economico) as valore FROM ${source} WHERE codice_cpv LIKE ? GROUP BY anno ORDER BY anno`).all(p),
+      regioni: db.prepare(`SELECT regione_pa, SUM(valore_economico) as valore, SUM(n_ordini) as n_ordini FROM ${source} WHERE codice_cpv LIKE ? GROUP BY regione_pa ORDER BY valore DESC`).all(p),
+      tipologie: db.prepare(`SELECT tipologia_pa, SUM(valore_economico) as valore FROM ${source} WHERE codice_cpv LIKE ? GROUP BY tipologia_pa ORDER BY valore DESC LIMIT 10`).all(p),
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
