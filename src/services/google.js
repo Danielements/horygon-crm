@@ -647,11 +647,23 @@ function resolveUserNotificationEmails(userIds = []) {
         ORDER BY c.id DESC
         LIMIT 1
       ) AS contact_email
+      ,
+      (
+        SELECT a.email
+        FROM anagrafiche_contatti c
+        JOIN anagrafiche a ON a.id = c.anagrafica_id
+        WHERE c.linked_user_id = u.id
+          AND COALESCE(c.attivo, 1) = 1
+          AND a.email IS NOT NULL
+          AND TRIM(a.email) <> ''
+        ORDER BY c.id DESC
+        LIMIT 1
+      ) AS anagrafica_email
     FROM utenti u
     WHERE u.attivo = 1 AND u.id IN (${placeholders})
   `).all(...ids);
   return rows
-    .map(row => ({ id: row.id, nome: row.nome, email: (row.user_email || row.contact_email || '').trim() }))
+    .map(row => ({ id: row.id, nome: row.nome, email: (row.user_email || row.contact_email || row.anagrafica_email || '').trim() }))
     .filter(row => !!row.email);
 }
 

@@ -684,7 +684,8 @@ router.put('/attivita/:id', async (req, res, next) => {
       });
     }
 
-    if (changedFields.length) {
+    const assignmentOnly = changedFields.length === 1 && changedFields[0] === 'assegnazione';
+    if (changedFields.length && !assignmentOnly) {
       const recipientIds = [...new Set([updated.assegnato_a, updated.utente_id].filter(v => v))];
       if (recipientIds.length) {
         await notifyUsersWithEmail({
