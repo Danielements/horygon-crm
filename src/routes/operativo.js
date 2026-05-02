@@ -490,6 +490,9 @@ router.post('/attivita', async (req, res, next) => {
     const assegnatoId = i(assegnato_a);
     const titoloAttivita = s(oggetto) || 'Attivita CRM';
     const nextState = s(stato) || 'aperta';
+    const assegnatoUser = assegnatoId
+      ? db.prepare('SELECT id, nome, email FROM utenti WHERE id = ? AND attivo = 1').get(assegnatoId)
+      : null;
     const r = db.prepare(`INSERT INTO attivita (tipo,anagrafica_id,ordine_id,utente_id,assegnato_a,data_ora,durata_minuti,oggetto,note,esito,promemoria_il,stato)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
         s(tipo) || 'nota',
@@ -506,21 +509,21 @@ router.post('/attivita', async (req, res, next) => {
         nextState
       );
     const activityId = r.lastInsertRowid;
-    const recipientIds = [...new Set([assegnatoId, req.user.id].filter(v => v))];
+    const recipientIds = assegnatoId ? [assegnatoId] : [req.user.id];
     if (recipientIds.length) {
       await notifyUsersWithEmail({
         senderUserId: req.user.id,
         userIds: recipientIds,
         tipo: assegnatoId ? 'attivita_assegnata' : 'attivita_creata',
-        titolo: assegnatoId ? 'Nuova attivita assegnata' : 'Nuova attivita CRM',
+        titolo: assegnatoId ? `Assegnazione attivita a ${assegnatoUser?.nome || 'utente'}` : `Nuova attivita CRM: ${titoloAttivita}`,
         messaggio: `${titoloAttivita}${data_ora ? ` • ${data_ora}` : ''}`,
         livello_urgenza: 'alta',
         entita_tipo: 'attivita',
         entita_id: activityId,
         uniqueSuffix: assegnatoId ? 'assigned' : 'created',
         emailSettingKey: assegnatoId ? 'automation.email_users_activity_assignments' : 'automation.email_users_activity_updates',
-        emailSubject: assegnatoId ? '[Horygon] Nuova attivita assegnata' : '[Horygon] Nuova attivita CRM',
-        emailText: `${assegnatoId ? 'Ti e stata assegnata una nuova attivita.' : 'E stata creata una nuova attivita CRM.'}\n\nTitolo: ${titoloAttivita}\nData: ${data_ora || '-'}\nStato: ${nextState}\n\n${note ? `Note:\n${note}\n\n` : ''}Operatore: ${req.user.nome || 'Horygon CRM'}`
+        emailSubject: assegnatoId ? `[Horygon] Assegnazione attivita a ${assegnatoUser?.nome || 'utente'}` : `[Horygon] Nuova attivita CRM: ${titoloAttivita}`,
+        emailText: `${assegnatoId ? `Ti e stata assegnata l'attivita "${titoloAttivita}".` : 'E stata creata una nuova attivita CRM.'}\n\nTitolo: ${titoloAttivita}\nData: ${data_ora || '-'}\nStato: ${nextState}\n\n${note ? `Note:\n${note}\n\n` : ''}Operatore: ${req.user.nome || 'Horygon CRM'}`
       });
     }
     if (s(data_ora)) {
@@ -664,19 +667,20 @@ router.put('/attivita/:id', async (req, res, next) => {
     if ((current.promemoria_il || '') !== (updated.promemoria_il || '')) changedFields.push('promemoria');
 
     if (updated.assegnato_a && updated.assegnato_a !== current.assegnato_a) {
+      const assignedUser = db.prepare('SELECT id, nome, email FROM utenti WHERE id = ? AND attivo = 1').get(updated.assegnato_a);
       await notifyUsersWithEmail({
         senderUserId: req.user.id,
         userIds: [updated.assegnato_a],
         tipo: 'attivita_assegnata',
-        titolo: 'Attivita riassegnata',
+        titolo: `Assegnazione attivita a ${assignedUser?.nome || 'utente'}`,
         messaggio: `${updated.oggetto || 'Attivita CRM'}${updated.data_ora ? ` • ${updated.data_ora}` : ''}`,
         livello_urgenza: 'alta',
         entita_tipo: 'attivita',
         entita_id: updated.id,
         uniqueSuffix: `assigned:${updated.assegnato_a}`,
         emailSettingKey: 'automation.email_users_activity_assignments',
-        emailSubject: '[Horygon] Attivita riassegnata',
-        emailText: `Ti e stata assegnata un'attivita.\n\nTitolo: ${updated.oggetto || 'Attivita CRM'}\nData: ${updated.data_ora || '-'}\nStato: ${updated.stato || '-'}\n\nAggiornata da: ${req.user.nome || 'Horygon CRM'}`
+        emailSubject: `[Horygon] Assegnazione attivita a ${assignedUser?.nome || 'utente'}`,
+        emailText: `Ti e stata assegnata l'attivita "${updated.oggetto || 'Attivita CRM'}".\n\nTitolo: ${updated.oggetto || 'Attivita CRM'}\nData: ${updated.data_ora || '-'}\nStato: ${updated.stato || '-'}\n\nAggiornata da: ${req.user.nome || 'Horygon CRM'}`
       });
     }
 

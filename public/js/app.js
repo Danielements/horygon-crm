@@ -107,6 +107,7 @@ async function init() {
     // Permessi
     PERMS = {};
     (USER.permessi || []).forEach(p => { PERMS[p.sezione] = p; });
+    ensureSystemLogNavLink();
     applyNavigationPermissions();
     showScreen('app');
     navigateTo('dashboard');
@@ -2966,6 +2967,7 @@ function renderNotificationList(rows, { compact = false, targetId, emptyText }) 
               <span class="notification-state">${notificationStateLabel(row)}</span>
             </div>
             <h3>${escapeHtml(row.titolo || 'Notifica')}</h3>
+            <p class="notification-message compact">${escapeHtml(compactText(row.messaggio || '', 88))}</p>
             <div class="notification-submeta compact">
               <span>${formatNotificationTimestamp(row.creato_il)}</span>
               ${row.entita_tipo ? `<span>${escapeHtml(row.entita_tipo)}</span>` : ''}
