@@ -4144,7 +4144,7 @@ async function salvaAttivita() {
     } else {
       const created = await api('POST', '/attivita', body);
       savedId = created?.id || null;
-      if (body.assegnato_a && created?.notificationResult?.email && created.notificationResult.email.sent < 1) {
+      if (body.assegnato_a && created?.assignmentEmailResult && created.assignmentEmailResult.sent !== true) {
         toast('Attività salvata, ma email assegnazione non inviata', 'warning');
       }
     }

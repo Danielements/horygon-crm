@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db/database');
 const { authMiddleware, requirePermesso } = require('../middleware/auth');
-const { createEvent, updateEvent, deleteEvent, processMepaAutomation, notifyUsersWithEmail, emailCustomerIfEnabled } = require('../services/google');
+const { createEvent, updateEvent, deleteEvent, processMepaAutomation, notifyUsersWithEmail, emailCustomerIfEnabled, sendMail, getSetting } = require('../services/google');
 const { writeSystemLog } = require('../services/system-log');
 const QRCode = require('qrcode');
 const PDFDocument = require('pdfkit');
@@ -40,6 +40,27 @@ const COMPANY_INFO = {
   rea: 'LT - 335485',
   piva: '03365990591'
 };
+
+async function sendAssignmentEmailDirect(senderUserId, assigneeUser, { titolo, data, stato, note, operatore }) {
+  if (getSetting('automation.email_users_activity_assignments', '0') !== '1') {
+    return { skipped: true, reason: 'setting_disabled' };
+  }
+  const email = String(assigneeUser?.email || '').trim();
+  if (!email) {
+    writeSystemLog({
+      livello: 'warning',
+      origine: 'crm.attivita.assignment.direct-email',
+      utente_id: senderUserId || null,
+      messaggio: 'Utente assegnato senza email diretta in utenti.email',
+      dettagli: { assigneeUserId: assigneeUser?.id || null, assigneeName: assigneeUser?.nome || null, titolo }
+    });
+    return { skipped: true, reason: 'missing_user_email' };
+  }
+  const subject = `[Horygon] Assegnazione attivita a ${assigneeUser?.nome || 'utente'}`;
+  const text = `Ti e stata assegnata l'attivita "${titolo || 'Attivita CRM'}".\n\nAttivita assegnata a: ${assigneeUser?.nome || 'Utente'}\nTitolo: ${titolo || 'Attivita CRM'}\nData: ${data || '-'}\nStato: ${stato || '-'}\n\n${note ? `Note:\n${note}\n\n` : ''}Operatore: ${operatore || 'Horygon CRM'}`;
+  await sendMail(senderUserId, email, subject, text);
+  return { sent: true, email };
+}
 const DDT_LOGO_PATH_DATA = 'M156.9,94l3.4-5.8c.4-.6.4-1.4,0-2l-2.6-4.5h0s-21.1-36.7-21.1-36.7c-.4-.6-1-1-1.7-1h-42.1c0,0,0,0,0,0h-5.5c-.7,0-1.4.4-1.7,1l-21.1,36.5h0s-2.7,4.8-2.7,4.8c-.4.6-.4,1.4,0,2l2.6,4.5h0s21.1,36.7,21.1,36.7c.4.6,1,1,1.7,1h5.5s0,0,0,0h29.5c0,0,7,0,7,0h0s5.5,0,5.5,0c.7,0,1.4-.4,1.7-1l20.5-35.5ZM115,84.8l21.2-11c1.3-.7,2.9.3,2.9,1.8v26.8c0,.7-.4,1.4-1,1.7l-21.2,12.3c-1.3.8-3-.2-3-1.7v-28.1c0-.8.3-1.4,1-1.8ZM131.8,70.2l-19.9,9.9c-.6.3-1.2.3-1.8,0l-19.7-10c-1.4-.7-1.5-2.7-.1-3.5l19.7-11.4c.6-.4,1.4-.4,2,0l19.9,11.5c1.4.8,1.3,2.8-.1,3.5ZM85.8,73.8l21,11.1c.7.3,1.1,1,1.1,1.8v28c.1,1.5-1.5,2.5-2.9,1.7l-21.2-12.3c-.6-.4-1-1-1-1.7v-26.8c0-1.5,1.6-2.5,2.9-1.8Z';
 const DDT_COLOR = '#2563eb';
 const normalizeGoogleDateTime = (value) => {
@@ -512,6 +533,7 @@ router.post('/attivita', async (req, res, next) => {
     const activityId = r.lastInsertRowid;
     const recipientIds = assegnatoId ? [assegnatoId] : [req.user.id];
     let notificationResult = null;
+    let assignmentEmailResult = null;
     if (recipientIds.length) {
       notificationResult = await notifyUsersWithEmail({
         senderUserId: req.user.id,
@@ -527,22 +549,33 @@ router.post('/attivita', async (req, res, next) => {
         emailSubject: assegnatoId ? `[Horygon] Assegnazione attivita a ${assegnatoUser?.nome || 'utente'}` : `[Horygon] Nuova attivita CRM: ${titoloAttivita}`,
         emailText: `${assegnatoId ? `Ti e stata assegnata l'attivita "${titoloAttivita}".` : 'E stata creata una nuova attivita CRM.'}\n\nAttivita assegnata a: ${assegnatoUser?.nome || req.user.nome || 'Utente'}\nTitolo: ${titoloAttivita}\nData: ${data_ora || '-'}\nStato: ${nextState}\n\n${note ? `Note:\n${note}\n\n` : ''}Operatore: ${req.user.nome || 'Horygon CRM'}`
       });
-      if (assegnatoId && (!notificationResult?.email || notificationResult.email.sent < 1)) {
-        writeSystemLog({
-          livello: 'warning',
-          origine: 'crm.attivita.create.assignment',
-          utente_id: req.user.id,
-          messaggio: 'Creazione attività assegnata senza invio email riuscito',
-          dettagli: {
-            activityId,
-            assegnatoId,
-            assigneeName: assegnatoUser?.nome || null,
-            result: notificationResult
-          }
-        });
+      if (assegnatoId && assegnatoUser) {
+        try {
+          assignmentEmailResult = await sendAssignmentEmailDirect(req.user.id, assegnatoUser, {
+            titolo: titoloAttivita,
+            data: data_ora || '-',
+            stato: nextState,
+            note,
+            operatore: req.user.nome || 'Horygon CRM'
+          });
+        } catch (error) {
+          writeSystemLog({
+            livello: 'error',
+            origine: 'crm.attivita.create.assignment.direct-email',
+            utente_id: req.user.id,
+            messaggio: error?.message || 'Errore invio email assegnazione attività',
+            stack: error?.stack || null,
+            dettagli: {
+              activityId,
+              assegnatoId,
+              assigneeName: assegnatoUser?.nome || null,
+              assigneeEmail: assegnatoUser?.email || null
+            }
+          });
+        }
       }
     }
-    res.json({ id: activityId, notificationResult });
+    res.json({ id: activityId, notificationResult, assignmentEmailResult });
   } catch (e) {
     if (e.code === 'SQLITE_CONSTRAINT') return next();
     res.status(400).json({ error: e.message });
@@ -687,6 +720,29 @@ router.put('/attivita/:id', async (req, res, next) => {
         emailSubject: `[Horygon] Assegnazione attivita a ${assignedUser?.nome || 'utente'}`,
         emailText: `Ti e stata assegnata l'attivita "${updated.oggetto || 'Attivita CRM'}".\n\nAttivita assegnata a: ${assignedUser?.nome || 'Utente'}\nTitolo: ${updated.oggetto || 'Attivita CRM'}\nData: ${updated.data_ora || '-'}\nStato: ${updated.stato || '-'}\n\nAggiornata da: ${req.user.nome || 'Horygon CRM'}`
       });
+      try {
+        await sendAssignmentEmailDirect(req.user.id, assignedUser, {
+          titolo: updated.oggetto || 'Attivita CRM',
+          data: updated.data_ora || '-',
+          stato: updated.stato || '-',
+          note: updated.note || '',
+          operatore: req.user.nome || 'Horygon CRM'
+        });
+      } catch (error) {
+        writeSystemLog({
+          livello: 'error',
+          origine: 'crm.attivita.update.assignment.direct-email',
+          utente_id: req.user.id,
+          messaggio: error?.message || 'Errore invio email assegnazione attività',
+          stack: error?.stack || null,
+          dettagli: {
+            activityId: updated.id,
+            assegnatoId: updated.assegnato_a,
+            assigneeName: assignedUser?.nome || null,
+            assigneeEmail: assignedUser?.email || null
+          }
+        });
+      }
     }
 
     const assignmentOnly = changedFields.length === 1 && changedFields[0] === 'assegnazione';
