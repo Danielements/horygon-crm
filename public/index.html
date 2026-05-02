@@ -813,20 +813,48 @@
     </div>
   </section>
 
-  <section id="section-settings" class="section">
-    <div class="page-header"><h1>Impostazioni</h1></div>
-    <div class="dash-card">
-      <h3 style="margin-top:0;font-size:16px">Configurazione sistema</h3>
-      <p style="font-size:12px;color:var(--text-muted)">Queste impostazioni servono per attivare comportamenti senza cambiare il database ogni volta.</p>
-      <div id="settings-list"></div>
-      <div class="modal-actions" style="margin-top:14px">
-        <button class="btn btn-accent" onclick="saveSettingsPage()">Salva impostazioni</button>
+    <section id="section-settings" class="section">
+      <div class="page-header"><h1>Impostazioni</h1></div>
+      <div class="dash-card">
+        <h3 style="margin-top:0;font-size:16px">Configurazione sistema</h3>
+        <p style="font-size:12px;color:var(--text-muted)">Queste impostazioni servono per attivare comportamenti senza cambiare il database ogni volta.</p>
+        <div id="settings-list"></div>
+        <div class="modal-actions" style="margin-top:14px">
+          <button class="btn btn-accent" onclick="saveSettingsPage()">Salva impostazioni</button>
+        </div>
       </div>
-    </div>
-  </section>
+    </section>
 
-    <!-- MAPPA CRM -->
-    <section id="section-mappa" class="section">
+    <section id="section-audit-log" class="section">
+      <div class="page-header">
+        <h1>Log Attività</h1>
+        <div class="header-actions">
+          <select id="audit-user-filter" onchange="loadAuditLog()">
+            <option value="">Tutti gli utenti</option>
+          </select>
+          <input type="text" id="audit-action-filter" placeholder="Azione o entità..." oninput="loadAuditLog()">
+          <input type="text" id="audit-search" placeholder="Cerca nei dettagli..." oninput="loadAuditLog()">
+        </div>
+      </div>
+      <div class="app-summary-grid" id="audit-summary" style="margin-bottom:18px"></div>
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Utente</th>
+              <th>Azione</th>
+              <th>Entità</th>
+              <th>Dettagli</th>
+            </tr>
+          </thead>
+          <tbody id="audit-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+      <!-- MAPPA CRM -->
+      <section id="section-mappa" class="section">
       <div class="page-header">
         <h1>Mappa CRM</h1>
         <div class="header-actions">
@@ -913,11 +941,12 @@
 <div id="modal-password" class="modal">
   <div class="modal-box">
     <div class="modal-title">🔐 Cambia Password</div>
-    <div class="form-group"><label>Password attuale</label><input type="password" id="pwd-current" autocomplete="current-password"></div>
+    <div id="pwd-force-note" style="display:none;font-size:12px;color:var(--danger);margin-bottom:10px">Devi cambiare la password temporanea prima di continuare.</div>
+    <div class="form-group" id="pwd-current-group"><label>Password attuale</label><input type="password" id="pwd-current" autocomplete="current-password"></div>
     <div class="form-group"><label>Nuova password</label><input type="password" id="pwd-new" autocomplete="new-password"></div>
     <div class="form-group"><label>Conferma nuova password</label><input type="password" id="pwd-confirm" autocomplete="new-password"></div>
     <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
+      <button class="btn btn-outline" id="pwd-cancel-btn" onclick="closeAllModals()">Annulla</button>
       <button class="btn btn-accent" onclick="changeMyPassword()">Aggiorna password</button>
     </div>
   </div>
@@ -1347,11 +1376,19 @@
     </div>
     <div class="form-group"><label>LinkedIn / sito</label><input type="text" id="utente-linkedin"></div>
     <div class="form-group"><label>Note biglietto</label><input type="text" id="utente-note-biglietto"></div>
-    <div class="form-group"><label>Password <span style="color:var(--text-muted)">(vuoto = non cambia)</span></label><input type="password" id="utente-password"></div>
-    <div class="form-row">
-      <div class="form-group"><label>Ruolo</label>
-        <select id="utente-ruolo">
-          <option value="1">Read Only</option><option value="2">Editor</option>
+	    <div class="form-group"><label>Password <span style="color:var(--text-muted)">(vuoto = non cambia)</span></label><input type="password" id="utente-password"></div>
+	    <div class="form-row">
+	      <div class="form-group">
+	        <label><input type="checkbox" id="utente-force-password-change" checked> Cambio password obbligatorio al primo accesso</label>
+	      </div>
+	      <div class="form-group">
+	        <label><input type="checkbox" id="utente-send-credentials-email"> Invia credenziali via email</label>
+	      </div>
+	    </div>
+	    <div class="form-row">
+	      <div class="form-group"><label>Ruolo</label>
+	        <select id="utente-ruolo">
+	          <option value="1">Read Only</option><option value="2">Editor</option>
           <option value="3">Admin</option><option value="4">SuperAdmin</option>
         </select>
       </div>

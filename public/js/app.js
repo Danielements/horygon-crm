@@ -21,6 +21,7 @@ let fatturaProdottiCache = [];
 let fatturaAnagraficheCache = [];
 let recordPickerState = null;
 let documentRecipientOptions = [];
+let FORCE_PASSWORD_CHANGE = false;
 
 // Redirect da Google OAuth
 const urlToken = new URLSearchParams(window.location.search).get('token');
@@ -81,6 +82,7 @@ function toast(msg, type = 'info') {
 async function init() {
   ensureAccountingSections();
   organizeNavigationLayout();
+  ensureAuditNavLink();
   configureMobileBottomNav();
   organizeDashboardLayout();
   if (!TOKEN) { showScreen('login-screen'); document.getElementById('setup-link').style.display = 'block'; return; }
@@ -88,12 +90,13 @@ async function init() {
     const me = await api('GET', '/auth/me');
     if (!me) return;
     USER = me;
+    FORCE_PASSWORD_CHANGE = !!me.force_password_change;
     // Applica tema
     document.body.className = `theme-${USER.tema || 'dark'}`;
     document.getElementById('btn-tema').textContent = USER.tema === 'light' ? '🌙' : '☀️';
     // UI utente
     document.getElementById('user-name').textContent = USER.nome;
-    document.getElementById('user-role').textContent = ['','Read Only','Editor','Admin','SuperAdmin'][USER.ruolo_id] || '';
+    document.getElementById('user-role').textContent = RUOLI_LABEL?.[USER.ruolo_id] || '';
     document.getElementById('user-avatar').textContent = USER.nome[0].toUpperCase();
     const automationNavIcon = document.querySelector('.nav-item[data-section="automazioni"] .nav-icon');
     if (automationNavIcon) automationNavIcon.innerHTML = '&#9889;';
@@ -105,6 +108,7 @@ async function init() {
     applyNavigationPermissions();
     showScreen('app');
     navigateTo('dashboard');
+    if (FORCE_PASSWORD_CHANGE) setTimeout(() => promptForcedPasswordChange(), 120);
   } catch {
     localStorage.removeItem('horygon_token');
     TOKEN = null;
@@ -132,14 +136,15 @@ const NAV_PERMISSION_MAP = {
   mepa: 'mepa',
   rdo: 'mepa',
   notifiche: 'attivita',
-  analytics: 'analytics',
-  attivita: 'attivita',
-  automazioni: 'settings',
-  documenti: 'documenti',
-  statistics: 'statistics',
-  settings: 'settings',
-  mappa: 'mappa',
-  utenti: 'utenti'
+    analytics: 'analytics',
+    attivita: 'attivita',
+    automazioni: 'settings',
+    documenti: 'documenti',
+    statistics: 'statistics',
+    settings: 'settings',
+    mappa: 'mappa',
+    utenti: 'utenti',
+    'audit-log': 'utenti'
 };
 
 function canReadSection(section) {
@@ -192,15 +197,25 @@ async function doSetup() {
 
 function showSetup() { showScreen('setup-screen'); }
 function showLogin() { showScreen('login-screen'); }
-function logout() { localStorage.removeItem('horygon_token'); TOKEN = null; USER = null; showScreen('login-screen'); }
+function logout() { localStorage.removeItem('horygon_token'); TOKEN = null; USER = null; FORCE_PASSWORD_CHANGE = false; showScreen('login-screen'); }
 function connectGoogle() { window.location = '/api/auth/google'; }
+
+function promptForcedPasswordChange() {
+  const note = document.getElementById('pwd-force-note');
+  const currentGroup = document.getElementById('pwd-current-group');
+  const cancelBtn = document.getElementById('pwd-cancel-btn');
+  if (note) note.style.display = FORCE_PASSWORD_CHANGE ? 'block' : 'none';
+  if (currentGroup) currentGroup.style.display = FORCE_PASSWORD_CHANGE ? 'none' : 'block';
+  if (cancelBtn) cancelBtn.style.display = FORCE_PASSWORD_CHANGE ? 'none' : 'inline-flex';
+  openModal('modal-password');
+}
 
 async function changeMyPassword() {
   const current_password = document.getElementById('pwd-current')?.value || '';
   const new_password = document.getElementById('pwd-new')?.value || '';
   const confirm = document.getElementById('pwd-confirm')?.value || '';
-  if (!current_password || !new_password) {
-    toast('Compila password attuale e nuova password', 'error');
+  if ((!FORCE_PASSWORD_CHANGE && !current_password) || !new_password) {
+    toast(FORCE_PASSWORD_CHANGE ? 'Compila la nuova password' : 'Compila password attuale e nuova password', 'error');
     return;
   }
   if (new_password !== confirm) {
@@ -213,6 +228,8 @@ async function changeMyPassword() {
       const el = document.getElementById(id);
       if (el) el.value = '';
     });
+    FORCE_PASSWORD_CHANGE = false;
+    if (USER) USER.force_password_change = false;
     closeAllModals();
     toast('Password aggiornata', 'success');
   } catch (e) {
@@ -325,7 +342,7 @@ function organizeNavigationLayout() {
     { label: 'Logistica', sections: ['prodotti', 'magazzino', 'preventivi', 'ordini', 'ddt', 'container', 'documenti'] },
     { label: 'Contabilita', sections: ['fatture-attive', 'fatture-passive', 'fatture-fuori-campo'] },
     { label: 'Statistica', sections: ['cig', 'mepa', 'rdo', 'analytics', 'statistics'] },
-    { label: 'Impostazioni', sections: ['utenti', 'automazioni', 'settings'] }
+    { label: 'Impostazioni', sections: ['utenti', 'audit-log', 'automazioni', 'settings'] }
   ];
   nav.innerHTML = '';
   groups.forEach(group => {
@@ -368,6 +385,15 @@ function organizeNavigationLayout() {
     });
   });
   nav.dataset.organized = '1';
+}
+
+function ensureAuditNavLink() {
+  const nav = document.querySelector('#sidebar nav');
+  if (!nav || nav.querySelector('.nav-item[data-section="audit-log"]')) return;
+  const utenti = nav.querySelector('.nav-item[data-section="utenti"]');
+  const item = createNavItem('audit-log', 'Log Attivita', '🕘');
+  if (utenti?.parentNode) utenti.parentNode.insertBefore(item, utenti);
+  else nav.appendChild(item);
 }
 
 function configureMobileBottomNav() {
@@ -440,6 +466,11 @@ document.querySelectorAll('.nav-item').forEach(a => {
 });
 
 function navigateTo(section) {
+  if (FORCE_PASSWORD_CHANGE && section !== 'dashboard') {
+    toast('Devi cambiare la password temporanea prima di continuare', 'error');
+    promptForcedPasswordChange();
+    section = 'dashboard';
+  }
   const permSection = NAV_PERMISSION_MAP[section];
   if (permSection && !canReadSection(permSection)) {
     toast('Non hai accesso a questa sezione', 'error');
@@ -473,6 +504,7 @@ function navigateTo(section) {
       cig: 'Stagionalita CIG',
       documenti: 'Documenti',
       settings: 'Impostazioni',
+      'audit-log': 'Log Attivita',
       statistics: 'Statistiche',
       mappa: 'Mappa CRM',
       utenti: 'Utenti'
@@ -492,6 +524,7 @@ function navigateTo(section) {
     'fatture-fuori-campo': () => loadFattureBySection('fatture-fuori-campo'),
     attivita: loadAttivita, documenti: loadDocumenti,
     statistics: loadStatistics, settings: loadSettingsPage,
+    'audit-log': loadAuditLog,
     automazioni: loadAutomationPage,
     mappa: loadMappa, utenti: loadUtenti, mepa: loadMepa, rdo: loadRdoPage, 'opportunita-cpv': loadOpportunityCpv, cig: loadCIG, analytics: loadAnalytics,
     notifiche: loadNotificationsPage,
@@ -3203,6 +3236,72 @@ async function saveSettingsPage() {
   toast('Impostazioni salvate', 'success');
 }
 
+function formatAuditDetails(value) {
+  if (!value) return '—';
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    if (!parsed || typeof parsed !== 'object') return escapeHtml(String(value));
+    return Object.entries(parsed)
+      .slice(0, 6)
+      .map(([k, v]) => `<div><strong>${escapeHtml(k)}:</strong> ${escapeHtml(Array.isArray(v) ? v.join(', ') : String(v ?? '—'))}</div>`)
+      .join('');
+  } catch {
+    return escapeHtml(String(value));
+  }
+}
+
+async function loadAuditLog() {
+  const userSelect = document.getElementById('audit-user-filter');
+  if (userSelect && !userSelect.dataset.loaded) {
+    const users = await api('GET', '/utenti');
+    userSelect.innerHTML = `<option value="">Tutti gli utenti</option>` + (users || [])
+      .map(u => `<option value="${u.id}">${escapeHtml(u.nome)}${u.email ? ` (${escapeHtml(u.email)})` : ''}</option>`)
+      .join('');
+    userSelect.dataset.loaded = '1';
+  }
+
+  const params = new URLSearchParams();
+  const utenteId = userSelect?.value || '';
+  const azione = document.getElementById('audit-action-filter')?.value?.trim() || '';
+  const q = document.getElementById('audit-search')?.value?.trim() || '';
+  if (utenteId) params.set('utente_id', utenteId);
+  if (azione) params.set('azione', azione);
+  if (q) params.set('q', q);
+  params.set('limit', '250');
+
+  const data = await api('GET', `/audit?${params.toString()}`);
+  const rows = data?.rows || [];
+  const stats = data?.stats || {};
+
+  const summary = document.getElementById('audit-summary');
+  if (summary) {
+    summary.innerHTML = `
+      <div class="summary-card"><strong>${stats.totale || 0}</strong><span>Eventi trovati</span></div>
+      <div class="summary-card"><strong>${stats.utenti_coinvolti || 0}</strong><span>Utenti coinvolti</span></div>
+      <div class="summary-card"><strong>${stats.azioni_distinte || 0}</strong><span>Azioni distinte</span></div>
+      <div class="summary-card"><strong>${stats.entita_distinte || 0}</strong><span>Tipi entità</span></div>
+    `;
+  }
+
+  const body = document.getElementById('audit-body');
+  if (!body) return;
+  body.innerHTML = rows.length ? rows.map(row => `
+    <tr>
+      <td>${escapeHtml(String(row.creato_il || '—').replace('T', ' ').slice(0, 19))}</td>
+      <td>
+        <strong>${escapeHtml(row.utente_nome || 'Sistema')}</strong>
+        <div style="font-size:12px;color:var(--text-muted)">${escapeHtml(row.utente_email || '')}</div>
+      </td>
+      <td><span class="status-chip status-chip-info">${escapeHtml(row.azione || '—')}</span></td>
+      <td>
+        <strong>${escapeHtml(row.entita_tipo || '—')}</strong>
+        <div style="font-size:12px;color:var(--text-muted)">ID: ${escapeHtml(row.entita_id ?? '—')}</div>
+      </td>
+      <td style="font-size:12px;line-height:1.5">${formatAuditDetails(row.dettagli)}</td>
+    </tr>
+  `).join('') : `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:26px">Nessun evento trovato con questi filtri.</td></tr>`;
+}
+
 function driveIcon(mime) {
   if (mime?.includes('pdf')) return '📄';
   if (mime?.includes('image')) return '🖼️';
@@ -3563,8 +3662,8 @@ async function loadMappa() {
   }
 }
 
-const RUOLI_NOMI = {1:'readonly',2:'editor',3:'admin',4:'superadmin'};
-const RUOLI_LABEL = {1:'Read Only',2:'Editor',3:'Admin',4:'SuperAdmin'};
+const RUOLI_NOMI = {1:'readonly',2:'commerciale',3:'admin',4:'superadmin',5:'amministrazione',6:'logistica',7:'commercialista_esterno'};
+const RUOLI_LABEL = {1:'Read Only',2:'Commerciale',3:'Admin',4:'SuperAdmin',5:'Amministrazione',6:'Logistica',7:'Commercialista esterno'};
 const SEZIONI = ['clienti','fornitori','contatti','prodotti','magazzino','preventivi','ordini','ddt','container','fatture-attive','fatture-passive','fatture-fuori-campo','attivita','documenti','mepa','cig','analytics','statistics','settings','mappa','utenti'];
 const SEZIONI_LABEL = {
   clienti: 'Clienti',
@@ -3626,6 +3725,8 @@ async function editUtente(id) {
   document.getElementById('utente-linkedin').value = u.linkedin || '';
   document.getElementById('utente-note-biglietto').value = u.note_biglietto || '';
   document.getElementById('utente-password').value = '';
+  document.getElementById('utente-force-password-change').checked = !!u.force_password_change;
+  document.getElementById('utente-send-credentials-email').checked = false;
   document.getElementById('utente-ruolo').value = u.ruolo_id;
   document.getElementById('utente-tema').value = u.tema || 'dark';
   document.getElementById('utente-attivo').value = u.attivo;
@@ -3640,6 +3741,8 @@ function nuovoUtente() {
   document.getElementById('utente-ruolo').value = '1';
   document.getElementById('utente-tema').value = 'dark';
   document.getElementById('utente-attivo').value = '1';
+  document.getElementById('utente-force-password-change').checked = true;
+  document.getElementById('utente-send-credentials-email').checked = false;
   openModal('modal-utente');
 }
 
@@ -3654,15 +3757,20 @@ async function salvaUtente() {
     linkedin: document.getElementById('utente-linkedin').value,
     note_biglietto: document.getElementById('utente-note-biglietto').value,
     password: document.getElementById('utente-password').value,
+    force_password_change: document.getElementById('utente-force-password-change').checked ? 1 : 0,
+    send_credentials_email: document.getElementById('utente-send-credentials-email').checked ? 1 : 0,
     ruolo_id: parseInt(document.getElementById('utente-ruolo').value),
     tema: document.getElementById('utente-tema').value,
     attivo: parseInt(document.getElementById('utente-attivo').value)
   };
   if (!body.password) delete body.password;
   try {
-    if (id) await api('PUT', `/utenti/${id}`, body);
-    else await api('POST', '/utenti', body);
-    closeAllModals(); toast('Utente salvato', 'success'); loadUtenti();
+    const result = id ? await api('PUT', `/utenti/${id}`, body) : await api('POST', '/utenti', body);
+    closeAllModals();
+    if (result?.email_sent) toast('Utente salvato e credenziali inviate', 'success');
+    else if (result?.email_error) toast('Utente salvato, ma invio email fallito: ' + result.email_error, 'error');
+    else toast('Utente salvato', 'success');
+    loadUtenti();
   } catch (e) { toast(e.message, 'error'); }
 }
 

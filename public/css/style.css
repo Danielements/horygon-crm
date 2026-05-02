@@ -384,6 +384,24 @@ nav { flex: 1; padding: 10px 8px; overflow-y: auto; }
 .summary-card.tone-danger .summary-card-value { color: var(--danger); }
 .summary-card.tone-cyan .summary-card-value { color: var(--cyan); }
 
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  background: rgba(50, 71, 124, 0.12);
+  color: var(--accent);
+  border: 1px solid rgba(50, 71, 124, 0.18);
+}
+
+.status-chip-info {
+  background: rgba(50, 71, 124, 0.12);
+  color: var(--accent);
+}
+
 .mobile-record-list {
   display: none;
 }
