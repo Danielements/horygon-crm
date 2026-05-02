@@ -1,5 +1,6 @@
 const { google } = require('googleapis');
 const db = require('../db/database');
+const { writeSystemLog } = require('./system-log');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS mepa_mail_alerts (
@@ -115,6 +116,16 @@ function getCalendarClient(utente_id) {
   return getClient(utente_id);
 }
 
+function logGoogleError(origine, error, dettagli = {}) {
+  writeSystemLog({
+    livello: 'error',
+    origine,
+    messaggio: error?.message || String(error),
+    stack: error?.stack || null,
+    dettagli
+  });
+}
+
 // ═══════════════════════════════
 // CALENDAR
 // ═══════════════════════════════
@@ -134,6 +145,7 @@ async function getEvents(utente_id, timeMin, timeMax) {
     return res.data.items || [];
   } catch (e) {
     console.error('Calendar getEvents error:', e.message);
+    logGoogleError('google.calendar.getEvents', e, { utente_id, timeMin, timeMax });
     return [];
   }
 }
@@ -142,23 +154,38 @@ async function createEvent(utente_id, evento) {
   const client = getCalendarClient(utente_id);
   if (!client) throw new Error('Google non connesso');
   const calendar = google.calendar({ version: 'v3', auth: client });
-  const res = await calendar.events.insert({ calendarId: getCalendarId(), requestBody: evento });
-  return res.data;
+  try {
+    const res = await calendar.events.insert({ calendarId: getCalendarId(), requestBody: evento });
+    return res.data;
+  } catch (e) {
+    logGoogleError('google.calendar.createEvent', e, { utente_id, calendarId: getCalendarId(), summary: evento?.summary });
+    throw e;
+  }
 }
 
 async function updateEvent(utente_id, eventId, evento) {
   const client = getCalendarClient(utente_id);
   if (!client) throw new Error('Google non connesso');
   const calendar = google.calendar({ version: 'v3', auth: client });
-  const res = await calendar.events.update({ calendarId: getCalendarId(), eventId, requestBody: evento });
-  return res.data;
+  try {
+    const res = await calendar.events.update({ calendarId: getCalendarId(), eventId, requestBody: evento });
+    return res.data;
+  } catch (e) {
+    logGoogleError('google.calendar.updateEvent', e, { utente_id, calendarId: getCalendarId(), eventId });
+    throw e;
+  }
 }
 
 async function deleteEvent(utente_id, eventId) {
   const client = getCalendarClient(utente_id);
   if (!client) throw new Error('Google non connesso');
   const calendar = google.calendar({ version: 'v3', auth: client });
-  await calendar.events.delete({ calendarId: getCalendarId(), eventId });
+  try {
+    await calendar.events.delete({ calendarId: getCalendarId(), eventId });
+  } catch (e) {
+    logGoogleError('google.calendar.deleteEvent', e, { utente_id, calendarId: getCalendarId(), eventId });
+    throw e;
+  }
 }
 
 // ═══════════════════════════════
@@ -186,6 +213,7 @@ async function getDriveFiles(utente_id, folderName) {
     return { folderId, files: filesRes.data.files || [] };
   } catch (e) {
     console.error('Drive error:', e.message);
+    logGoogleError('google.drive.getFiles', e, { utente_id, folderName });
     return { error: e.message };
   }
 }
@@ -211,19 +239,29 @@ async function uploadToDrive(utente_id, folderName, fileName, mimeType, buffer) 
     folderId = f.data.id;
   }
   const stream = Readable.from(buffer);
-  const res = await drive.files.create({
-    requestBody: { name: fileName, parents: [folderId] },
-    media: { mimeType, body: stream },
-    fields: 'id,webViewLink,webContentLink'
-  });
-  return res.data;
+  try {
+    const res = await drive.files.create({
+      requestBody: { name: fileName, parents: [folderId] },
+      media: { mimeType, body: stream },
+      fields: 'id,webViewLink,webContentLink'
+    });
+    return res.data;
+  } catch (e) {
+    logGoogleError('google.drive.upload', e, { utente_id, folderName, fileName, mimeType });
+    throw e;
+  }
 }
 
 async function deleteFromDrive(utente_id, fileId) {
   const client = getClient(utente_id);
   if (!client) throw new Error('Google non connesso');
   const drive = google.drive({ version: 'v3', auth: client });
-  await drive.files.delete({ fileId });
+  try {
+    await drive.files.delete({ fileId });
+  } catch (e) {
+    logGoogleError('google.drive.delete', e, { utente_id, fileId });
+    throw e;
+  }
 }
 
 async function getGoogleContacts(utente_id) {
@@ -540,12 +578,17 @@ function buildRawEmail({ to, subject, text, attachments = [] }) {
 }
 
 async function sendMail(utente_id, to, subject, text, attachments = []) {
-  const client = getClient(utente_id);
+  const client = getCalendarClient(utente_id);
   if (!client) throw new Error('Google non connesso');
   const gmail = google.gmail({ version: 'v1', auth: client });
   const raw = buildRawEmail({ to, subject, text, attachments });
-  const res = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
-  return res.data;
+  try {
+    const res = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
+    return res.data;
+  } catch (e) {
+    logGoogleError('google.gmail.send', e, { utente_id, to, subject, attachments: attachments?.length || 0 });
+    throw e;
+  }
 }
 
 function createNotificationForUsers({ tipo = 'info', titolo, messaggio, livello_urgenza = 'media', entita_tipo = null, entita_id = null, uniqueSuffix = '' }) {
@@ -597,7 +640,8 @@ async function sendMailToRecipients(senderUserId, recipients = [], subject, text
     try {
       await sendMail(senderUserId, recipient, subject, text, attachments);
       sent += 1;
-    } catch {
+    } catch (e) {
+      logGoogleError('notifications.sendMailToRecipients', e, { senderUserId, to: recipient, subject });
       failed += 1;
     }
   }
@@ -677,7 +721,9 @@ async function dispatchPendingNotificationEmails(senderUserId) {
       await sendMail(senderUserId, row.email, `[Horygon] ${row.titolo}`, `${row.titolo}\n\n${row.messaggio || ''}`);
       ok = 1;
       sent += 1;
-    } catch {}
+    } catch (e) {
+      logGoogleError('notifications.dispatchPendingEmail', e, { senderUserId, notification_id: row.id, to: row.email, title: row.titolo });
+    }
     db.prepare('UPDATE notifiche_app SET invio_email_tentato = 1, invio_email_ok = ? WHERE id = ?').run(ok, row.id);
   }
   return { sent };
@@ -772,7 +818,209 @@ async function processMepaAutomation(utente_id) {
       db.prepare('UPDATE mepa_mail_alerts SET stato = ? WHERE id = ?').run('scaduta', alert.id);
     }
   }
-  return dispatchPendingNotificationEmails(utente_id);
+  return { ok: true };
+}
+
+function diffDaysFromNow(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  return Math.ceil((target - start) / 86400000);
+}
+
+function notifyActiveUsers({
+  tipo,
+  titolo,
+  messaggio,
+  livello_urgenza = 'media',
+  entita_tipo,
+  entita_id,
+  uniqueSuffix
+}) {
+  createNotificationForUsers({
+    tipo,
+    titolo,
+    messaggio,
+    livello_urgenza,
+    entita_tipo,
+    entita_id,
+    uniqueSuffix
+  });
+}
+
+async function processCrmDeadlineAutomation(utente_id) {
+  const stats = { preventivi: 0, fatture: 0, proforme: 0, spedizioni: 0 };
+
+  const preventivi = db.prepare(`
+    SELECT p.id, p.codice_preventivo, p.data_scadenza, p.stato, a.ragione_sociale
+    FROM preventivi p
+    LEFT JOIN anagrafiche a ON a.id = p.anagrafica_id
+    WHERE p.data_scadenza IS NOT NULL
+      AND COALESCE(lower(p.stato), 'bozza') NOT IN ('accettato', 'rifiutato', 'scaduto')
+  `).all();
+  preventivi.forEach((row) => {
+    const days = diffDaysFromNow(row.data_scadenza);
+    if (days === null) return;
+    const label = row.codice_preventivo || `#${row.id}`;
+    const customer = row.ragione_sociale || 'cliente';
+    if (days < 0) {
+      notifyActiveUsers({
+        tipo: 'preventivo_scaduto',
+        titolo: `Preventivo ${label} scaduto`,
+        messaggio: `${customer} • scaduto il ${row.data_scadenza}`,
+        livello_urgenza: 'alta',
+        entita_tipo: 'preventivo',
+        entita_id: row.id,
+        uniqueSuffix: `preventivo:overdue:${row.data_scadenza}`
+      });
+      stats.preventivi += 1;
+      return;
+    }
+    if (days <= 7) {
+      notifyActiveUsers({
+        tipo: 'preventivo_scadenza',
+        titolo: `Preventivo ${label} in scadenza`,
+        messaggio: `${customer} • scadenza tra ${days}g (${row.data_scadenza})`,
+        livello_urgenza: days <= 1 ? 'alta' : 'media',
+        entita_tipo: 'preventivo',
+        entita_id: row.id,
+        uniqueSuffix: `preventivo:due:${row.data_scadenza}:${days <= 1 ? '1' : '7'}`
+      });
+      stats.preventivi += 1;
+    }
+  });
+
+  const fatture = db.prepare(`
+    SELECT f.id, f.numero, f.scadenza, f.stato, f.tipo, a.ragione_sociale
+    FROM fatture f
+    LEFT JOIN anagrafiche a ON a.id = f.anagrafica_id
+    WHERE f.scadenza IS NOT NULL
+      AND COALESCE(lower(f.stato), 'ricevuta') NOT IN ('pagata', 'annullata')
+  `).all();
+  fatture.forEach((row) => {
+    const days = diffDaysFromNow(row.scadenza);
+    if (days === null) return;
+    const kind = row.tipo === 'ricevuta' ? 'passiva' : 'attiva';
+    const label = row.numero || `#${row.id}`;
+    const counterpart = row.ragione_sociale || (kind === 'passiva' ? 'fornitore' : 'cliente');
+    if (days < 0) {
+      notifyActiveUsers({
+        tipo: 'fattura_scaduta',
+        titolo: `Fattura ${kind} ${label} scaduta`,
+        messaggio: `${counterpart} • scaduta il ${row.scadenza}`,
+        livello_urgenza: 'alta',
+        entita_tipo: 'fattura',
+        entita_id: row.id,
+        uniqueSuffix: `fattura:overdue:${row.scadenza}`
+      });
+      stats.fatture += 1;
+      return;
+    }
+    if (days <= 7) {
+      notifyActiveUsers({
+        tipo: 'fattura_scadenza',
+        titolo: `Fattura ${kind} ${label} in scadenza`,
+        messaggio: `${counterpart} • scadenza tra ${days}g (${row.scadenza})`,
+        livello_urgenza: days <= 1 ? 'alta' : 'media',
+        entita_tipo: 'fattura',
+        entita_id: row.id,
+        uniqueSuffix: `fattura:due:${row.scadenza}:${days <= 1 ? '1' : '7'}`
+      });
+      stats.fatture += 1;
+    }
+  });
+
+  const proforme = db.prepare(`
+    SELECT p.id, p.numero_proforma, p.scadenza_acconto, p.scadenza_saldo, p.stato, a.ragione_sociale
+    FROM proforme_invoice p
+    LEFT JOIN anagrafiche a ON a.id = p.fornitore_id
+    WHERE COALESCE(lower(p.stato), 'ricevuta') NOT IN ('chiusa', 'annullata')
+  `).all();
+  proforme.forEach((row) => {
+    [
+      { kind: 'acconto', date: row.scadenza_acconto },
+      { kind: 'saldo', date: row.scadenza_saldo }
+    ].forEach((item) => {
+      const days = diffDaysFromNow(item.date);
+      if (days === null) return;
+      const supplier = row.ragione_sociale || 'fornitore';
+      const label = row.numero_proforma || `#${row.id}`;
+      if (days < 0) {
+        notifyActiveUsers({
+          tipo: 'proforma_scaduta',
+          titolo: `${item.kind === 'acconto' ? 'Acconto' : 'Saldo'} proforma ${label} scaduto`,
+          messaggio: `${supplier} • scaduto il ${item.date}`,
+          livello_urgenza: 'alta',
+          entita_tipo: 'proforma',
+          entita_id: row.id,
+          uniqueSuffix: `proforma:${item.kind}:overdue:${item.date}`
+        });
+        stats.proforme += 1;
+        return;
+      }
+      if (days <= 7) {
+        notifyActiveUsers({
+          tipo: 'proforma_scadenza',
+          titolo: `${item.kind === 'acconto' ? 'Acconto' : 'Saldo'} proforma ${label} in scadenza`,
+          messaggio: `${supplier} • scadenza tra ${days}g (${item.date})`,
+          livello_urgenza: days <= 1 ? 'alta' : 'media',
+          entita_tipo: 'proforma',
+          entita_id: row.id,
+          uniqueSuffix: `proforma:${item.kind}:due:${item.date}:${days <= 1 ? '1' : '7'}`
+        });
+        stats.proforme += 1;
+      }
+    });
+  });
+
+  const spedizioni = db.prepare(`
+    SELECT id, codice_spedizione, eta, tracking_number, stato_spedizione
+    FROM spedizioni
+    WHERE eta IS NOT NULL
+      AND COALESCE(lower(stato_spedizione), 'in_preparazione') NOT IN ('consegnata', 'chiusa')
+  `).all();
+  spedizioni.forEach((row) => {
+    const days = diffDaysFromNow(row.eta);
+    if (days === null) return;
+    const label = row.codice_spedizione || `#${row.id}`;
+    if (days < 0) {
+      notifyActiveUsers({
+        tipo: 'spedizione_eta',
+        titolo: `ETA spedizione ${label} superata`,
+        messaggio: `${row.stato_spedizione || 'in gestione'} • ETA ${row.eta}${row.tracking_number ? ` • tracking ${row.tracking_number}` : ''}`,
+        livello_urgenza: 'alta',
+        entita_tipo: 'spedizione',
+        entita_id: row.id,
+        uniqueSuffix: `spedizione:eta:overdue:${row.eta}`
+      });
+      stats.spedizioni += 1;
+      return;
+    }
+    if (days <= 1) {
+      notifyActiveUsers({
+        tipo: 'spedizione_eta',
+        titolo: `Spedizione ${label} in arrivo`,
+        messaggio: `${row.stato_spedizione || 'in gestione'} • ETA tra ${days}g (${row.eta})`,
+        livello_urgenza: 'media',
+        entita_tipo: 'spedizione',
+        entita_id: row.id,
+        uniqueSuffix: `spedizione:eta:due:${row.eta}`
+      });
+      stats.spedizioni += 1;
+    }
+  });
+
+  return stats;
+}
+
+async function processAllAutomations(utente_id) {
+  const mepa = await processMepaAutomation(utente_id);
+  const deadlines = await processCrmDeadlineAutomation(utente_id);
+  const emails = await dispatchPendingNotificationEmails(utente_id);
+  return { mepa, deadlines, emails };
 }
 
 function listNotifications(userId) {
@@ -820,7 +1068,8 @@ module.exports = {
   getDriveFiles, uploadToDrive, deleteFromDrive,
   getGoogleContacts, syncLocalContactsToGoogle, syncSingleContactToGoogle,
   syncMepaGmail, listMepaMailAlerts, getMepaMailAlertById, updateMepaMailAlert,
-  processMepaAutomation, listNotifications, markNotificationRead, updateNotification,
+  processMepaAutomation, processCrmDeadlineAutomation, processAllAutomations,
+  listNotifications, markNotificationRead, updateNotification,
   listSettings, saveSettings, getSetting, sendMail, sendMailToRecipients,
   createNotificationsForUserIds, notifyUsersWithEmail, emailCustomerIfEnabled
 };
