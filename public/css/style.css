@@ -383,6 +383,9 @@ nav { flex: 1; padding: 10px 8px; overflow-y: auto; }
 .summary-card.tone-warning .summary-card-value { color: var(--warning); }
 .summary-card.tone-danger .summary-card-value { color: var(--danger); }
 .summary-card.tone-cyan .summary-card-value { color: var(--cyan); }
+.status-chip-danger { background: rgba(239, 68, 68, 0.14); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.25); }
+.status-chip-warning { background: rgba(245, 158, 11, 0.14); color: #d97706; border: 1px solid rgba(245, 158, 11, 0.25); }
+.status-chip-info { background: rgba(59, 130, 246, 0.14); color: #2563eb; border: 1px solid rgba(59, 130, 246, 0.25); }
 
 .status-chip {
   display: inline-flex;
@@ -897,6 +900,10 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
   gap: 14px;
 }
 
+.notification-list.compact {
+  gap: 10px;
+}
+
 .notification-card {
   display: grid;
   gap: 12px;
@@ -908,8 +915,9 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
 }
 
 .notification-card.compact {
-  gap: 10px;
-  padding: 14px;
+  gap: 8px;
+  padding: 12px 13px;
+  border-radius: 14px;
 }
 
 .notification-card.is-open {
@@ -955,6 +963,21 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
   margin: 0;
   font-size: 16px;
   line-height: 1.35;
+}
+
+.notification-card.compact h3 {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.notification-card-top.compact,
+.notification-submeta.compact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .notification-message {

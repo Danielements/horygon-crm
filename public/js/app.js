@@ -22,6 +22,7 @@ let fatturaAnagraficheCache = [];
 let recordPickerState = null;
 let documentRecipientOptions = [];
 let FORCE_PASSWORD_CHANGE = false;
+let notificationsPollTimer = null;
 
 // Redirect da Google OAuth
 const urlToken = new URLSearchParams(window.location.search).get('token');
@@ -83,6 +84,7 @@ async function init() {
   ensureAccountingSections();
   organizeNavigationLayout();
   ensureAuditNavLink();
+  ensureSystemLogNavLink();
   configureMobileBottomNav();
   organizeDashboardLayout();
   if (!TOKEN) { showScreen('login-screen'); document.getElementById('setup-link').style.display = 'block'; return; }
@@ -108,6 +110,7 @@ async function init() {
     applyNavigationPermissions();
     showScreen('app');
     navigateTo('dashboard');
+    startNotificationsPolling();
     if (FORCE_PASSWORD_CHANGE) setTimeout(() => promptForcedPasswordChange(), 120);
   } catch {
     localStorage.removeItem('horygon_token');
@@ -144,7 +147,8 @@ const NAV_PERMISSION_MAP = {
     settings: 'settings',
     mappa: 'mappa',
     utenti: 'utenti',
-    'audit-log': 'utenti'
+    'audit-log': 'utenti',
+    'system-log': 'settings'
 };
 
 function canReadSection(section) {
@@ -160,6 +164,10 @@ function canEditSection(section) {
 function applyNavigationPermissions() {
   document.querySelectorAll('.nav-item[data-section]').forEach(item => {
     const section = item.dataset.section;
+    if (section === 'system-log') {
+      item.style.display = USER?.ruolo_id === 4 ? 'flex' : 'none';
+      return;
+    }
     const permSection = NAV_PERMISSION_MAP[section];
     if (!permSection || section === 'dashboard') {
       item.style.display = 'flex';
@@ -197,7 +205,15 @@ async function doSetup() {
 
 function showSetup() { showScreen('setup-screen'); }
 function showLogin() { showScreen('login-screen'); }
-function logout() { localStorage.removeItem('horygon_token'); TOKEN = null; USER = null; FORCE_PASSWORD_CHANGE = false; showScreen('login-screen'); }
+function logout() {
+  if (notificationsPollTimer) clearInterval(notificationsPollTimer);
+  notificationsPollTimer = null;
+  localStorage.removeItem('horygon_token');
+  TOKEN = null;
+  USER = null;
+  FORCE_PASSWORD_CHANGE = false;
+  showScreen('login-screen');
+}
 function connectGoogle() { window.location = '/api/auth/google'; }
 
 function promptForcedPasswordChange() {
@@ -342,7 +358,7 @@ function organizeNavigationLayout() {
     { label: 'Logistica', sections: ['prodotti', 'magazzino', 'preventivi', 'ordini', 'ddt', 'container', 'documenti'] },
     { label: 'Contabilita', sections: ['fatture-attive', 'fatture-passive', 'fatture-fuori-campo'] },
     { label: 'Statistica', sections: ['cig', 'mepa', 'rdo', 'analytics', 'statistics'] },
-    { label: 'Impostazioni', sections: ['utenti', 'audit-log', 'automazioni', 'settings'] }
+    { label: 'Impostazioni', sections: ['utenti', 'audit-log', 'system-log', 'automazioni', 'settings'] }
   ];
   nav.innerHTML = '';
   groups.forEach(group => {
@@ -396,6 +412,15 @@ function ensureAuditNavLink() {
   else nav.appendChild(item);
 }
 
+function ensureSystemLogNavLink() {
+  const nav = document.querySelector('#sidebar nav');
+  if (!nav || USER?.ruolo_id !== 4 || nav.querySelector('.nav-item[data-section="system-log"]')) return;
+  const audit = nav.querySelector('.nav-item[data-section="audit-log"]');
+  const item = createNavItem('system-log', 'System Log', '🧯');
+  if (audit?.parentNode) audit.parentNode.insertBefore(item, audit.nextSibling);
+  else nav.appendChild(item);
+}
+
 function configureMobileBottomNav() {
   const nav = document.getElementById('mobile-bottom-nav');
   if (!nav) return;
@@ -407,6 +432,18 @@ function configureMobileBottomNav() {
     <button class="mobile-tab" data-section="settings" onclick="navigateTo('settings')"><span>⚙️</span><small>Impost.</small></button>
   `;
 }
+
+function startNotificationsPolling() {
+  if (notificationsPollTimer) clearInterval(notificationsPollTimer);
+  notificationsPollTimer = setInterval(() => {
+    if (!TOKEN || document.hidden) return;
+    loadNotifications(true).catch(() => {});
+  }, 60000);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && TOKEN) loadNotifications(true).catch(() => {});
+});
 
 function organizeDashboardLayout() {
   const section = document.getElementById('section-dashboard');
@@ -505,6 +542,7 @@ function navigateTo(section) {
       documenti: 'Documenti',
       settings: 'Impostazioni',
       'audit-log': 'Log Attivita',
+      'system-log': 'System Log',
       statistics: 'Statistiche',
       mappa: 'Mappa CRM',
       utenti: 'Utenti'
@@ -525,6 +563,7 @@ function navigateTo(section) {
     attivita: loadAttivita, documenti: loadDocumenti,
     statistics: loadStatistics, settings: loadSettingsPage,
     'audit-log': loadAuditLog,
+    'system-log': loadSystemLog,
     automazioni: loadAutomationPage,
     mappa: loadMappa, utenti: loadUtenti, mepa: loadMepa, rdo: loadRdoPage, 'opportunita-cpv': loadOpportunityCpv, cig: loadCIG, analytics: loadAnalytics,
     notifiche: loadNotificationsPage,
@@ -2916,6 +2955,27 @@ function renderNotificationList(rows, { compact = false, targetId, emptyText }) 
     target.innerHTML = `<div class="notification-empty">${emptyText}</div>`;
     return;
   }
+  if (compact) {
+    target.innerHTML = `<div class="notification-list compact">
+      ${rows.map(row => {
+        const urgency = getNotificationUrgencyMeta(row.livello_urgenza);
+        return `
+          <article class="notification-card compact ${row.letta ? 'is-read' : 'is-open'}">
+            <div class="notification-card-top compact">
+              <span class="notification-urgency ${urgency.cls}">${urgency.icon} ${urgency.label}</span>
+              <span class="notification-state">${notificationStateLabel(row)}</span>
+            </div>
+            <h3>${escapeHtml(row.titolo || 'Notifica')}</h3>
+            <div class="notification-submeta compact">
+              <span>${formatNotificationTimestamp(row.creato_il)}</span>
+              ${row.entita_tipo ? `<span>${escapeHtml(row.entita_tipo)}</span>` : ''}
+            </div>
+          </article>
+        `;
+      }).join('')}
+    </div>`;
+    return;
+  }
   target.innerHTML = `<div class="notification-list ${compact ? 'compact' : ''}">
     ${rows.map(row => {
       const urgency = getNotificationUrgencyMeta(row.livello_urgenza);
@@ -3302,6 +3362,64 @@ async function loadAuditLog() {
   `).join('') : `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:26px">Nessun evento trovato con questi filtri.</td></tr>`;
 }
 
+function formatSystemLogDetails(row) {
+  const parts = [];
+  if (row.messaggio) parts.push(`<div><strong>Messaggio:</strong> ${escapeHtml(row.messaggio)}</div>`);
+  if (row.status_code) parts.push(`<div><strong>HTTP:</strong> ${escapeHtml(String(row.status_code))}</div>`);
+  if (row.stack) parts.push(`<details><summary>Stack trace</summary><pre style="white-space:pre-wrap;font-size:11px;margin-top:8px">${escapeHtml(String(row.stack))}</pre></details>`);
+  if (row.dettagli) {
+    try {
+      const parsed = JSON.parse(row.dettagli);
+      parts.push(`<div style="margin-top:6px">${Object.entries(parsed || {}).slice(0, 8).map(([k, v]) => `<div><strong>${escapeHtml(k)}:</strong> ${escapeHtml(typeof v === 'string' ? v : JSON.stringify(v))}</div>`).join('')}</div>`);
+    } catch {
+      parts.push(`<div>${escapeHtml(String(row.dettagli))}</div>`);
+    }
+  }
+  return parts.join('');
+}
+
+async function loadSystemLog() {
+  const level = document.getElementById('system-log-level')?.value || '';
+  const origin = document.getElementById('system-log-origin')?.value?.trim() || '';
+  const q = document.getElementById('system-log-search')?.value?.trim() || '';
+  const params = new URLSearchParams();
+  if (level) params.set('level', level);
+  if (origin) params.set('origin', origin);
+  if (q) params.set('q', q);
+  params.set('limit', '250');
+  const data = await api('GET', `/system-log?${params.toString()}`);
+  const rows = data?.rows || [];
+  const stats = data?.stats || {};
+  const summary = document.getElementById('system-log-summary');
+  if (summary) {
+    summary.innerHTML = `
+      <div class="summary-card"><strong>${stats.totale || 0}</strong><span>Eventi</span></div>
+      <div class="summary-card"><strong>${stats.errori || 0}</strong><span>Error</span></div>
+      <div class="summary-card"><strong>${stats.warning || 0}</strong><span>Warn</span></div>
+      <div class="summary-card"><strong>${stats.origini || 0}</strong><span>Origini</span></div>
+    `;
+  }
+  const body = document.getElementById('system-log-body');
+  if (!body) return;
+  body.innerHTML = rows.length ? rows.map(row => `
+    <tr>
+      <td>${escapeHtml(String(row.creato_il || '—').replace('T', ' ').slice(0, 19))}</td>
+      <td><span class="status-chip ${row.livello === 'error' ? 'status-chip-danger' : row.livello === 'warn' ? 'status-chip-warning' : 'status-chip-info'}">${escapeHtml(row.livello || 'info')}</span></td>
+      <td>${escapeHtml(row.origine || 'app')}</td>
+      <td><div style="font-size:12px"><strong>${escapeHtml(row.metodo || '-')}</strong> ${escapeHtml(row.route || '-')}</div></td>
+      <td><strong>${escapeHtml(row.utente_nome || 'Sistema')}</strong><div style="font-size:12px;color:var(--text-muted)">${escapeHtml(row.utente_email || '')}</div></td>
+      <td style="font-size:12px;line-height:1.5">${formatSystemLogDetails(row)}</td>
+    </tr>
+  `).join('') : `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:26px">Nessun errore di sistema trovato.</td></tr>`;
+}
+
+async function clearSystemLog() {
+  if (!confirm('Svuotare il system log?')) return;
+  await api('DELETE', '/system-log');
+  toast('System log svuotato', 'success');
+  loadSystemLog();
+}
+
 function driveIcon(mime) {
   if (mime?.includes('pdf')) return '📄';
   if (mime?.includes('image')) return '🖼️';
@@ -3664,7 +3782,7 @@ async function loadMappa() {
 
 const RUOLI_NOMI = {1:'readonly',2:'commerciale',3:'admin',4:'superadmin',5:'amministrazione',6:'logistica',7:'commercialista_esterno'};
 const RUOLI_LABEL = {1:'Read Only',2:'Commerciale',3:'Admin',4:'SuperAdmin',5:'Amministrazione',6:'Logistica',7:'Commercialista esterno'};
-const SEZIONI = ['clienti','fornitori','contatti','prodotti','magazzino','preventivi','ordini','ddt','container','fatture-attive','fatture-passive','fatture-fuori-campo','attivita','documenti','mepa','cig','analytics','statistics','settings','mappa','utenti'];
+const SEZIONI = ['clienti','fornitori','contatti','prodotti','magazzino','preventivi','ordini','ddt','container','fatture-attive','fatture-passive','fatture-fuori-campo','attivita','documenti','mepa','cig','analytics','statistics','settings','mappa','utenti','system-log'];
 const SEZIONI_LABEL = {
   clienti: 'Clienti',
   fornitori: 'Fornitori',
@@ -3686,7 +3804,8 @@ const SEZIONI_LABEL = {
   statistics: 'Statistics',
   settings: 'Impostazioni',
   mappa: 'Mappa CRM',
-  utenti: 'Utenti'
+  utenti: 'Utenti',
+  'system-log': 'System Log'
 };
 async function loadUtenti() {
   const [rows, roles] = await Promise.all([

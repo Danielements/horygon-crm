@@ -37,6 +37,9 @@ db.exec(`
     ruolo_id INTEGER DEFAULT 1,
     tema TEXT DEFAULT 'dark',
     attivo INTEGER DEFAULT 1,
+    force_password_change INTEGER DEFAULT 0,
+    password_changed_il TEXT,
+    credentials_sent_at TEXT,
     creato_il TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (ruolo_id) REFERENCES ruoli(id)
   );
@@ -285,6 +288,10 @@ db.exec(`
 
 `);
 
+try { db.exec(`ALTER TABLE utenti ADD COLUMN force_password_change INTEGER DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE utenti ADD COLUMN password_changed_il TEXT`); } catch {}
+try { db.exec(`ALTER TABLE utenti ADD COLUMN credentials_sent_at TEXT`); } catch {}
+
 function ensureColumn(table, definition) {
   try {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
@@ -511,20 +518,38 @@ db.exec(`
     creato_il TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (utente_id) REFERENCES utenti(id)
   );
+
+  CREATE TABLE IF NOT EXISTS system_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    livello TEXT DEFAULT 'error',
+    origine TEXT,
+    route TEXT,
+    metodo TEXT,
+    status_code INTEGER,
+    utente_id INTEGER,
+    messaggio TEXT NOT NULL,
+    stack TEXT,
+    dettagli TEXT,
+    creato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (utente_id) REFERENCES utenti(id)
+  );
 `);
 
 const ROLE_DEFS = [
   { id: 1, nome: 'readonly', descrizione: 'Solo lettura' },
-  { id: 2, nome: 'editor', descrizione: 'Lettura e modifica operativa' },
+  { id: 2, nome: 'commerciale', descrizione: 'Vendite, clienti, preventivi, ordini e attivita' },
   { id: 3, nome: 'admin', descrizione: 'Gestione piattaforma e utenti' },
   { id: 4, nome: 'superadmin', descrizione: 'Accesso completo e governo totale' },
+  { id: 5, nome: 'amministrazione', descrizione: 'Contabilita, documenti e controllo scadenze' },
+  { id: 6, nome: 'logistica', descrizione: 'Magazzino, spedizioni, ddt e tracciamento operativo' },
+  { id: 7, nome: 'commercialista_esterno', descrizione: 'Consultazione contabile e documentale' },
 ];
 
 const APP_SECTIONS = [
   'clienti', 'fornitori', 'contatti', 'prodotti', 'magazzino', 'preventivi',
   'ordini', 'ddt', 'container', 'fatture', 'proforme', 'spedizioni',
   'attivita', 'documenti', 'mepa', 'cig', 'analytics', 'statistics',
-  'settings', 'mappa', 'utenti', 'ai'
+  'settings', 'mappa', 'utenti', 'ai', 'system_log'
 ];
 
 const upsertRole = db.prepare(`
@@ -547,10 +572,26 @@ const upsertPerm = db.prepare(`
 `);
 
 APP_SECTIONS.forEach(section => {
-  upsertPerm.run(1, section, section === 'utenti' || section === 'settings' ? 0 : 1, 0, 0, 0);
-  upsertPerm.run(2, section, section === 'utenti' || section === 'settings' ? 0 : 1, section === 'utenti' || section === 'settings' ? 0 : 1, 0, 0);
+  const readonlyRead = section === 'utenti' || section === 'settings' ? 0 : 1;
+  upsertPerm.run(1, section, readonlyRead, 0, 0, 0);
+
+  const commercialeEditable = ['clienti', 'fornitori', 'contatti', 'preventivi', 'ordini', 'attivita', 'documenti', 'mappa'].includes(section);
+  const commercialeReadable = readonlyRead;
+  upsertPerm.run(2, section, commercialeReadable, commercialeEditable ? 1 : 0, 0, 0);
+
   upsertPerm.run(3, section, 1, 1, section === 'settings' ? 0 : 1, section === 'utenti' || section === 'settings' ? 1 : 0);
   upsertPerm.run(4, section, 1, 1, 1, 1);
+
+  const amministrazioneReadable = ['clienti', 'fornitori', 'contatti', 'fatture', 'ordini', 'preventivi', 'documenti', 'analytics', 'statistics', 'mappa'].includes(section);
+  const amministrazioneEditable = ['fatture', 'documenti', 'analytics', 'statistics'].includes(section);
+  upsertPerm.run(5, section, amministrazioneReadable ? 1 : 0, amministrazioneEditable ? 1 : 0, 0, 0);
+
+  const logisticaReadable = ['clienti', 'fornitori', 'contatti', 'prodotti', 'magazzino', 'ordini', 'ddt', 'container', 'proforme', 'spedizioni', 'documenti', 'mappa', 'analytics'].includes(section);
+  const logisticaEditable = ['magazzino', 'ordini', 'ddt', 'container', 'proforme', 'spedizioni', 'documenti'].includes(section);
+  upsertPerm.run(6, section, logisticaReadable ? 1 : 0, logisticaEditable ? 1 : 0, 0, 0);
+
+  const commercialistaReadable = ['fatture', 'documenti', 'analytics', 'statistics'].includes(section);
+  upsertPerm.run(7, section, commercialistaReadable ? 1 : 0, 0, 0, 0);
 });
 
 module.exports = db;

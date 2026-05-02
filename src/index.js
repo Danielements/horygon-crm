@@ -4,6 +4,7 @@ const cors = require('cors');
 const path = require('path');
 const session = require('express-session');
 const rateLimit = require('express-rate-limit');
+const { writeSystemLog } = require('./services/system-log');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -63,12 +64,47 @@ app.use('/api/rdo',         require('./routes/rdo'));
 app.use('/api/cig',         require('./routes/cig'));
 app.use('/api/analytics',   require('./routes/analytics'));
 app.use('/api/audit',       require('./routes/audit'));
+app.use('/api/system-log',  require('./routes/system-log'));
 app.use('/api',             require('./routes/operativo'));
 
 // Error handler
 app.use((err, req, res, next) => {
+  writeSystemLog({
+    livello: 'error',
+    origine: 'express',
+    route: req.originalUrl,
+    metodo: req.method,
+    status_code: 500,
+    utente_id: req.user?.id || null,
+    messaggio: err.message || 'Unhandled error',
+    stack: err.stack || null,
+    dettagli: {
+      body: req.method === 'GET' ? null : req.body,
+      query: req.query
+    }
+  });
   console.error(err.message);
   res.status(500).json({ error: IS_PROD ? 'Errore interno' : err.message });
+});
+
+process.on('unhandledRejection', (reason) => {
+  writeSystemLog({
+    livello: 'error',
+    origine: 'process.unhandledRejection',
+    messaggio: reason?.message || String(reason),
+    stack: reason?.stack || null
+  });
+  console.error('Unhandled rejection:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  writeSystemLog({
+    livello: 'error',
+    origine: 'process.uncaughtException',
+    messaggio: error?.message || String(error),
+    stack: error?.stack || null
+  });
+  console.error('Uncaught exception:', error);
 });
 
 // SPA fallback

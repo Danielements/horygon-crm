@@ -853,6 +853,39 @@
       </div>
     </section>
 
+    <section id="section-system-log" class="section">
+      <div class="page-header">
+        <h1>System Log</h1>
+        <div class="header-actions">
+          <select id="system-log-level" onchange="loadSystemLog()">
+            <option value="">Tutti i livelli</option>
+            <option value="error">Error</option>
+            <option value="warn">Warn</option>
+            <option value="info">Info</option>
+          </select>
+          <input type="text" id="system-log-origin" placeholder="Origine..." oninput="loadSystemLog()">
+          <input type="text" id="system-log-search" placeholder="Cerca messaggio o route..." oninput="loadSystemLog()">
+          <button class="btn btn-danger btn-sm" onclick="clearSystemLog()">Svuota log</button>
+        </div>
+      </div>
+      <div class="app-summary-grid" id="system-log-summary" style="margin-bottom:18px"></div>
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Livello</th>
+              <th>Origine</th>
+              <th>Route</th>
+              <th>Utente</th>
+              <th>Dettaglio</th>
+            </tr>
+          </thead>
+          <tbody id="system-log-body"></tbody>
+        </table>
+      </div>
+    </section>
+
       <!-- MAPPA CRM -->
       <section id="section-mappa" class="section">
       <div class="page-header">
