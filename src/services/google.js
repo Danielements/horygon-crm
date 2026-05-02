@@ -126,6 +126,12 @@ function logGoogleError(origine, error, dettagli = {}) {
   });
 }
 
+function isMissingGoogleCalendarResource(error) {
+  const status = Number(error?.response?.status || error?.status || 0);
+  const message = String(error?.message || '').toLowerCase();
+  return status === 404 || message.includes('resource has been deleted') || message.includes('not found');
+}
+
 // ═══════════════════════════════
 // CALENDAR
 // ═══════════════════════════════
@@ -171,6 +177,10 @@ async function updateEvent(utente_id, eventId, evento) {
     const res = await calendar.events.update({ calendarId: getCalendarId(), eventId, requestBody: evento });
     return res.data;
   } catch (e) {
+    if (isMissingGoogleCalendarResource(e)) {
+      const created = await calendar.events.insert({ calendarId: getCalendarId(), requestBody: evento });
+      return created.data;
+    }
     logGoogleError('google.calendar.updateEvent', e, { utente_id, calendarId: getCalendarId(), eventId });
     throw e;
   }
@@ -183,6 +193,7 @@ async function deleteEvent(utente_id, eventId) {
   try {
     await calendar.events.delete({ calendarId: getCalendarId(), eventId });
   } catch (e) {
+    if (isMissingGoogleCalendarResource(e)) return { ok: true, skipped: 'already_deleted' };
     logGoogleError('google.calendar.deleteEvent', e, { utente_id, calendarId: getCalendarId(), eventId });
     throw e;
   }
