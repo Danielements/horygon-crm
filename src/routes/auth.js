@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const { google } = require('googleapis');
 const db = require('../db/database');
 const { authMiddleware } = require('../middleware/auth');
+const { writeAudit } = require('../services/audit');
 
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
@@ -37,6 +38,10 @@ function hasAnyUser() {
   return (db.prepare('SELECT COUNT(*) as n FROM utenti').get()?.n || 0) > 0;
 }
 
+function looksLikeBcryptHash(value = '') {
+  return /^\$2[aby]\$\d{2}\$/.test(String(value || ''));
+}
+
 router.post('/setup', async (req, res) => {
   if (hasAnyUser()) return res.status(403).json({ error: 'Setup già completato' });
   const { nome, email, password } = req.body;
@@ -44,6 +49,7 @@ router.post('/setup', async (req, res) => {
   const r = db.prepare(
     'INSERT INTO utenti (nome, email, password_hash, ruolo_id, tema) VALUES (?,?,?,4,?)'
   ).run(nome, email, hash, 'dark');
+  writeAudit({ utente_id: r.lastInsertRowid, azione: 'auth.setup', entita_tipo: 'utente', entita_id: r.lastInsertRowid, dettagli: { email } });
   res.json({ id: r.lastInsertRowid });
 });
 
@@ -51,9 +57,29 @@ router.post('/login', async (req, res) => {
   const { email, password } = req.body;
   const user = db.prepare('SELECT * FROM utenti WHERE email = ? AND attivo = 1').get(email);
   if (!user) return res.status(401).json({ error: 'Credenziali non valide' });
-  const ok = await bcrypt.compare(password, user.password_hash);
+  let ok = false;
+  if (looksLikeBcryptHash(user.password_hash)) {
+    ok = await bcrypt.compare(password, user.password_hash);
+  } else {
+    ok = String(password || '') === String(user.password_hash || '');
+    if (ok) {
+      const newHash = await bcrypt.hash(password, 10);
+      db.prepare('UPDATE utenti SET password_hash = ? WHERE id = ?').run(newHash, user.id);
+    }
+  }
   if (!ok) return res.status(401).json({ error: 'Credenziali non valide' });
-  res.json({ token: makeToken(user), user: { id: user.id, nome: user.nome, email: user.email, ruolo_id: user.ruolo_id, tema: user.tema } });
+  writeAudit({ utente_id: user.id, azione: 'auth.login', entita_tipo: 'utente', entita_id: user.id, dettagli: { email: user.email } });
+  res.json({
+    token: makeToken(user),
+    user: {
+      id: user.id,
+      nome: user.nome,
+      email: user.email,
+      ruolo_id: user.ruolo_id,
+      tema: user.tema,
+      force_password_change: !!user.force_password_change
+    }
+  });
 });
 
 router.post('/tema', authMiddleware, (req, res) => {
@@ -70,10 +96,17 @@ router.post('/change-password', authMiddleware, async (req, res) => {
   }
   const user = db.prepare('SELECT * FROM utenti WHERE id = ? AND attivo = 1').get(req.user.id);
   if (!user) return res.status(404).json({ error: 'Utente non trovato' });
-  const ok = await bcrypt.compare(String(current_password || ''), user.password_hash);
-  if (!ok) return res.status(401).json({ error: 'Password attuale non valida' });
+  if (!user.force_password_change) {
+    const ok = await bcrypt.compare(String(current_password || ''), user.password_hash);
+    if (!ok) return res.status(401).json({ error: 'Password attuale non valida' });
+  }
   const hash = await bcrypt.hash(new_password, 10);
-  db.prepare('UPDATE utenti SET password_hash = ? WHERE id = ?').run(hash, req.user.id);
+  db.prepare(`
+    UPDATE utenti
+    SET password_hash = ?, force_password_change = 0, password_changed_il = datetime('now')
+    WHERE id = ?
+  `).run(hash, req.user.id);
+  writeAudit({ utente_id: req.user.id, azione: 'auth.password.change', entita_tipo: 'utente', entita_id: req.user.id });
   res.json({ ok: true });
 });
 
@@ -97,6 +130,7 @@ router.get('/google/callback', async (req, res) => {
         'INSERT INTO utenti (nome, email, password_hash, ruolo_id) VALUES (?,?,?,?)'
       ).run(data.name, data.email, hash, isFirstUser ? 4 : 2);
       user = db.prepare('SELECT * FROM utenti WHERE id = ?').get(r.lastInsertRowid);
+      writeAudit({ utente_id: user.id, azione: 'auth.google.autocreate', entita_tipo: 'utente', entita_id: user.id, dettagli: { email: data.email } });
     }
     db.prepare(`INSERT OR REPLACE INTO google_tokens (utente_id, access_token, refresh_token, scadenza, scope)
       VALUES (?,?,?,?,?)`).run(
@@ -104,6 +138,7 @@ router.get('/google/callback', async (req, res) => {
       tokens.expiry_date ? new Date(tokens.expiry_date).toISOString() : null,
       SCOPES.join(' ')
     );
+    writeAudit({ utente_id: user.id, azione: 'auth.google.connect', entita_tipo: 'utente', entita_id: user.id, dettagli: { email: user.email } });
     const token = makeToken(user);
     res.redirect(`/?token=${token}`);
   } catch (e) {
@@ -112,7 +147,7 @@ router.get('/google/callback', async (req, res) => {
 });
 
 router.get('/me', authMiddleware, (req, res) => {
-  const user = db.prepare('SELECT id,nome,email,ruolo_id,tema FROM utenti WHERE id = ?').get(req.user.id);
+  const user = db.prepare('SELECT id,nome,email,ruolo_id,tema,force_password_change FROM utenti WHERE id = ?').get(req.user.id);
   const permessi = db.prepare('SELECT * FROM permessi WHERE ruolo_id = ?').all(user.ruolo_id);
   const ownGoogle = !!db.prepare('SELECT id FROM google_tokens WHERE utente_id = ?').get(user.id);
   const ownerGoogle = !!db.prepare(`
@@ -123,7 +158,7 @@ router.get('/me', authMiddleware, (req, res) => {
     LIMIT 1
   `).get(getCalendarOwnerEmail());
   const hasGoogle = ownGoogle || ownerGoogle;
-  res.json({ ...user, permessi, hasGoogle });
+  res.json({ ...user, force_password_change: !!user.force_password_change, permessi, hasGoogle });
 });
 
 module.exports = router;
