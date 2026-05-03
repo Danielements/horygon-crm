@@ -20,6 +20,7 @@ const LOCAL_MEPA_API_FILE = path.join(process.cwd(), 'data', 'mepa', 'beni-servi
 let localMepaApiSummaryCache = {
   mtimeMs: 0,
   summary: null,
+  records: null,
   pending: null
 };
 
@@ -184,8 +185,11 @@ function topMapEntries(map, limit = 10) {
 
 async function buildLocalMepaApiSummary() {
   const stats = await fs.promises.stat(LOCAL_MEPA_API_FILE);
-  if (localMepaApiSummaryCache.summary && localMepaApiSummaryCache.mtimeMs === stats.mtimeMs) {
-    return localMepaApiSummaryCache.summary;
+  if (localMepaApiSummaryCache.summary && localMepaApiSummaryCache.records && localMepaApiSummaryCache.mtimeMs === stats.mtimeMs) {
+    return {
+      summary: localMepaApiSummaryCache.summary,
+      records: localMepaApiSummaryCache.records
+    };
   }
   if (localMepaApiSummaryCache.pending) {
     return localMepaApiSummaryCache.pending;
@@ -204,6 +208,7 @@ async function buildLocalMepaApiSummary() {
     let totaleNegoziazioni = 0;
     let totalePa = 0;
     let totalePo = 0;
+    const records = [];
 
     const parser = parse({
       columns: true,
@@ -243,6 +248,23 @@ async function buildLocalMepaApiSummary() {
       negoziazioniMap.set(tipoNegoziazione, (negoziazioniMap.get(tipoNegoziazione) || 0) + nNegoziazioni);
       bandiMap.set(bandoMepa, (bandiMap.get(bandoMepa) || 0) + nNegoziazioni);
       anniMap.set(anno, (anniMap.get(anno) || 0) + nNegoziazioni);
+
+      records.push({
+        anno_riferimento: anno,
+        tipologia_amministrazione: String(record.Tipologia_Amministrazione || '').trim() || null,
+        regione_pa: regione,
+        provincia_pa: provincia,
+        sigla_provincia_pa: String(record.Sigla_provincia_PA || '').trim() || null,
+        tipo_negoziazione: tipoNegoziazione,
+        bando_mepa: bandoMepa,
+        categoria_abilitazione: categoria,
+        bene_servizio: beneServizio,
+        codice_cpv: codiceCpv,
+        descrizione_cpv: descrizioneCpv,
+        n_negoziazioni_pubblicate: nNegoziazioni,
+        n_pa_appaltanti: nPa,
+        n_po: nPo
+      });
     });
 
     parser.on('end', () => {
@@ -315,9 +337,10 @@ async function buildLocalMepaApiSummary() {
       localMepaApiSummaryCache = {
         mtimeMs: stats.mtimeMs,
         summary,
+        records,
         pending: null
       };
-      resolve(summary);
+      resolve({ summary, records });
     });
 
     parser.on('error', (error) => {
@@ -494,8 +517,91 @@ router.get('/mepa-api/local-summary', async (req, res) => {
     if (!fs.existsSync(LOCAL_MEPA_API_FILE)) {
       return res.status(404).json({ error: 'File MEPA locale non trovato' });
     }
-    const summary = await buildLocalMepaApiSummary();
+    const { summary } = await buildLocalMepaApiSummary();
     res.json(summary);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/mepa-api/local-search', async (req, res) => {
+  try {
+    if (!fs.existsSync(LOCAL_MEPA_API_FILE)) {
+      return res.status(404).json({ error: 'File MEPA locale non trovato' });
+    }
+
+    const { q = '', limit = 20 } = req.query;
+    const needle = String(q || '').trim().toLowerCase();
+    if (!needle) {
+      return res.status(400).json({ error: 'Inserisci un CPV o una descrizione da cercare' });
+    }
+
+    const parsedLimit = Math.max(1, Math.min(parseInt(limit, 10) || 20, 100));
+    const { records } = await buildLocalMepaApiSummary();
+
+    const matches = records.filter((row) => {
+      const cpvDigits = String(row.codice_cpv || '').replace(/\D/g, '');
+      if (cpvDigits.includes(needle.replace(/\D/g, '')) && needle.replace(/\D/g, '').length >= 3) return true;
+
+      const haystack = [
+        row.codice_cpv,
+        row.descrizione_cpv,
+        row.categoria_abilitazione,
+        row.bene_servizio,
+        row.bando_mepa,
+        row.regione_pa,
+        row.provincia_pa,
+        row.tipologia_amministrazione,
+        row.tipo_negoziazione
+      ].join(' ').toLowerCase();
+      return haystack.includes(needle);
+    });
+
+    const topMap = (items, keyFn, limitRows = 10) => {
+      const map = new Map();
+      items.forEach((item) => {
+        const key = keyFn(item);
+        if (!key) return;
+        map.set(key, (map.get(key) || 0) + (item.n_negoziazioni_pubblicate || 0));
+      });
+      return [...map.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, limitRows)
+        .map(([label, negoziazioni]) => ({ label, negoziazioni }));
+    };
+
+    const totalNegoziazioni = matches.reduce((sum, row) => sum + (row.n_negoziazioni_pubblicate || 0), 0);
+    const totalPa = matches.reduce((sum, row) => sum + (row.n_pa_appaltanti || 0), 0);
+    const totalPo = matches.reduce((sum, row) => sum + (row.n_po || 0), 0);
+
+    const cpvTop = topMap(matches, (row) => `${row.codice_cpv} | ${row.descrizione_cpv}`, 10).map((row) => {
+      const [codice_cpv, descrizione_cpv] = row.label.split(' | ');
+      return { codice_cpv, descrizione_cpv, negoziazioni: row.negoziazioni };
+    });
+    const categorieTop = topMap(matches, (row) => `${row.categoria_abilitazione} | ${row.bene_servizio}`, 10).map((row) => {
+      const [categoria_abilitazione, bene_servizio] = row.label.split(' | ');
+      return { categoria_abilitazione, bene_servizio, negoziazioni: row.negoziazioni };
+    });
+    const regioniTop = topMap(matches, (row) => row.regione_pa, 10).map((row) => ({ regione: row.label, negoziazioni: row.negoziazioni }));
+    const tipiTop = topMap(matches, (row) => row.tipo_negoziazione, 10).map((row) => ({ tipo: row.label, negoziazioni: row.negoziazioni }));
+    const bandiTop = topMap(matches, (row) => row.bando_mepa, 10).map((row) => ({ bando: row.label, negoziazioni: row.negoziazioni }));
+
+    res.json({
+      mode: 'local-search',
+      query: needle,
+      matchedRows: matches.length,
+      totalNegoziazioni,
+      totalPa,
+      totalPo,
+      cpvTop,
+      categorieTop,
+      regioniTop,
+      tipiTop,
+      bandiTop,
+      records: matches
+        .sort((a, b) => (b.n_negoziazioni_pubblicate || 0) - (a.n_negoziazioni_pubblicate || 0))
+        .slice(0, parsedLimit)
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

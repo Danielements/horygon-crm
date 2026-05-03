@@ -10,6 +10,18 @@ const COL_CIG  = '#f59e0b';
 const COL_UP   = '#10b981';
 const COL_DN   = '#ef4444';
 
+if (!document.getElementById('analytics-api-progress-style')) {
+  const style = document.createElement('style');
+  style.id = 'analytics-api-progress-style';
+  style.textContent = `
+    @keyframes analytics-progress {
+      0% { transform: translateX(-20%); background-position: 0% 50%; }
+      100% { transform: translateX(220%); background-position: 100% 50%; }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 function formatApiLink(url, label) {
   return `<a href="${url}" target="_blank" rel="noreferrer" style="display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid var(--border);border-radius:999px;background:var(--bg-input);color:var(--text);text-decoration:none;font-size:12px;font-weight:600">${label}</a>`;
 }
@@ -28,6 +40,30 @@ function ensureAnalyticsApiIntro() {
     else section.appendChild(wrap);
   }
   return wrap;
+}
+
+function renderAnalyticsApiLoading(message = 'Sto leggendo il dataset MEPA 2026...') {
+  const wrap = ensureAnalyticsApiIntro();
+  if (!wrap) return;
+  wrap.innerHTML = `
+    <div style="border:1px solid var(--border);border-radius:16px;background:var(--bg-card);padding:18px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+        <div>
+          <div style="font-size:18px;font-weight:700">Analisi API MEPA</div>
+          <div style="font-size:13px;color:var(--text-muted)">${escapeHtml(message)}</div>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted)">prima lettura piu lenta, poi cache locale</div>
+      </div>
+      <div style="height:10px;background:var(--bg-input);border:1px solid var(--border);border-radius:999px;overflow:hidden">
+        <div style="width:35%;height:100%;background:linear-gradient(90deg, ${COL_MEPA}, ${COL_CIG}, ${COL_MEPA});background-size:200% 100%;animation:analytics-progress 1.4s linear infinite"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:12px">
+        <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--bg-input);font-size:12px;color:var(--text-muted)">1. Verifica stato MEPA e CIG</div>
+        <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--bg-input);font-size:12px;color:var(--text-muted)">2. Parsing CSV bandite 2026</div>
+        <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--bg-input);font-size:12px;color:var(--text-muted)">3. Costruzione insight commerciali</div>
+      </div>
+    </div>
+  `;
 }
 
 function renderAnalyticsApiIntro(data, mepaStato, cigStato, apiSummary) {
@@ -166,33 +202,33 @@ function renderAnalyticsApiIntro(data, mepaStato, cigStato, apiSummary) {
           </div>
         ` : ''}
         <div style="font-size:12px;color:var(--text-muted);line-height:1.6">
-          Query base: <code>https://dati.consip.it/api/3/action/datastore_search?resource_id=RESOURCE_ID&amp;limit=5</code><br>
-          Query SQL: <code>https://dati.consip.it/api/3/action/datastore_search_sql?sql=SELECT * FROM "RESOURCE_ID" LIMIT 10</code>
+          Qui lavoriamo prima di tutto sul CSV locale 2026: cerca per <code>CPV</code>, descrizione, categoria, bando o territorio.<br>
+          La parte CKAN/Consip resta utile per scoprire dataset e resource id, ma non e il motore principale di questa vista.
         </div>
         <div style="margin-top:14px;border:1px solid var(--border);border-radius:14px;background:var(--bg-card);padding:14px">
           <div style="display:grid;grid-template-columns:1.2fr .8fr .7fr auto;gap:10px;align-items:end;margin-bottom:10px">
             <div>
-              <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:6px">Resource ID CKAN</label>
-              <input id="mepa-api-resource-id" type="text" placeholder="es. d75da12c-d0c9-4a7d-9d52-24bdc5d57925" style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:10px;padding:10px 12px;color:var(--text)">
+              <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:6px">CPV o descrizione</label>
+              <input id="mepa-api-local-query" type="text" placeholder="es. 30192700, cancelleria, laboratorio, servizi di formazione..." style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:10px;padding:10px 12px;color:var(--text)">
             </div>
             <div>
-              <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:6px">Ricerca libera</label>
-              <input id="mepa-api-query" type="text" placeholder="ente, CPV, keyword..." style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:10px;padding:10px 12px;color:var(--text)">
+              <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:6px">Focus rapido</label>
+              <input id="mepa-api-query" type="text" placeholder="es. Lazio, Beni, TD, Comuni..." style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:10px;padding:10px 12px;color:var(--text)">
             </div>
             <div>
               <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:6px">Limit</label>
               <input id="mepa-api-limit" type="number" min="1" max="100" value="10" style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:10px;padding:10px 12px;color:var(--text)">
             </div>
-            <button class="btn btn-primary" type="button" onclick="runMepaApiSearch()">Interroga API</button>
+            <button class="btn btn-primary" type="button" onclick="runMepaApiSearch()">Cerca nel CSV</button>
           </div>
           <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end">
             <div>
-              <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:6px">SQL CKAN</label>
+              <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:6px">SQL CKAN opzionale</label>
               <input id="mepa-api-sql" type="text" placeholder='SELECT * FROM "RESOURCE_ID" LIMIT 10' style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:10px;padding:10px 12px;color:var(--text)">
             </div>
             <button class="btn btn-outline" type="button" onclick="runMepaApiSql()">Esegui SQL</button>
           </div>
-          <div id="mepa-api-status" style="margin-top:10px;font-size:12px;color:var(--text-muted)">Inserisci un resource ID CKAN e prova una query reale Consip.</div>
+          <div id="mepa-api-status" style="margin-top:10px;font-size:12px;color:var(--text-muted)">Inserisci un CPV o una descrizione e il CRM cerchera direttamente nel file locale 2026.</div>
           <div id="mepa-api-results" style="margin-top:12px"></div>
         </div>
       </div>
@@ -227,6 +263,98 @@ function renderMepaApiResults(payload) {
   if (!box || !status) return;
 
   const records = payload?.records || [];
+
+  if (payload?.mode === 'local-search') {
+    status.textContent = `Trovate ${payload.matchedRows || 0} righe compatibili per "${payload.query || ''}" · ${Number(payload.totalNegoziazioni || 0).toLocaleString('it-IT')} negoziazioni pubblicate`;
+    box.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+        <div class="dash-card" style="margin:0"><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em">Righe matchate</div><div style="font-size:22px;font-weight:700;margin-top:6px">${(payload.matchedRows || 0).toLocaleString('it-IT')}</div></div>
+        <div class="dash-card" style="margin:0"><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em">Negoziazioni</div><div style="font-size:22px;font-weight:700;margin-top:6px">${(payload.totalNegoziazioni || 0).toLocaleString('it-IT')}</div></div>
+        <div class="dash-card" style="margin:0"><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em">PA appaltanti</div><div style="font-size:22px;font-weight:700;margin-top:6px">${(payload.totalPa || 0).toLocaleString('it-IT')}</div></div>
+        <div class="dash-card" style="margin:0"><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em">Punti ordinanti</div><div style="font-size:22px;font-weight:700;margin-top:6px">${(payload.totalPo || 0).toLocaleString('it-IT')}</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+        <div class="dash-card" style="margin:0">
+          <h3 style="margin:0 0 10px;font-size:14px">CPV piu rilevanti</h3>
+          ${(payload.cpvTop || []).map((row) => `
+            <div style="padding:8px 0;border-top:1px solid var(--border)">
+              <div style="font-size:13px;font-weight:700">${escapeHtml(row.descrizione_cpv || row.codice_cpv)}</div>
+              <div style="font-size:11px;color:var(--text-muted)">${escapeHtml(row.codice_cpv || 'n/d')} · ${(row.negoziazioni || 0).toLocaleString('it-IT')} negoziazioni</div>
+            </div>
+          `).join('') || `<div style="font-size:12px;color:var(--text-muted)">Nessun CPV disponibile.</div>`}
+        </div>
+        <div class="dash-card" style="margin:0">
+          <h3 style="margin:0 0 10px;font-size:14px">Categorie piu attive</h3>
+          ${(payload.categorieTop || []).map((row) => `
+            <div style="padding:8px 0;border-top:1px solid var(--border)">
+              <div style="font-size:13px;font-weight:700">${escapeHtml(row.categoria_abilitazione || 'n/d')}</div>
+              <div style="font-size:11px;color:var(--text-muted)">${escapeHtml(row.bene_servizio || 'n/d')} · ${(row.negoziazioni || 0).toLocaleString('it-IT')} negoziazioni</div>
+            </div>
+          `).join('') || `<div style="font-size:12px;color:var(--text-muted)">Nessuna categoria disponibile.</div>`}
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:.9fr .9fr 1.2fr;gap:16px;margin-bottom:16px">
+        <div class="dash-card" style="margin:0">
+          <h3 style="margin:0 0 10px;font-size:14px">Regioni piu attive</h3>
+          ${(payload.regioniTop || []).map((row) => `
+            <div style="padding:8px 0;border-top:1px solid var(--border);display:flex;justify-content:space-between;gap:8px">
+              <span style="font-size:13px;font-weight:700">${escapeHtml(row.regione || 'n/d')}</span>
+              <span style="font-size:11px;color:var(--text-muted)">${(row.negoziazioni || 0).toLocaleString('it-IT')}</span>
+            </div>
+          `).join('') || `<div style="font-size:12px;color:var(--text-muted)">Nessuna regione disponibile.</div>`}
+        </div>
+        <div class="dash-card" style="margin:0">
+          <h3 style="margin:0 0 10px;font-size:14px">Tipo negoziazione</h3>
+          ${(payload.tipiTop || []).map((row) => `
+            <div style="padding:8px 0;border-top:1px solid var(--border);display:flex;justify-content:space-between;gap:8px">
+              <span style="font-size:13px;font-weight:700">${escapeHtml(row.tipo || 'n/d')}</span>
+              <span style="font-size:11px;color:var(--text-muted)">${(row.negoziazioni || 0).toLocaleString('it-IT')}</span>
+            </div>
+          `).join('') || `<div style="font-size:12px;color:var(--text-muted)">Nessun tipo disponibile.</div>`}
+          <h3 style="margin:14px 0 10px;font-size:14px">Bando MEPA</h3>
+          ${(payload.bandiTop || []).map((row) => `
+            <div style="padding:8px 0;border-top:1px solid var(--border);display:flex;justify-content:space-between;gap:8px">
+              <span style="font-size:13px;font-weight:700">${escapeHtml(row.bando || 'n/d')}</span>
+              <span style="font-size:11px;color:var(--text-muted)">${(row.negoziazioni || 0).toLocaleString('it-IT')}</span>
+            </div>
+          `).join('') || `<div style="font-size:12px;color:var(--text-muted)">Nessun bando disponibile.</div>`}
+        </div>
+        <div class="dash-card" style="margin:0">
+          <h3 style="margin:0 0 10px;font-size:14px">Anteprima righe matchate</h3>
+          ${records.length ? `
+            <div style="overflow:auto">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>CPV</th>
+                    <th>Descrizione</th>
+                    <th>Categoria</th>
+                    <th>Regione</th>
+                    <th>Tipo</th>
+                    <th>Negoziazioni</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${records.map((row) => `
+                    <tr>
+                      <td>${escapeHtml(row.codice_cpv || '—')}</td>
+                      <td>${escapeHtml(row.descrizione_cpv || '—')}</td>
+                      <td>${escapeHtml(row.categoria_abilitazione || '—')}</td>
+                      <td>${escapeHtml(row.regione_pa || '—')}</td>
+                      <td>${escapeHtml(row.tipo_negoziazione || '—')}</td>
+                      <td>${(row.n_negoziazioni_pubblicate || 0).toLocaleString('it-IT')}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          ` : `<div style="font-size:12px;color:var(--text-muted)">Nessuna riga trovata.</div>`}
+        </div>
+      </div>
+    `;
+    return;
+  }
+
   const columns = payload?.fields?.length
     ? payload.fields.map((field) => field.id || field)
     : (payload?.insights?.sampleColumns || Object.keys(records[0] || {})).slice(0, 8);
@@ -287,24 +415,24 @@ function renderMepaApiResults(payload) {
 }
 
 async function runMepaApiSearch() {
-  const resourceId = document.getElementById('mepa-api-resource-id')?.value?.trim();
-  const query = document.getElementById('mepa-api-query')?.value?.trim();
+  const localQuery = document.getElementById('mepa-api-local-query')?.value?.trim();
+  const focusQuery = document.getElementById('mepa-api-query')?.value?.trim();
   const limit = document.getElementById('mepa-api-limit')?.value?.trim() || '10';
   const status = document.getElementById('mepa-api-status');
   const box = document.getElementById('mepa-api-results');
-  if (!resourceId) {
-    if (status) status.textContent = 'Inserisci un resource ID CKAN valido.';
+  const mergedQuery = [localQuery, focusQuery].filter(Boolean).join(' ');
+  if (!mergedQuery) {
+    if (status) status.textContent = 'Inserisci un CPV o una descrizione valida.';
     return;
   }
-  if (status) status.textContent = 'Interrogazione API in corso...';
+  if (status) status.textContent = 'Ricerca nel CSV locale in corso...';
   if (box) box.innerHTML = '';
   try {
-    const params = new URLSearchParams({ resource_id: resourceId, limit });
-    if (query) params.set('q', query);
-    const result = await api('GET', `/analytics/mepa-api/search?${params.toString()}`);
+    const params = new URLSearchParams({ q: mergedQuery, limit });
+    const result = await api('GET', `/analytics/mepa-api/local-search?${params.toString()}`);
     renderMepaApiResults(result);
   } catch (e) {
-    if (status) status.textContent = `Errore API: ${e.message}`;
+    if (status) status.textContent = `Errore ricerca locale: ${e.message}`;
   }
 }
 
@@ -335,6 +463,7 @@ async function loadAnalytics() {
   if (!noDataEl || !dataEl) return;
   if (headerTitle) headerTitle.textContent = 'Analisi API MEPA';
   if (headerSubtitle) headerSubtitle.textContent = 'API Consip, storico MEPA, gap di mercato e potenziale commerciale';
+  renderAnalyticsApiLoading('Sto preparando la pagina e leggendo il CSV delle bandite MEPA 2026...');
 
   // Controlla se abbiamo dati
   const [mepaStato, cigStato, apiSummary] = await Promise.all([
