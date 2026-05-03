@@ -30,7 +30,7 @@ function ensureAnalyticsApiIntro() {
   return wrap;
 }
 
-function renderAnalyticsApiIntro(data, mepaStato, cigStato) {
+function renderAnalyticsApiIntro(data, mepaStato, cigStato, apiSummary) {
   const wrap = ensureAnalyticsApiIntro();
   if (!wrap) return;
 
@@ -53,6 +53,14 @@ function renderAnalyticsApiIntro(data, mepaStato, cigStato) {
       return (a.penetration ?? 9999) - (b.penetration ?? 9999);
     })
     .slice(0, 5);
+
+  const topCsvCpv = (apiSummary?.topCpv || []).slice(0, 5);
+  const topCsvCategorie = (apiSummary?.topCategorie || []).slice(0, 5);
+  const topCsvRegioni = (apiSummary?.topRegioni || []).slice(0, 5);
+  const topCsvProdotti = (apiSummary?.prodottiMatch || []).slice(0, 6);
+  const td = apiSummary?.rapportoTdRdo?.td || 0;
+  const rdo = apiSummary?.rapportoTdRdo?.rdo || 0;
+  const tdRatio = (td + rdo) > 0 ? ((td / (td + rdo)) * 100).toFixed(1) : null;
 
   wrap.innerHTML = `
     <div style="display:grid;grid-template-columns:2fr 1.1fr;gap:16px;align-items:start">
@@ -85,6 +93,78 @@ function renderAnalyticsApiIntro(data, mepaStato, cigStato) {
             <div style="font-size:12px;color:var(--text-muted)">cosa vendere, a chi, dove e quando</div>
           </div>
         </div>
+        ${apiSummary ? `
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px">
+            <div style="border:1px solid var(--border);border-radius:12px;background:var(--bg-card);padding:12px">
+              <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em">Righe CSV 2026</div>
+              <div style="font-size:22px;font-weight:700;margin-top:6px">${(apiSummary.rows || 0).toLocaleString('it-IT')}</div>
+              <div style="font-size:12px;color:var(--text-muted)">dataset bandite MEPA locale</div>
+            </div>
+            <div style="border:1px solid var(--border);border-radius:12px;background:var(--bg-card);padding:12px">
+              <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em">Negoziazioni pubblicate</div>
+              <div style="font-size:22px;font-weight:700;margin-top:6px">${(apiSummary.totaleNegoziazioni || 0).toLocaleString('it-IT')}</div>
+              <div style="font-size:12px;color:var(--text-muted)">somma del campo N_Negoziazioni_pubblicate</div>
+            </div>
+            <div style="border:1px solid var(--border);border-radius:12px;background:var(--bg-card);padding:12px">
+              <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em">PA appaltanti</div>
+              <div style="font-size:22px;font-weight:700;margin-top:6px">${(apiSummary.totalePa || 0).toLocaleString('it-IT')}</div>
+              <div style="font-size:12px;color:var(--text-muted)">presenza amministrazioni sul file</div>
+            </div>
+            <div style="border:1px solid var(--border);border-radius:12px;background:var(--bg-card);padding:12px">
+              <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em">Mix TD / RdO</div>
+              <div style="font-size:22px;font-weight:700;margin-top:6px">${tdRatio !== null ? `${tdRatio}% TD` : 'n/d'}</div>
+              <div style="font-size:12px;color:var(--text-muted)">TD ${(td || 0).toLocaleString('it-IT')} · RdO ${(rdo || 0).toLocaleString('it-IT')}</div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1.1fr .9fr .8fr;gap:12px;margin-bottom:14px">
+            <div style="border:1px solid var(--border);border-radius:14px;background:var(--bg-card);padding:12px">
+              <div style="font-size:13px;font-weight:700;margin-bottom:8px">CPV più banditi nel file locale</div>
+              ${topCsvCpv.map((row) => `
+                <div style="padding:8px 0;border-top:1px solid var(--border)">
+                  <div style="font-size:13px;font-weight:700">${escapeHtml(row.target_desc || row.descrizione_cpv || row.codice_cpv)}</div>
+                  <div style="font-size:11px;color:var(--text-muted)">${escapeHtml(row.codice_cpv)}${row.categoria_horygon ? ` · ${escapeHtml(row.categoria_horygon)}` : ''}</div>
+                  <div style="font-size:11px;color:var(--text-muted);margin-top:4px">${(row.negoziazioni || 0).toLocaleString('it-IT')} negoziazioni</div>
+                </div>
+              `).join('') || `<div style="font-size:12px;color:var(--text-muted)">Nessun CPV trovato nel file locale.</div>`}
+            </div>
+            <div style="border:1px solid var(--border);border-radius:14px;background:var(--bg-card);padding:12px">
+              <div style="font-size:13px;font-weight:700;margin-bottom:8px">Categorie più richieste</div>
+              ${topCsvCategorie.map((row) => `
+                <div style="padding:8px 0;border-top:1px solid var(--border)">
+                  <div style="font-size:13px;font-weight:700">${escapeHtml(row.categoria || 'n/d')}</div>
+                  <div style="font-size:11px;color:var(--text-muted)">${escapeHtml(row.bene_servizio || 'n/d')}</div>
+                  <div style="font-size:11px;color:var(--text-muted);margin-top:4px">${(row.negoziazioni || 0).toLocaleString('it-IT')} negoziazioni</div>
+                </div>
+              `).join('') || `<div style="font-size:12px;color:var(--text-muted)">Nessuna categoria disponibile.</div>`}
+            </div>
+            <div style="border:1px solid var(--border);border-radius:14px;background:var(--bg-card);padding:12px">
+              <div style="font-size:13px;font-weight:700;margin-bottom:8px">Regioni più attive</div>
+              ${topCsvRegioni.map((row) => `
+                <div style="padding:8px 0;border-top:1px solid var(--border);display:flex;justify-content:space-between;gap:8px">
+                  <span style="font-size:13px;font-weight:700">${escapeHtml(row.regione || 'n/d')}</span>
+                  <span style="font-size:11px;color:var(--text-muted)">${(row.negoziazioni || 0).toLocaleString('it-IT')}</span>
+                </div>
+              `).join('') || `<div style="font-size:12px;color:var(--text-muted)">Nessuna regione disponibile.</div>`}
+            </div>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:14px;background:var(--bg-card);padding:12px;margin-bottom:14px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+              <div style="font-size:13px;font-weight:700">Prodotti CRM da spingere subito</div>
+              <div style="font-size:11px;color:var(--text-muted)">${escapeHtml(apiSummary.file || 'beni-servizi-rdo-td-bandite-mepa-2026.csv')} · aggiornato ${apiSummary.fileMtime ? new Date(apiSummary.fileMtime).toLocaleString('it-IT') : 'n/d'}</div>
+            </div>
+            ${topCsvProdotti.length ? `
+              <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px">
+                ${topCsvProdotti.map((row) => `
+                  <div style="padding:10px;border:1px solid var(--border);border-radius:12px;background:var(--bg-input)">
+                    <div style="font-size:13px;font-weight:700">${escapeHtml(row.nome || 'Prodotto')}</div>
+                    <div style="font-size:11px;color:var(--text-muted)">${escapeHtml(row.codice_interno || 'n/d')} · ${escapeHtml(row.cpv_mepa || 'n/d')}</div>
+                    ${row.categoria_nome ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">${escapeHtml(row.categoria_nome)}</div>` : ''}
+                  </div>
+                `).join('')}
+              </div>
+            ` : `<div style="font-size:12px;color:var(--text-muted)">Il file locale non ha ancora matchato prodotti attivi del CRM sui CPV più forti.</div>`}
+          </div>
+        ` : ''}
         <div style="font-size:12px;color:var(--text-muted);line-height:1.6">
           Query base: <code>https://dati.consip.it/api/3/action/datastore_search?resource_id=RESOURCE_ID&amp;limit=5</code><br>
           Query SQL: <code>https://dati.consip.it/api/3/action/datastore_search_sql?sql=SELECT * FROM "RESOURCE_ID" LIMIT 10</code>
@@ -257,9 +337,10 @@ async function loadAnalytics() {
   if (headerSubtitle) headerSubtitle.textContent = 'API Consip, storico MEPA, gap di mercato e potenziale commerciale';
 
   // Controlla se abbiamo dati
-  const [mepaStato, cigStato] = await Promise.all([
+  const [mepaStato, cigStato, apiSummary] = await Promise.all([
     api('GET', '/mepa/stato'),
     api('GET', '/cig/stato'),
+    api('GET', '/analytics/mepa-api/local-summary').catch(() => null),
   ]);
 
   const hasMepa = mepaStato && mepaStato.totalRecords > 0;
@@ -274,13 +355,13 @@ async function loadAnalytics() {
     if (noDataTitle) noDataTitle.textContent = "Dati insufficienti per l'analisi API MEPA";
     document.getElementById('analytics-missing').textContent =
       'Carica i CSV MEPA oppure prepara la futura lettura API Consip, poi integra il file CIG in Stagionalita CIG';
-    renderAnalyticsApiIntro(null, mepaStato, cigStato);
+    renderAnalyticsApiIntro(null, mepaStato, cigStato, apiSummary);
     return;
   }
   if (!hasMepa) {
     const noDataTitleMepa = noDataEl.querySelector('h2');
     if (noDataTitleMepa) noDataTitleMepa.textContent = "Mancano i dati MEPA per l'analisi API";
-    renderAnalyticsApiIntro(null, mepaStato, cigStato);
+    renderAnalyticsApiIntro(null, mepaStato, cigStato, apiSummary);
     noDataEl.style.display = 'block'; dataEl.style.display = 'none';
     document.getElementById('analytics-missing').textContent = 'Mancano i dati MEPA — vai su Analisi MEPA e importa i CSV';
     return;
@@ -288,7 +369,7 @@ async function loadAnalytics() {
   if (!hasCig) {
     const noDataTitleCig = noDataEl.querySelector('h2');
     if (noDataTitleCig) noDataTitleCig.textContent = 'Mancano i dati CIG per il confronto';
-    renderAnalyticsApiIntro(null, mepaStato, cigStato);
+    renderAnalyticsApiIntro(null, mepaStato, cigStato, apiSummary);
     noDataEl.style.display = 'block'; dataEl.style.display = 'none';
     document.getElementById('analytics-missing').textContent = 'Mancano i dati CIG — vai su Stagionalità CIG e carica il file';
     return;
@@ -300,7 +381,7 @@ async function loadAnalytics() {
   const data = await api('GET', '/analytics/incrociata');
   if (!data) return;
 
-  renderAnalyticsApiIntro(data, mepaStato, cigStato);
+  renderAnalyticsApiIntro(data, mepaStato, cigStato, apiSummary);
   renderAnalyticsKPI(data);
   renderConfronto3Anni(data);
   renderCpvBubble(data);

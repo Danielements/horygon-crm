@@ -1,4 +1,7 @@
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
+const { parse } = require('csv-parse');
 const router = express.Router();
 const { authMiddleware } = require('../middleware/auth');
 const db = require('../db/database');
@@ -13,6 +16,12 @@ const CPV_PREFISSI_MEPA = [
 ];
 
 const CONSIP_CKAN_API_BASE = process.env.CONSIP_CKAN_API_BASE || 'https://dati.consip.it/api/3/action';
+const LOCAL_MEPA_API_FILE = path.join(process.cwd(), 'data', 'mepa', 'beni-servizi-rdo-td-bandite-mepa-2026.csv');
+let localMepaApiSummaryCache = {
+  mtimeMs: 0,
+  summary: null,
+  pending: null
+};
 
 function cpvFilterMepa() {
   return '(' + CPV_PREFISSI_MEPA.map(p => `codice_cpv LIKE '${p}%'`).join(' OR ') + ')';
@@ -157,6 +166,174 @@ async function callConsipAction(action, params = {}) {
     throw new Error(payload?.error?.message || 'Risposta CKAN non valida');
   }
   return payload.result;
+}
+
+function toCountValue(value) {
+  if (value === null || value === undefined || value === '') return 0;
+  const normalized = String(value).replace(/\./g, '').replace(/,/g, '.').replace(/[^\d.-]/g, '');
+  const parsed = parseFloat(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function topMapEntries(map, limit = 10) {
+  return [...map.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([label, valore]) => ({ label, valore }));
+}
+
+async function buildLocalMepaApiSummary() {
+  const stats = await fs.promises.stat(LOCAL_MEPA_API_FILE);
+  if (localMepaApiSummaryCache.summary && localMepaApiSummaryCache.mtimeMs === stats.mtimeMs) {
+    return localMepaApiSummaryCache.summary;
+  }
+  if (localMepaApiSummaryCache.pending) {
+    return localMepaApiSummaryCache.pending;
+  }
+
+  localMepaApiSummaryCache.pending = new Promise((resolve, reject) => {
+    const cpvMap = new Map();
+    const categorieMap = new Map();
+    const regioniMap = new Map();
+    const provinceMap = new Map();
+    const negoziazioniMap = new Map();
+    const bandiMap = new Map();
+    const anniMap = new Map();
+
+    let rows = 0;
+    let totaleNegoziazioni = 0;
+    let totalePa = 0;
+    let totalePo = 0;
+
+    const parser = parse({
+      columns: true,
+      bom: true,
+      skip_empty_lines: true,
+      relax_quotes: true,
+      trim: true
+    });
+
+    parser.on('data', (record) => {
+      rows += 1;
+      const anno = String(record.Anno_Riferimento || '').trim();
+      const tipoNegoziazione = String(record.Tipo_negoziazione || '').trim() || 'n/d';
+      const bandoMepa = String(record.Bando_Mepa || '').trim() || 'n/d';
+      const categoria = String(record.Categoria_abilitazione || '').trim() || 'n/d';
+      const beneServizio = String(record.bene_servizio || '').trim() || 'n/d';
+      const codiceCpv = String(record.codice_CPV || '').trim() || 'n/d';
+      const descrizioneCpv = String(record.descrizione_CPV || '').trim() || 'n/d';
+      const regione = String(record.Regione_PA || '').trim() || 'n/d';
+      const provincia = String(record.Provincia_PA || '').trim() || 'n/d';
+      const nNegoziazioni = toCountValue(record.N_Negoziazioni_pubblicate);
+      const nPa = toCountValue(record.N_PA_Appaltanti);
+      const nPo = toCountValue(record.N_PO);
+
+      totaleNegoziazioni += nNegoziazioni;
+      totalePa += nPa;
+      totalePo += nPo;
+
+      const cpvKey = `${codiceCpv} | ${descrizioneCpv}`;
+      const categoriaKey = `${categoria} | ${beneServizio}`;
+      const provinciaKey = `${provincia} | ${regione}`;
+
+      cpvMap.set(cpvKey, (cpvMap.get(cpvKey) || 0) + nNegoziazioni);
+      categorieMap.set(categoriaKey, (categorieMap.get(categoriaKey) || 0) + nNegoziazioni);
+      regioniMap.set(regione, (regioniMap.get(regione) || 0) + nNegoziazioni);
+      provinceMap.set(provinciaKey, (provinceMap.get(provinciaKey) || 0) + nNegoziazioni);
+      negoziazioniMap.set(tipoNegoziazione, (negoziazioniMap.get(tipoNegoziazione) || 0) + nNegoziazioni);
+      bandiMap.set(bandoMepa, (bandiMap.get(bandoMepa) || 0) + nNegoziazioni);
+      anniMap.set(anno, (anniMap.get(anno) || 0) + nNegoziazioni);
+    });
+
+    parser.on('end', () => {
+      const topCpv = topMapEntries(cpvMap, 10).map((row) => {
+        const [codice, descrizione] = row.label.split(' | ');
+        const meta = getCpvMeta(normalizeCpvValue(codice), descrizione);
+        return {
+          codice_cpv: codice,
+          descrizione_cpv: descrizione,
+          target_desc: meta.target_desc || descrizione,
+          categoria_horygon: meta.categoria || null,
+          priorita_horygon: meta.priorita || null,
+          negoziazioni: row.valore
+        };
+      });
+
+      const cpvPrefixes = [...new Set(topCpv.map((row) => normalizeCpvValue(row.codice_cpv)).filter(Boolean))];
+      let prodottiMatch = [];
+      if (cpvPrefixes.length) {
+        const placeholders = cpvPrefixes.map(() => '?').join(',');
+        prodottiMatch = db.prepare(`
+          SELECT
+            p.id,
+            p.nome,
+            p.codice_interno,
+            p.cpv_mepa,
+            c.nome as categoria_nome
+          FROM prodotti p
+          LEFT JOIN categorie c ON c.id = p.categoria_id
+          WHERE p.attivo = 1
+            AND p.cpv_mepa IS NOT NULL
+            AND substr(p.cpv_mepa, 1, 6) IN (${placeholders})
+          ORDER BY p.nome
+          LIMIT 20
+        `).all(...cpvPrefixes).map((row) => ({
+          ...row,
+          cpv_prefix: normalizeCpvValue(row.cpv_mepa)
+        }));
+      }
+
+      const summary = {
+        file: path.basename(LOCAL_MEPA_API_FILE),
+        fileMtime: stats.mtime.toISOString(),
+        rows,
+        totaleNegoziazioni,
+        totalePa,
+        totalePo,
+        rapportoTdRdo: {
+          td: negoziazioniMap.get('TD') || 0,
+          rdo: negoziazioniMap.get('RdO') || 0
+        },
+        anniRiferimento: [...anniMap.entries()]
+          .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+          .map(([anno, negoziazioni]) => ({ anno, negoziazioni })),
+        topCpv,
+        topCategorie: topMapEntries(categorieMap, 10).map((row) => {
+          const [categoria, bene_servizio] = row.label.split(' | ');
+          return { categoria, bene_servizio, negoziazioni: row.valore };
+        }),
+        topRegioni: topMapEntries(regioniMap, 10).map((row) => ({ regione: row.label, negoziazioni: row.valore })),
+        topProvince: topMapEntries(provinceMap, 10).map((row) => {
+          const [provincia, regione] = row.label.split(' | ');
+          return { provincia, regione, negoziazioni: row.valore };
+        }),
+        topTipiNegoziazione: topMapEntries(negoziazioniMap, 10).map((row) => ({ tipo: row.label, negoziazioni: row.valore })),
+        topBandi: topMapEntries(bandiMap, 10).map((row) => ({ bando: row.label, negoziazioni: row.valore })),
+        prodottiMatch
+      };
+
+      localMepaApiSummaryCache = {
+        mtimeMs: stats.mtimeMs,
+        summary,
+        pending: null
+      };
+      resolve(summary);
+    });
+
+    parser.on('error', (error) => {
+      localMepaApiSummaryCache.pending = null;
+      reject(error);
+    });
+
+    fs.createReadStream(LOCAL_MEPA_API_FILE)
+      .on('error', (error) => {
+        localMepaApiSummaryCache.pending = null;
+        reject(error);
+      })
+      .pipe(parser);
+  });
+
+  return localMepaApiSummaryCache.pending;
 }
 
 // ═══════════════════════════════════════════════
@@ -310,6 +487,18 @@ router.get('/mepa-api/config', (req, res) => {
       sql: `${CONSIP_CKAN_API_BASE}/datastore_search_sql?sql=SELECT * FROM "RESOURCE_ID" LIMIT 10`
     }
   });
+});
+
+router.get('/mepa-api/local-summary', async (req, res) => {
+  try {
+    if (!fs.existsSync(LOCAL_MEPA_API_FILE)) {
+      return res.status(404).json({ error: 'File MEPA locale non trovato' });
+    }
+    const summary = await buildLocalMepaApiSummary();
+    res.json(summary);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 router.get('/mepa-api/search', async (req, res) => {
