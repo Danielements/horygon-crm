@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const QRCode = require('qrcode');
 const db = require('../db/database');
 const { authMiddleware, requirePermesso } = require('../middleware/auth');
