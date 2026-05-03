@@ -67,15 +67,18 @@ router.post('/', requirePermesso('utenti', 'admin'), async (req, res) => {
     send_credentials_email, force_password_change
   } = req.body;
   try {
+    console.error('[utenti.create] start', { nome, email, ruolo_id: Number(ruolo_id || 1), send_credentials_email: !!send_credentials_email });
     if (req.user.ruolo_id !== 4 && Number(ruolo_id) === 4) {
       return res.status(403).json({ error: 'Solo un SuperAdmin può creare un altro SuperAdmin' });
     }
     if (!password) return res.status(400).json({ error: 'Password obbligatoria per nuovo utente' });
     const hash = await bcrypt.hash(password, 10);
+    console.error('[utenti.create] hash-ok', { email });
     const r = db.prepare(
       'INSERT INTO utenti (nome, email, password_hash, ruolo_id, tema, telefono, qualifica, reparto, linkedin, note_biglietto, force_password_change) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
     ).run(nome, email, hash, ruolo_id || 1, tema || 'dark', s(telefono), s(qualifica), s(reparto), s(linkedin), s(note_biglietto), force_password_change ? 1 : 0);
     const userId = Number(r.lastInsertRowid);
+    console.error('[utenti.create] insert-ok', { userId, email });
     let email_sent = false;
     let email_error = null;
     if (send_credentials_email) {
@@ -83,11 +86,14 @@ router.post('/', requirePermesso('utenti', 'admin'), async (req, res) => {
         await sendCredentialsEmail(req.user.id, { nome, email }, password);
         db.prepare(`UPDATE utenti SET credentials_sent_at = datetime('now') WHERE id = ?`).run(userId);
         email_sent = true;
+        console.error('[utenti.create] credentials-email-ok', { userId, email });
       } catch (err) {
         email_error = err.message;
+        console.error('[utenti.create] credentials-email-fail', { userId, email, error: err.message });
       }
     }
     const responsePayload = { id: userId, email_sent: !!email_sent, email_error: email_error || null };
+    console.error('[utenti.create] sending-response', responsePayload);
     res.status(201).type('application/json').send(JSON.stringify(responsePayload));
     setImmediate(() => {
       writeAudit({
@@ -97,8 +103,13 @@ router.post('/', requirePermesso('utenti', 'admin'), async (req, res) => {
         entita_id: userId,
         dettagli: { nome, email, ruolo_id: Number(ruolo_id || 1), email_sent: !!email_sent, force_password_change: !!force_password_change }
       });
+      console.error('[utenti.create] audit-ok', { userId });
     });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+    return;
+  } catch (e) {
+    console.error('[utenti.create] catch', e);
+    res.status(400).json({ error: e.message });
+  }
 });
 
 router.put('/:id', requirePermesso('utenti', 'admin'), async (req, res) => {
