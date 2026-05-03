@@ -526,7 +526,7 @@ function organizeNavigationLayout() {
   const nav = document.querySelector('#sidebar nav');
   if (!nav || nav.dataset.organized === '1') return;
   const itemMap = Object.fromEntries([...nav.querySelectorAll('.nav-item[data-section]')].map(item => [item.dataset.section, item]));
-  if (itemMap.analytics) itemMap.analytics.innerHTML = '<span class="nav-icon">API</span> Analisi API MEPA';
+  if (itemMap.analytics) itemMap.analytics.innerHTML = '<span class="nav-icon">STAT</span> Analisi API MEPA';
   const getItem = (section, label, icon, id = '') => itemMap[section] || createNavItem(section, label, icon, id);
   const groups = [
     { label: '', sections: ['dashboard'] },
@@ -534,7 +534,7 @@ function organizeNavigationLayout() {
     { label: 'Anagrafiche', sections: ['clienti', 'fornitori', 'contatti', 'mappa'] },
     { label: 'Logistica', sections: ['prodotti', 'magazzino', 'preventivi', 'ordini', 'ddt', 'container', 'documenti'] },
     { label: 'Contabilita', sections: ['fatture-attive', 'fatture-passive', 'fatture-fuori-campo'] },
-    { label: 'Statistica', sections: ['cig', 'mepa', 'rdo', 'analytics', 'statistics'] },
+    { label: 'Statistica', sections: ['mepa', 'rdo', 'analytics'] },
     { label: 'Amministrazione', sections: ['utenti', 'audit-log', 'system-log', 'automazioni'] }
   ];
   nav.innerHTML = '';
@@ -566,7 +566,7 @@ function organizeNavigationLayout() {
         : section === 'cig' ? getItem('cig', 'Stagionalità CIG', '📉')
         : section === 'mepa' ? getItem('mepa', 'Abilitazioni CPV MEPA', '📊')
         : section === 'rdo' ? getItem('rdo', 'RdO', '📝')
-        : section === 'analytics' ? getItem('analytics', 'Analisi Incrociata', '🔬')
+        : section === 'analytics' ? getItem('analytics', 'Analisi API MEPA', 'STAT')
         : section === 'statistics' ? getItem('statistics', 'Statistiche', '📈')
         : section === 'utenti' ? getItem('utenti', 'Utenti', '⚙️', 'nav-utenti')
         : section === 'automazioni' ? getItem('automazioni', 'Automazioni', '⚡')
