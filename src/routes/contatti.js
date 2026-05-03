@@ -6,6 +6,7 @@ const { syncSingleContactToGoogle } = require('../services/google');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const CONTACT_UPLOAD_DIR = path.join(process.cwd(), 'uploads', 'contatti');
 
 router.use(authMiddleware);
 
@@ -61,16 +62,22 @@ function i(v) { const p = parseInt(v); return isNaN(p) ? null : p; }
 
 const storageContatti = multer.diskStorage({
   destination: (req, file, cb) => {
-    const dir = './uploads/contatti';
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
+    try {
+      if (!fs.existsSync(CONTACT_UPLOAD_DIR)) fs.mkdirSync(CONTACT_UPLOAD_DIR, { recursive: true });
+      cb(null, CONTACT_UPLOAD_DIR);
+    } catch (err) {
+      cb(err);
+    }
   },
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname);
     cb(null, `contatto-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
   }
 });
-const uploadContatto = multer({ storage: storageContatti });
+const uploadContatto = multer({
+  storage: storageContatti,
+  limits: { fileSize: 10 * 1024 * 1024 }
+});
 
 router.get('/', requirePermesso('clienti', 'read'), (req, res) => {
   const { q } = req.query;
@@ -174,19 +181,28 @@ router.delete('/:id', requirePermesso('clienti', 'delete'), (req, res) => {
   res.json({ ok: true });
 });
 
-router.post('/:id/avatar', requirePermesso('clienti', 'edit'), uploadContatto.single('avatar'), (req, res) => {
-  const row = db.prepare('SELECT avatar_path FROM anagrafiche_contatti WHERE id = ?').get(req.params.id);
-  if (!row) return res.status(404).json({ error: 'Contatto non trovato' });
-  if (!req.file) return res.status(400).json({ error: 'Nessun file caricato' });
-  if (row.avatar_path) {
-    const full = '.' + row.avatar_path;
-    if (fs.existsSync(full)) {
-      try { fs.unlinkSync(full); } catch {}
+router.post('/:id/avatar', requirePermesso('clienti', 'edit'), (req, res) => {
+  uploadContatto.single('avatar')(req, res, (uploadErr) => {
+    if (uploadErr) {
+      return res.status(400).json({ error: uploadErr.message || 'Errore caricamento avatar' });
     }
-  }
-  const avatarPath = `/uploads/contatti/${req.file.filename}`;
-  db.prepare('UPDATE anagrafiche_contatti SET avatar_path = ? WHERE id = ?').run(avatarPath, req.params.id);
-  res.json({ ok: true, avatar_path: avatarPath });
+    try {
+      const row = db.prepare('SELECT avatar_path FROM anagrafiche_contatti WHERE id = ?').get(req.params.id);
+      if (!row) return res.status(404).json({ error: 'Contatto non trovato' });
+      if (!req.file) return res.status(400).json({ error: 'Nessun file caricato' });
+      if (row.avatar_path) {
+        const full = path.join(process.cwd(), row.avatar_path.replace(/^\/+/, '').replaceAll('/', path.sep));
+        if (fs.existsSync(full)) {
+          try { fs.unlinkSync(full); } catch {}
+        }
+      }
+      const avatarPath = `/uploads/contatti/${req.file.filename}`;
+      db.prepare('UPDATE anagrafiche_contatti SET avatar_path = ? WHERE id = ?').run(avatarPath, req.params.id);
+      res.json({ ok: true, avatar_path: avatarPath });
+    } catch (err) {
+      res.status(500).json({ error: err.message || 'Errore salvataggio avatar' });
+    }
+  });
 });
 
 router.post('/:id/sync-google', requirePermesso('clienti', 'edit'), async (req, res) => {
