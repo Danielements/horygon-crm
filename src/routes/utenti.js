@@ -75,7 +75,7 @@ router.post('/', requirePermesso('utenti', 'admin'), async (req, res) => {
     const r = db.prepare(
       'INSERT INTO utenti (nome, email, password_hash, ruolo_id, tema, telefono, qualifica, reparto, linkedin, note_biglietto, force_password_change) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
     ).run(nome, email, hash, ruolo_id || 1, tema || 'dark', s(telefono), s(qualifica), s(reparto), s(linkedin), s(note_biglietto), force_password_change ? 1 : 0);
-    const userId = r.lastInsertRowid;
+    const userId = Number(r.lastInsertRowid);
     let email_sent = false;
     let email_error = null;
     if (send_credentials_email) {
