@@ -526,7 +526,7 @@ function organizeNavigationLayout() {
   const nav = document.querySelector('#sidebar nav');
   if (!nav || nav.dataset.organized === '1') return;
   const itemMap = Object.fromEntries([...nav.querySelectorAll('.nav-item[data-section]')].map(item => [item.dataset.section, item]));
-  if (itemMap.analytics) itemMap.analytics.innerHTML = '<span class="nav-icon">STAT</span> Analisi API MEPA';
+  if (itemMap.analytics) itemMap.analytics.innerHTML = '<span class="nav-icon">📊</span> Analisi API MEPA';
   const getItem = (section, label, icon, id = '') => itemMap[section] || createNavItem(section, label, icon, id);
   const groups = [
     { label: '', sections: ['dashboard'] },
@@ -566,7 +566,7 @@ function organizeNavigationLayout() {
         : section === 'cig' ? getItem('cig', 'Stagionalità CIG', '📉')
         : section === 'mepa' ? getItem('mepa', 'Abilitazioni CPV MEPA', '📊')
         : section === 'rdo' ? getItem('rdo', 'RdO', '📝')
-        : section === 'analytics' ? getItem('analytics', 'Analisi API MEPA', 'STAT')
+        : section === 'analytics' ? getItem('analytics', 'Analisi API MEPA', '📊')
         : section === 'statistics' ? getItem('statistics', 'Statistiche', '📈')
         : section === 'utenti' ? getItem('utenti', 'Utenti', '⚙️', 'nav-utenti')
         : section === 'automazioni' ? getItem('automazioni', 'Automazioni', '⚡')
