@@ -89,6 +89,32 @@ function renderAnalyticsApiIntro(data, mepaStato, cigStato) {
           Query base: <code>https://dati.consip.it/api/3/action/datastore_search?resource_id=RESOURCE_ID&amp;limit=5</code><br>
           Query SQL: <code>https://dati.consip.it/api/3/action/datastore_search_sql?sql=SELECT * FROM "RESOURCE_ID" LIMIT 10</code>
         </div>
+        <div style="margin-top:14px;border:1px solid var(--border);border-radius:14px;background:var(--bg-card);padding:14px">
+          <div style="display:grid;grid-template-columns:1.2fr .8fr .7fr auto;gap:10px;align-items:end;margin-bottom:10px">
+            <div>
+              <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:6px">Resource ID CKAN</label>
+              <input id="mepa-api-resource-id" type="text" placeholder="es. d75da12c-d0c9-4a7d-9d52-24bdc5d57925" style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:10px;padding:10px 12px;color:var(--text)">
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:6px">Ricerca libera</label>
+              <input id="mepa-api-query" type="text" placeholder="ente, CPV, keyword..." style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:10px;padding:10px 12px;color:var(--text)">
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:6px">Limit</label>
+              <input id="mepa-api-limit" type="number" min="1" max="100" value="10" style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:10px;padding:10px 12px;color:var(--text)">
+            </div>
+            <button class="btn btn-primary" type="button" onclick="runMepaApiSearch()">Interroga API</button>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end">
+            <div>
+              <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:6px">SQL CKAN</label>
+              <input id="mepa-api-sql" type="text" placeholder='SELECT * FROM "RESOURCE_ID" LIMIT 10' style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:10px;padding:10px 12px;color:var(--text)">
+            </div>
+            <button class="btn btn-outline" type="button" onclick="runMepaApiSql()">Esegui SQL</button>
+          </div>
+          <div id="mepa-api-status" style="margin-top:10px;font-size:12px;color:var(--text-muted)">Inserisci un resource ID CKAN e prova una query reale Consip.</div>
+          <div id="mepa-api-results" style="margin-top:12px"></div>
+        </div>
       </div>
       <div style="border:1px solid var(--border);border-radius:16px;background:linear-gradient(180deg, rgba(0,87,255,0.08), rgba(245,158,11,0.04));padding:14px">
         <div style="font-size:14px;font-weight:700;margin-bottom:10px">Cosa vendere sul portale</div>
@@ -113,6 +139,112 @@ function renderAnalyticsApiIntro(data, mepaStato, cigStato) {
       </div>
     </div>
   `;
+}
+
+function renderMepaApiResults(payload) {
+  const box = document.getElementById('mepa-api-results');
+  const status = document.getElementById('mepa-api-status');
+  if (!box || !status) return;
+
+  const records = payload?.records || [];
+  const columns = payload?.fields?.length
+    ? payload.fields.map((field) => field.id || field)
+    : (payload?.insights?.sampleColumns || Object.keys(records[0] || {})).slice(0, 8);
+
+  status.textContent = payload?.mode === 'sql'
+    ? `Query SQL eseguita: ${payload.total || records.length} righe lette`
+    : `Query CKAN eseguita: ${payload.total || records.length} righe disponibili`;
+
+  const insights = payload?.insights || { cpvTop: [], prodottiMatch: [] };
+
+  box.innerHTML = `
+    <div style="display:grid;grid-template-columns:1.1fr .9fr;gap:16px;margin-bottom:16px">
+      <div class="dash-card" style="margin:0">
+        <h3 style="margin:0 0 10px;font-size:14px">CPV e temi piu presenti</h3>
+        ${insights.cpvTop?.length ? insights.cpvTop.map((row) => `
+          <div style="padding:8px 0;border-top:1px solid var(--border)">
+            <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+              <div>
+                <div style="font-size:13px;font-weight:700">${escapeHtml(row.descrizione || row.cpv)}</div>
+                <div style="font-size:11px;color:var(--text-muted)">${escapeHtml(row.cpv)}${row.categoria ? ` · ${escapeHtml(row.categoria)}` : ''}</div>
+              </div>
+              <div style="text-align:right;font-size:11px;color:var(--text-muted)">
+                <div>${row.occorrenze} occ.</div>
+                <div>${fE(row.valoreTotale || 0)}</div>
+              </div>
+            </div>
+          </div>
+        `).join('') : `<div style="font-size:12px;color:var(--text-muted)">Nessun CPV leggibile trovato nel dataset interrogato.</div>`}
+      </div>
+      <div class="dash-card" style="margin:0">
+        <h3 style="margin:0 0 10px;font-size:14px">Prodotti CRM collegabili</h3>
+        ${insights.prodottiMatch?.length ? insights.prodottiMatch.map((row) => `
+          <div style="padding:8px 0;border-top:1px solid var(--border)">
+            <div style="font-size:13px;font-weight:700">${escapeHtml(row.nome)}</div>
+            <div style="font-size:11px;color:var(--text-muted)">${escapeHtml(row.codice_interno || '')} · ${escapeHtml(row.cpv_mepa || 'n/d')}${row.categoria_nome ? ` · ${escapeHtml(row.categoria_nome)}` : ''}</div>
+          </div>
+        `).join('') : `<div style="font-size:12px;color:var(--text-muted)">Nessun prodotto del CRM matchato sui CPV emersi da questa query.</div>`}
+      </div>
+    </div>
+    <div class="dash-card" style="margin:0">
+      <h3 style="margin:0 0 10px;font-size:14px">Anteprima risultati API</h3>
+      ${records.length ? `
+        <div style="overflow:auto">
+          <table class="data-table">
+            <thead>
+              <tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join('')}</tr>
+            </thead>
+            <tbody>
+              ${records.slice(0, 20).map((record) => `
+                <tr>${columns.map((column) => `<td>${escapeHtml(record[column] ?? '—')}</td>`).join('')}</tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      ` : `<div style="font-size:12px;color:var(--text-muted)">Nessun record restituito da questa query.</div>`}
+    </div>
+  `;
+}
+
+async function runMepaApiSearch() {
+  const resourceId = document.getElementById('mepa-api-resource-id')?.value?.trim();
+  const query = document.getElementById('mepa-api-query')?.value?.trim();
+  const limit = document.getElementById('mepa-api-limit')?.value?.trim() || '10';
+  const status = document.getElementById('mepa-api-status');
+  const box = document.getElementById('mepa-api-results');
+  if (!resourceId) {
+    if (status) status.textContent = 'Inserisci un resource ID CKAN valido.';
+    return;
+  }
+  if (status) status.textContent = 'Interrogazione API in corso...';
+  if (box) box.innerHTML = '';
+  try {
+    const params = new URLSearchParams({ resource_id: resourceId, limit });
+    if (query) params.set('q', query);
+    const result = await api('GET', `/analytics/mepa-api/search?${params.toString()}`);
+    renderMepaApiResults(result);
+  } catch (e) {
+    if (status) status.textContent = `Errore API: ${e.message}`;
+  }
+}
+
+async function runMepaApiSql() {
+  const sql = document.getElementById('mepa-api-sql')?.value?.trim();
+  const status = document.getElementById('mepa-api-status');
+  const box = document.getElementById('mepa-api-results');
+  if (!sql) {
+    if (status) status.textContent = 'Inserisci una query SQL CKAN valida.';
+    return;
+  }
+  if (status) status.textContent = 'Esecuzione SQL in corso...';
+  if (box) box.innerHTML = '';
+  try {
+    const params = new URLSearchParams({ sql });
+    const result = await api('GET', `/analytics/mepa-api/sql?${params.toString()}`);
+    renderMepaApiResults(result);
+  } catch (e) {
+    if (status) status.textContent = `Errore SQL API: ${e.message}`;
+  }
 }
 
 async function loadAnalytics() {

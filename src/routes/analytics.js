@@ -12,6 +12,8 @@ const CPV_PREFISSI_MEPA = [
   '3050','2280','3191','3170','3153','3154','3180','3120'
 ];
 
+const CONSIP_CKAN_API_BASE = process.env.CONSIP_CKAN_API_BASE || 'https://dati.consip.it/api/3/action';
+
 function cpvFilterMepa() {
   return '(' + CPV_PREFISSI_MEPA.map(p => `codice_cpv LIKE '${p}%'`).join(' OR ') + ')';
 }
@@ -43,6 +45,118 @@ function getCpvMeta(cpv, fallbackDesc) {
     };
   }
   return { target_desc: fallbackDesc || cpv, categoria: null, priorita: null };
+}
+
+function getRecordField(record, matchers = []) {
+  if (!record || typeof record !== 'object') return null;
+  const entries = Object.entries(record);
+  for (const matcher of matchers) {
+    const found = entries.find(([key]) => matcher.test(String(key || '')));
+    if (found && found[1] !== undefined && found[1] !== null && String(found[1]).trim() !== '') {
+      return found[1];
+    }
+  }
+  return null;
+}
+
+function normalizeCpvValue(value) {
+  const str = String(value || '').replace(/\D/g, '');
+  return str.length >= 6 ? str.slice(0, 6) : null;
+}
+
+function toNumberLike(value) {
+  if (value === null || value === undefined || value === '') return 0;
+  const normalized = String(value)
+    .replace(/\./g, '')
+    .replace(/,/g, '.')
+    .replace(/[^\d.-]/g, '');
+  const parsed = parseFloat(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function buildConsipInsights(records = []) {
+  const cpvMap = new Map();
+
+  records.forEach((record) => {
+    const cpv = normalizeCpvValue(getRecordField(record, [/cpv/i, /codice.*cpv/i]));
+    if (!cpv) return;
+    const descrizione = getRecordField(record, [/descr/i, /oggetto/i, /titolo/i, /nome/i, /categoria/i]) || cpv;
+    const ente = getRecordField(record, [/ente/i, /amministrazione/i, /stazione/i]);
+    const valore = toNumberLike(getRecordField(record, [/importo/i, /valore/i, /totale/i, /base_asta/i]));
+    const current = cpvMap.get(cpv) || { cpv, descrizione, occorrenze: 0, valoreTotale: 0, enti: new Set() };
+    current.occorrenze += 1;
+    current.valoreTotale += valore;
+    if (ente) current.enti.add(String(ente));
+    if (!current.descrizione && descrizione) current.descrizione = descrizione;
+    cpvMap.set(cpv, current);
+  });
+
+  const cpvTop = [...cpvMap.values()]
+    .map((row) => {
+      const meta = getCpvMeta(row.cpv, row.descrizione);
+      return {
+        cpv: row.cpv,
+        descrizione: meta.target_desc || row.descrizione || row.cpv,
+        categoria: meta.categoria || null,
+        occorrenze: row.occorrenze,
+        valoreTotale: row.valoreTotale,
+        entiCoinvolti: row.enti.size
+      };
+    })
+    .sort((a, b) => {
+      if (b.valoreTotale !== a.valoreTotale) return b.valoreTotale - a.valoreTotale;
+      return b.occorrenze - a.occorrenze;
+    })
+    .slice(0, 10);
+
+  const cpvPrefixes = cpvTop.map((row) => row.cpv);
+  let prodottiMatch = [];
+  if (cpvPrefixes.length) {
+    const placeholders = cpvPrefixes.map(() => '?').join(',');
+    prodottiMatch = db.prepare(`
+      SELECT
+        p.id,
+        p.nome,
+        p.codice_interno,
+        p.cpv_mepa,
+        c.nome as categoria_nome
+      FROM prodotti p
+      LEFT JOIN categorie c ON c.id = p.categoria_id
+      WHERE p.attivo = 1
+        AND p.cpv_mepa IS NOT NULL
+        AND substr(p.cpv_mepa, 1, 6) IN (${placeholders})
+      ORDER BY p.nome
+    `).all(...cpvPrefixes).map((row) => ({
+      ...row,
+      cpv_prefix: normalizeCpvValue(row.cpv_mepa)
+    }));
+  }
+
+  return {
+    cpvTop,
+    prodottiMatch,
+    sampleColumns: records[0] ? Object.keys(records[0]).slice(0, 12) : []
+  };
+}
+
+async function callConsipAction(action, params = {}) {
+  const url = new URL(`${CONSIP_CKAN_API_BASE}/${action}`);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      url.searchParams.set(key, String(value));
+    }
+  });
+  const response = await fetch(url.toString(), {
+    headers: { Accept: 'application/json' }
+  });
+  if (!response.ok) {
+    throw new Error(`Consip API HTTP ${response.status}`);
+  }
+  const payload = await response.json();
+  if (!payload?.success) {
+    throw new Error(payload?.error?.message || 'Risposta CKAN non valida');
+  }
+  return payload.result;
 }
 
 // ═══════════════════════════════════════════════
@@ -188,6 +302,58 @@ router.get('/incrociata', (req, res) => {
 // ═══════════════════════════════════════════════
 // STORICO CPV — con filtro anni (1, 2, 3 anni)
 // ═══════════════════════════════════════════════
+router.get('/mepa-api/config', (req, res) => {
+  res.json({
+    baseUrl: CONSIP_CKAN_API_BASE,
+    examples: {
+      search: `${CONSIP_CKAN_API_BASE}/datastore_search?resource_id=RESOURCE_ID&limit=5`,
+      sql: `${CONSIP_CKAN_API_BASE}/datastore_search_sql?sql=SELECT * FROM "RESOURCE_ID" LIMIT 10`
+    }
+  });
+});
+
+router.get('/mepa-api/search', async (req, res) => {
+  try {
+    const { resource_id, q, limit, offset } = req.query;
+    if (!resource_id) return res.status(400).json({ error: 'resource_id obbligatorio' });
+    const result = await callConsipAction('datastore_search', {
+      resource_id,
+      q: q || undefined,
+      limit: limit || 20,
+      offset: offset || 0
+    });
+    const records = Array.isArray(result.records) ? result.records : [];
+    res.json({
+      mode: 'search',
+      resource_id,
+      total: result.total || records.length,
+      fields: result.fields || [],
+      records,
+      insights: buildConsipInsights(records)
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/mepa-api/sql', async (req, res) => {
+  try {
+    const { sql } = req.query;
+    if (!sql) return res.status(400).json({ error: 'sql obbligatoria' });
+    const result = await callConsipAction('datastore_search_sql', { sql });
+    const records = Array.isArray(result.records) ? result.records : [];
+    res.json({
+      mode: 'sql',
+      sql,
+      total: result.total || records.length,
+      records,
+      insights: buildConsipInsights(records)
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/cpv-storico', (req, res) => {
   try {
     const { cpv, anni } = req.query;
