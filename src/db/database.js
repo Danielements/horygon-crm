@@ -1,5 +1,5 @@
 const { DatabaseSync } = require('node:sqlite');
-require('dotenv').config();
+require('../config/load-env');
 
 const db = new DatabaseSync(process.env.DB_PATH || './horygon.db');
 

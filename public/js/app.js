@@ -4013,7 +4013,7 @@ const SEZIONI_LABEL = {
   documenti: 'Documenti',
   mepa: 'Abilitazioni CPV MEPA',
   cig: 'Stagionalità CIG',
-  analytics: 'Analisi Incrociata',
+  analytics: 'Analisi API MEPA',
   statistics: 'Statistics',
   settings: 'Impostazioni',
   mappa: 'Mappa CRM',

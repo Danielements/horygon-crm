@@ -10,10 +10,119 @@ const COL_CIG  = '#f59e0b';
 const COL_UP   = '#10b981';
 const COL_DN   = '#ef4444';
 
+function formatApiLink(url, label) {
+  return `<a href="${url}" target="_blank" rel="noreferrer" style="display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid var(--border);border-radius:999px;background:var(--bg-input);color:var(--text);text-decoration:none;font-size:12px;font-weight:600">${label}</a>`;
+}
+
+function ensureAnalyticsApiIntro() {
+  const section = document.getElementById('section-analytics');
+  if (!section) return null;
+  let wrap = document.getElementById('analytics-api-intro');
+  if (!wrap) {
+    wrap = document.createElement('div');
+    wrap.id = 'analytics-api-intro';
+    wrap.className = 'dash-card';
+    wrap.style.marginBottom = '16px';
+    const pageHeader = section.querySelector('.page-header');
+    if (pageHeader?.nextSibling) section.insertBefore(wrap, pageHeader.nextSibling);
+    else section.appendChild(wrap);
+  }
+  return wrap;
+}
+
+function renderAnalyticsApiIntro(data, mepaStato, cigStato) {
+  const wrap = ensureAnalyticsApiIntro();
+  if (!wrap) return;
+
+  const cpvRows = (data?.cpvConfronto || []).filter(row => (row.val_cig || 0) > 0);
+  const shortlist = cpvRows
+    .map((row) => {
+      const gap = Math.max(0, (row.val_cig || 0) - (row.val_mepa || 0));
+      const penetration = row.penetrazione === null || row.penetrazione === undefined ? null : Number(row.penetrazione);
+      return {
+        cpv: row.cpv || 'n/d',
+        nome: row.target_desc || row.desc || row.descrizione_cpv || 'Prodotto/CPV',
+        categoria: row.categoria || 'Categoria non classificata',
+        gap,
+        cig: row.val_cig || 0,
+        penetration
+      };
+    })
+    .sort((a, b) => {
+      if (b.gap !== a.gap) return b.gap - a.gap;
+      return (a.penetration ?? 9999) - (b.penetration ?? 9999);
+    })
+    .slice(0, 5);
+
+  wrap.innerHTML = `
+    <div style="display:grid;grid-template-columns:2fr 1.1fr;gap:16px;align-items:start">
+      <div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+          <div>
+            <div style="font-size:18px;font-weight:700">Analisi API MEPA</div>
+            <div style="font-size:13px;color:var(--text-muted)">API Consip, storico MEPA e opportunita per capire cosa proporre alle PA.</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            ${formatApiLink('https://dati.consip.it/api/3/action/datastore_search', 'datastore_search')}
+            ${formatApiLink('https://dati.consip.it/api/3/action/datastore_search_sql', 'search_sql')}
+            ${formatApiLink('https://dati.consip.it/api/3/action/package_search', 'package_search')}
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px">
+          <div style="border:1px solid var(--border);border-radius:12px;background:var(--bg-input);padding:12px">
+            <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em">MEPA disponibili</div>
+            <div style="font-size:22px;font-weight:700;color:${COL_MEPA};margin-top:6px">${mepaStato?.totalRecords || 0}</div>
+            <div style="font-size:12px;color:var(--text-muted)">record disponibili per analisi</div>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:12px;background:var(--bg-input);padding:12px">
+            <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em">CIG disponibili</div>
+            <div style="font-size:22px;font-weight:700;color:${COL_CIG};margin-top:6px">${cigStato?.totalRecords || 0}</div>
+            <div style="font-size:12px;color:var(--text-muted)">mercato utile al confronto</div>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:12px;background:var(--bg-input);padding:12px">
+            <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em">Uso consigliato</div>
+            <div style="font-size:14px;font-weight:700;margin-top:8px">CPV, enti, trend</div>
+            <div style="font-size:12px;color:var(--text-muted)">cosa vendere, a chi, dove e quando</div>
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);line-height:1.6">
+          Query base: <code>https://dati.consip.it/api/3/action/datastore_search?resource_id=RESOURCE_ID&amp;limit=5</code><br>
+          Query SQL: <code>https://dati.consip.it/api/3/action/datastore_search_sql?sql=SELECT * FROM "RESOURCE_ID" LIMIT 10</code>
+        </div>
+      </div>
+      <div style="border:1px solid var(--border);border-radius:16px;background:linear-gradient(180deg, rgba(0,87,255,0.08), rgba(245,158,11,0.04));padding:14px">
+        <div style="font-size:14px;font-weight:700;margin-bottom:10px">Cosa vendere sul portale</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">CPV con mercato attivo e spazio commerciale da presidiare.</div>
+        ${shortlist.length ? shortlist.map((row) => `
+          <div style="padding:10px 0;border-top:1px solid var(--border)">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+              <div>
+                <div style="font-size:13px;font-weight:700">${escapeHtml(row.nome)}</div>
+                <div style="font-size:11px;color:var(--text-muted)">${escapeHtml(row.cpv)} · ${escapeHtml(row.categoria)}</div>
+              </div>
+              <span style="font-size:11px;font-weight:700;padding:4px 8px;border-radius:999px;background:${row.penetration !== null && row.penetration < 20 ? 'rgba(239,68,68,0.15)' : 'rgba(16,185,129,0.15)'};color:${row.penetration !== null && row.penetration < 20 ? COL_DN : COL_UP}">
+                ${row.penetration === null ? 'n/d' : `${row.penetration}%`}
+              </span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;font-size:11px;color:var(--text-muted)">
+              <div>CIG: <strong style="color:var(--text)">${fE(row.cig)}</strong></div>
+              <div>Gap: <strong style="color:var(--text)">${fE(row.gap)}</strong></div>
+            </div>
+          </div>
+        `).join('') : `<div style="font-size:12px;color:var(--text-muted)">Appena colleghiamo dataset o CSV qui comparira la shortlist automatica.</div>`}
+      </div>
+    </div>
+  `;
+}
+
 async function loadAnalytics() {
   const noDataEl = document.getElementById('analytics-no-data');
   const dataEl   = document.getElementById('analytics-data');
+  const headerTitle = document.querySelector('#section-analytics .page-header h1');
+  const headerSubtitle = document.querySelector('#section-analytics .page-header span');
   if (!noDataEl || !dataEl) return;
+  if (headerTitle) headerTitle.textContent = 'Analisi API MEPA';
+  if (headerSubtitle) headerSubtitle.textContent = 'API Consip, storico MEPA, gap di mercato e potenziale commerciale';
 
   // Controlla se abbiamo dati
   const [mepaStato, cigStato] = await Promise.all([
@@ -26,16 +135,28 @@ async function loadAnalytics() {
 
   if (!hasMepa && !hasCig) {
     noDataEl.style.display = 'block'; dataEl.style.display = 'none';
+    document.getElementById('analytics-missing').textContent = 'Mancano i dati MEPA: per ora importa i CSV, poi possiamo affiancare la lettura API Consip';
     document.getElementById('analytics-missing').textContent =
       'Carica i CSV MEPA (sezione Analisi MEPA) e il file CIG (sezione Stagionalità CIG)';
+    const noDataTitle = noDataEl.querySelector('h2');
+    if (noDataTitle) noDataTitle.textContent = "Dati insufficienti per l'analisi API MEPA";
+    document.getElementById('analytics-missing').textContent =
+      'Carica i CSV MEPA oppure prepara la futura lettura API Consip, poi integra il file CIG in Stagionalita CIG';
+    renderAnalyticsApiIntro(null, mepaStato, cigStato);
     return;
   }
   if (!hasMepa) {
+    const noDataTitleMepa = noDataEl.querySelector('h2');
+    if (noDataTitleMepa) noDataTitleMepa.textContent = "Mancano i dati MEPA per l'analisi API";
+    renderAnalyticsApiIntro(null, mepaStato, cigStato);
     noDataEl.style.display = 'block'; dataEl.style.display = 'none';
     document.getElementById('analytics-missing').textContent = 'Mancano i dati MEPA — vai su Analisi MEPA e importa i CSV';
     return;
   }
   if (!hasCig) {
+    const noDataTitleCig = noDataEl.querySelector('h2');
+    if (noDataTitleCig) noDataTitleCig.textContent = 'Mancano i dati CIG per il confronto';
+    renderAnalyticsApiIntro(null, mepaStato, cigStato);
     noDataEl.style.display = 'block'; dataEl.style.display = 'none';
     document.getElementById('analytics-missing').textContent = 'Mancano i dati CIG — vai su Stagionalità CIG e carica il file';
     return;
@@ -47,6 +168,7 @@ async function loadAnalytics() {
   const data = await api('GET', '/analytics/incrociata');
   if (!data) return;
 
+  renderAnalyticsApiIntro(data, mepaStato, cigStato);
   renderAnalyticsKPI(data);
   renderConfronto3Anni(data);
   renderCpvBubble(data);
