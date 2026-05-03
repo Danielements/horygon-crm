@@ -107,6 +107,10 @@ process.on('uncaughtException', (error) => {
   console.error('Uncaught exception:', error);
 });
 
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: `API non trovata: ${req.method} ${req.originalUrl}` });
+});
+
 // SPA fallback
 app.get('/{*path}', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/index.html'));

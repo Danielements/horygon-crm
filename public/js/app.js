@@ -44,20 +44,37 @@ async function api(method, path, body) {
   const res = await fetch('/api' + path, opts);
   if (res.status === 401) { logout(); return null; }
   if (res.status === 304 || res.status === 204) return {};
-  try {
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Errore');
-    return data;
-  } catch (e) {
-    if (!res.ok) throw e;
-    return {};
+  const contentType = res.headers.get('content-type') || '';
+  const raw = await res.text();
+  let data = {};
+  if (raw) {
+    if (contentType.includes('application/json')) {
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        throw new Error(`Risposta JSON non valida da ${path}`);
+      }
+    } else {
+      const snippet = raw.replace(/\s+/g, ' ').trim().slice(0, 180);
+      throw new Error(`Risposta non valida da ${path} (${res.status}): ${snippet}`);
+    }
   }
+  if (!res.ok) throw new Error(data.error || `Errore HTTP ${res.status}`);
+  return data;
 }
 
 async function apiForm(method, path, formData) {
   const res = await fetch('/api' + path, { method, headers: { 'Authorization': `Bearer ${TOKEN}` }, body: formData });
   if (res.status === 401) { logout(); return null; }
-  return res.json();
+  const contentType = res.headers.get('content-type') || '';
+  const raw = await res.text();
+  if (!contentType.includes('application/json')) {
+    const snippet = raw.replace(/\s+/g, ' ').trim().slice(0, 180);
+    throw new Error(`Risposta non valida da ${path} (${res.status}): ${snippet}`);
+  }
+  const data = raw ? JSON.parse(raw) : {};
+  if (!res.ok) throw new Error(data.error || `Errore HTTP ${res.status}`);
+  return data;
 }
 
 function registerPwaSupport() {
