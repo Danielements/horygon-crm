@@ -87,14 +87,17 @@ router.post('/', requirePermesso('utenti', 'admin'), async (req, res) => {
         email_error = err.message;
       }
     }
-    writeAudit({
-      utente_id: req.user.id,
-      azione: 'utente.create',
-      entita_tipo: 'utente',
-      entita_id: userId,
-      dettagli: { nome, email, ruolo_id: ruolo_id || 1, email_sent, force_password_change: !!force_password_change }
+    const responsePayload = { id: userId, email_sent: !!email_sent, email_error: email_error || null };
+    res.status(201).type('application/json').send(JSON.stringify(responsePayload));
+    setImmediate(() => {
+      writeAudit({
+        utente_id: req.user.id,
+        azione: 'utente.create',
+        entita_tipo: 'utente',
+        entita_id: userId,
+        dettagli: { nome, email, ruolo_id: Number(ruolo_id || 1), email_sent: !!email_sent, force_password_change: !!force_password_change }
+      });
     });
-    res.json({ id: userId, email_sent, email_error });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
