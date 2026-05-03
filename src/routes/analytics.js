@@ -215,6 +215,7 @@ async function buildLocalMepaApiSummary() {
       bom: true,
       skip_empty_lines: true,
       relax_quotes: true,
+      relax_column_count: true,
       trim: true
     });
 
