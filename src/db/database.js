@@ -533,6 +533,21 @@ db.exec(`
     creato_il TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (utente_id) REFERENCES utenti(id)
   );
+
+  CREATE TABLE IF NOT EXISTS web_push_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    utente_id INTEGER NOT NULL,
+    endpoint TEXT NOT NULL UNIQUE,
+    subscription_json TEXT NOT NULL,
+    user_agent TEXT,
+    enabled INTEGER DEFAULT 1,
+    last_success_at TEXT,
+    last_error_at TEXT,
+    last_error TEXT,
+    creato_il TEXT DEFAULT (datetime('now')),
+    aggiornato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (utente_id) REFERENCES utenti(id) ON DELETE CASCADE
+  );
 `);
 
 const ROLE_DEFS = [

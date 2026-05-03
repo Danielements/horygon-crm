@@ -1,4 +1,4 @@
-const HORYGON_CACHE = 'horygon-crm-shell-v1';
+const HORYGON_CACHE = 'horygon-crm-shell-v2';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
@@ -59,4 +59,54 @@ self.addEventListener('fetch', event => {
       });
     })
   );
+});
+
+async function applyBadgeCount(value) {
+  const count = Number(value || 0);
+  try {
+    if (self.navigator && 'setAppBadge' in self.navigator) {
+      if (count > 0) await self.navigator.setAppBadge(count);
+      else if ('clearAppBadge' in self.navigator) await self.navigator.clearAppBadge();
+    }
+  } catch {}
+}
+
+self.addEventListener('push', event => {
+  const payload = (() => {
+    try {
+      return event.data ? event.data.json() : {};
+    } catch {
+      return { title: 'Nuova notifica Horygon', body: event.data?.text?.() || '' };
+    }
+  })();
+
+  event.waitUntil((async () => {
+    await applyBadgeCount(payload?.data?.unreadCount || 0);
+    const clientsList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    clientsList.forEach(client => client.postMessage({ type: 'push-refresh', payload }));
+    await self.registration.showNotification(payload.title || 'Nuova notifica Horygon', {
+      body: payload.body || '',
+      icon: payload.icon || '/icons/icon-192.png',
+      badge: payload.badge || '/icons/icon-192.png',
+      tag: payload.tag || 'horygon-notification',
+      data: payload.data || { url: '/?openNotifications=1' },
+      renotify: true
+    });
+  })());
+});
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  const targetUrl = event.notification?.data?.url || '/?openNotifications=1';
+  event.waitUntil((async () => {
+    const clientsList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of clientsList) {
+      if ('focus' in client) {
+        client.postMessage({ type: 'open-notifications' });
+        await client.focus();
+        return;
+      }
+    }
+    await self.clients.openWindow(targetUrl);
+  })());
 });

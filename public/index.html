@@ -128,7 +128,25 @@
     <section id="section-dashboard" class="section active">
       <div class="page-header">
         <h1>Dashboard</h1>
-        <button class="btn btn-accent btn-sm" onclick="openModal('modal-evento')">+ Evento Calendario</button>
+        <div class="header-actions dashboard-header-actions">
+          <div class="dashboard-bell-wrap">
+            <button id="dashboard-bell-btn" class="dashboard-bell-btn" type="button" onclick="toggleDashboardNotifications(event)" aria-label="Apri notifiche">
+              <span class="dashboard-bell-icon">🔔</span>
+              <span id="dashboard-bell-count" class="dashboard-bell-count" style="display:none">0</span>
+            </button>
+            <div id="dashboard-bell-dropdown" class="dashboard-bell-dropdown">
+              <div class="dashboard-bell-dropdown-head">
+                <strong>Notifiche</strong>
+                <button class="btn btn-outline btn-sm" onclick="loadNotifications(true)">Aggiorna</button>
+              </div>
+              <div id="dashboard-bell-list" class="dashboard-bell-list"></div>
+              <div class="dashboard-bell-dropdown-foot">
+                <button class="btn btn-accent btn-sm" onclick="navigateTo('notifiche'); closeDashboardNotifications()">Apri tutte</button>
+              </div>
+            </div>
+          </div>
+          <button class="btn btn-accent btn-sm" onclick="openModal('modal-evento')">+ Evento Calendario</button>
+        </div>
       </div>
       <div class="kpi-grid">
         <div class="kpi-card"><div class="kpi-val" id="kpi-ordini">—</div><div class="kpi-label">Ordini aperti</div></div>
@@ -150,13 +168,6 @@
           <button class="quick-action-btn" onclick="navigateTo('contatti')"><span>📇</span><strong>Contatti</strong></button>
           <button class="quick-action-btn" onclick="navigateTo('notifiche')"><span>🔔</span><strong>Notifiche</strong></button>
         </div>
-      </div>
-      <div class="dash-card" style="margin-bottom:18px">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-          <h3 style="margin:0;font-size:16px">Notifiche</h3>
-          <button class="btn btn-outline btn-sm" onclick="loadNotifications()">Aggiorna</button>
-        </div>
-        <div id="dashboard-notifications" style="margin-top:12px"></div>
       </div>
       <div id="calendar-container">
         <div class="cal-header">
@@ -456,6 +467,7 @@
             <option value="aperte">Solo aperte</option>
             <option value="lette">Solo lette</option>
           </select>
+          <button id="btn-push-toggle" class="btn btn-outline btn-sm" onclick="togglePushNotifications()">Attiva push PWA</button>
           <button class="btn btn-outline btn-sm" onclick="markAllNotificationsRead()">Segna tutto letto</button>
           <button class="btn btn-accent btn-sm" onclick="loadNotificationsPage()">Aggiorna</button>
         </div>

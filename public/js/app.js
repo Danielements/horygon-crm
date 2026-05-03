@@ -23,6 +23,9 @@ let recordPickerState = null;
 let documentRecipientOptions = [];
 let FORCE_PASSWORD_CHANGE = false;
 let notificationsPollTimer = null;
+let serviceWorkerRegistrationPromise = null;
+let pushSupport = { configured: false, publicKey: '', activeSubscriptions: 0 };
+let openNotificationsOnBoot = new URLSearchParams(window.location.search).get('openNotifications') === '1';
 
 // Redirect da Google OAuth
 const urlToken = new URLSearchParams(window.location.search).get('token');
@@ -60,10 +63,158 @@ async function apiForm(method, path, formData) {
 function registerPwaSupport() {
   if (!('serviceWorker' in navigator)) return;
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/service-worker.js').catch(err => {
+    serviceWorkerRegistrationPromise = navigator.serviceWorker.register('/service-worker.js').then(reg => {
+      navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage);
+      return reg;
+    }).catch(err => {
       console.warn('Service worker non registrato', err);
+      return null;
     });
   });
+}
+
+function handleServiceWorkerMessage(event) {
+  const type = event?.data?.type;
+  if (type === 'push-refresh') {
+    notificationsCache = [];
+    loadNotifications(true).catch(() => {});
+    return;
+  }
+  if (type === 'open-notifications') {
+    navigateTo('notifiche');
+  }
+}
+
+function isStandalonePwa() {
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+
+function isAppleMobile() {
+  return /iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
+async function getServiceWorkerRegistration() {
+  if (!('serviceWorker' in navigator)) return null;
+  if (serviceWorkerRegistrationPromise) return serviceWorkerRegistrationPromise;
+  serviceWorkerRegistrationPromise = navigator.serviceWorker.getRegistration('/service-worker.js');
+  return serviceWorkerRegistrationPromise;
+}
+
+function updatePushUiState() {
+  const button = document.getElementById('btn-push-toggle');
+  if (!button) return;
+  if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+    button.textContent = 'Push non supportate';
+    button.disabled = true;
+    return;
+  }
+  if (!pushSupport.configured || !pushSupport.publicKey) {
+    button.textContent = 'Push non configurate';
+    button.disabled = true;
+    return;
+  }
+  button.disabled = false;
+  if (Notification.permission === 'granted' && pushSupport.activeSubscriptions > 0) {
+    button.textContent = 'Push attive';
+    button.classList.add('btn-accent');
+    button.classList.remove('btn-outline');
+    return;
+  }
+  if (Notification.permission === 'denied') {
+    button.textContent = 'Push bloccate';
+    button.classList.add('btn-outline');
+    button.classList.remove('btn-accent');
+    return;
+  }
+  button.textContent = 'Attiva push PWA';
+  button.classList.add('btn-outline');
+  button.classList.remove('btn-accent');
+}
+
+async function loadPushStatus() {
+  if (!TOKEN) return;
+  try {
+    pushSupport = await api('GET', '/google/push/status') || pushSupport;
+  } catch (error) {
+    console.warn('Stato push non disponibile', error);
+  }
+  updatePushUiState();
+}
+
+async function syncPushBadgeFromNotifications(rows = []) {
+  const unread = (rows || []).filter(row => !row.letta).length;
+  try {
+    if ('setAppBadge' in navigator) {
+      if (unread > 0) await navigator.setAppBadge(unread);
+      else if ('clearAppBadge' in navigator) await navigator.clearAppBadge();
+    }
+  } catch {}
+}
+
+async function ensurePushSubscription() {
+  if (!pushSupport.configured || !pushSupport.publicKey) return false;
+  const reg = await getServiceWorkerRegistration();
+  if (!reg) return false;
+  let subscription = await reg.pushManager.getSubscription();
+  if (!subscription) {
+    subscription = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(pushSupport.publicKey)
+    });
+  }
+  await api('POST', '/google/push/subscription', { subscription: subscription.toJSON() });
+  await loadPushStatus();
+  return true;
+}
+
+async function enablePushNotifications() {
+  if (isAppleMobile() && !isStandalonePwa()) {
+    toast('Su iPhone aggiungi prima la web app alla Home per usare le push', 'info');
+    return;
+  }
+  if (!('Notification' in window) || !('PushManager' in window)) {
+    toast('Questo browser non supporta le push PWA', 'error');
+    return;
+  }
+  if (!pushSupport.configured || !pushSupport.publicKey) {
+    toast('Push non ancora configurate sul server', 'error');
+    return;
+  }
+  if (Notification.permission === 'denied') {
+    toast('Permesso notifiche negato nel browser', 'error');
+    return;
+  }
+  const permission = Notification.permission === 'granted'
+    ? 'granted'
+    : await Notification.requestPermission();
+  if (permission !== 'granted') {
+    toast('Permesso notifiche non concesso', 'info');
+    updatePushUiState();
+    return;
+  }
+  const ok = await ensurePushSubscription();
+  if (!ok) {
+    toast('Registrazione push non riuscita', 'error');
+    return;
+  }
+  toast('Push PWA attivate', 'success');
+}
+
+async function togglePushNotifications() {
+  if (Notification.permission === 'granted' && pushSupport.activeSubscriptions > 0) {
+    toast('Le push sono già attive su questo dispositivo', 'info');
+    return;
+  }
+  await enablePushNotifications();
 }
 
 // ═══════════════════════════════
@@ -111,6 +262,13 @@ async function init() {
     applyNavigationPermissions();
     showScreen('app');
     navigateTo('dashboard');
+    await loadPushStatus();
+    if (Notification.permission === 'granted') ensurePushSubscription().catch(() => {});
+    if (openNotificationsOnBoot) {
+      navigateTo('notifiche');
+      openNotificationsOnBoot = false;
+      history.replaceState({}, '', '/');
+    }
     startNotificationsPolling();
     if (FORCE_PASSWORD_CHANGE) setTimeout(() => promptForcedPasswordChange(), 120);
   } catch {
@@ -450,20 +608,17 @@ function organizeDashboardLayout() {
   if (!section || section.dataset.organized === '1') return;
   const header = section.querySelector('.page-header');
   const calendar = document.getElementById('calendar-container');
-  const notifCard = document.getElementById('dashboard-notifications')?.closest('.dash-card');
   const kpis = section.querySelector('.kpi-grid');
   const focus = document.getElementById('dashboard-focus-cards');
   const quick = section.querySelector('.app-quick-actions');
-  if (!header || !calendar || !notifCard || !kpis || !focus || !quick) return;
+  if (!header || !calendar || !kpis || !focus || !quick) return;
   const cockpit = document.createElement('div');
   cockpit.className = 'dashboard-cockpit';
   header.insertAdjacentElement('afterend', cockpit);
   cockpit.appendChild(calendar);
-  cockpit.appendChild(notifCard);
   section.appendChild(kpis);
   section.appendChild(focus);
   section.appendChild(quick);
-  if (notifCard.querySelector('h3')) notifCard.classList.add('dashboard-alerts');
   section.dataset.organized = '1';
 }
 
@@ -513,6 +668,7 @@ function navigateTo(section) {
     toast('Non hai accesso a questa sezione', 'error');
     section = 'dashboard';
   }
+  closeDashboardNotifications();
   document.querySelectorAll('.nav-item').forEach(a => a.classList.toggle('active', a.dataset.section === section));
   document.querySelectorAll('.mobile-tab').forEach(a => a.classList.toggle('active', a.dataset.section === section));
   document.querySelectorAll('.section').forEach(s => s.classList.toggle('active', s.id === `section-${section}`));
@@ -2388,6 +2544,9 @@ async function loadAttivita() {
     const noteFull = normalizeMailBody(a.note || '');
     const notePreview = compactText(noteFull, 220);
     const mine = Number(a.assegnato_a || 0) === Number(USER?.id || 0);
+    const assignedLabel = mine
+      ? 'Assegnata a te'
+      : (a.assegnato_nome ? `Assegnata a ${escapeHtml(a.assegnato_nome)}` : '');
     return `
     <div class="attivita-item ${mine ? 'is-mine' : ''}">
       <div class="att-icon att-${a.tipo}">${ICONE[a.tipo] || '◎'}</div>
@@ -2395,9 +2554,7 @@ async function loadAttivita() {
         <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
           <div>
             <strong>${escapeHtml(a.oggetto || a.tipo)}</strong>
-            ${mine ? `<div style="margin-top:6px"><span class="attivita-assigned-pill">Da gestire da te</span></div>` : ''}
-            ${mine ? `<div style="margin-top:6px"><span class="attivita-assigned-pill">Da gestire da te</span></div>` : ''}
-            ${mine ? `<div style="margin-top:6px"><span class="attivita-assigned-pill">Da gestire da te</span></div>` : ''}
+            ${mine ? `<div style="margin-top:6px"><span class="attivita-assigned-pill">Assegnata a te</span></div>` : ''}
             ${a.ragione_sociale ? `<span style="color:var(--text-muted)"> — ${escapeHtml(a.ragione_sociale)}</span>` : ''}
           </div>
           ${renderStateBadge(a.stato || 'aperta')}
@@ -2405,7 +2562,7 @@ async function loadAttivita() {
         <div style="font-size:12px;color:var(--text-muted);margin-top:4px">
           ${a.data_ora ? new Date(a.data_ora).toLocaleString('it-IT') : ''}
           ${a.durata_minuti ? ` · ${a.durata_minuti} min` : ''}
-          ${a.assegnato_nome ? ` · Assegnata a ${escapeHtml(a.assegnato_nome)}` : ''}
+          ${assignedLabel ? ` · ${assignedLabel}` : ''}
           ${a.google_event_id ? ' · <span style="color:var(--accent)">Google Cal</span>' : ''}
         </div>
         ${noteFull ? `
@@ -3039,6 +3196,37 @@ function updateNotificationKpi(rows = []) {
   set('notif-pinned', pinned);
 }
 
+function updateDashboardNotificationBell(rows = []) {
+  const countEl = document.getElementById('dashboard-bell-count');
+  if (countEl) {
+    const unread = rows.filter(row => !row.letta).length;
+    countEl.textContent = unread;
+    countEl.style.display = unread ? 'inline-flex' : 'none';
+  }
+}
+
+function toggleDashboardNotifications(event) {
+  event?.stopPropagation?.();
+  const dropdown = document.getElementById('dashboard-bell-dropdown');
+  const button = document.getElementById('dashboard-bell-btn');
+  if (!dropdown || !button) return;
+  const open = dropdown.classList.toggle('open');
+  button.classList.toggle('is-open', open);
+}
+
+function closeDashboardNotifications() {
+  const dropdown = document.getElementById('dashboard-bell-dropdown');
+  const button = document.getElementById('dashboard-bell-btn');
+  if (dropdown) dropdown.classList.remove('open');
+  if (button) button.classList.remove('is-open');
+}
+
+document.addEventListener('click', (event) => {
+  const wrap = document.querySelector('.dashboard-bell-wrap');
+  if (!wrap) return;
+  if (!wrap.contains(event.target)) closeDashboardNotifications();
+});
+
 async function fetchNotifications(force = false) {
   if (!force && notificationsCache.length) return notificationsCache;
   notificationsCache = await api('GET', '/google/notifications') || [];
@@ -3047,11 +3235,14 @@ async function fetchNotifications(force = false) {
 
 async function loadNotifications(force = true) {
   const rows = await fetchNotifications(force);
-  renderNotificationList((rows || []).slice(0, 6), {
+  const compactRows = (rows || []).slice(0, 6);
+  renderNotificationList(compactRows, {
     compact: true,
-    targetId: 'dashboard-notifications',
+    targetId: 'dashboard-bell-list',
     emptyText: 'Nessuna notifica in evidenza.'
   });
+  updateDashboardNotificationBell(rows || []);
+  syncPushBadgeFromNotifications(rows || []).catch(() => {});
   if (document.getElementById('section-notifiche')?.classList.contains('active')) {
     loadNotificationsPage(rows);
   }
@@ -4032,6 +4223,9 @@ async function loadAttivita() {
     const noteFull = normalizeMailBody(a.note || '');
     const notePreview = compactText(noteFull, 220);
     const mine = Number(a.assegnato_a || 0) === Number(USER?.id || 0);
+    const assignedLabel = mine
+      ? 'Assegnata a te'
+      : (a.assegnato_nome ? `Assegnata a ${escapeHtml(a.assegnato_nome)}` : '');
     return `
     <div class="attivita-item ${mine ? 'is-mine' : ''}">
       <div class="att-icon att-${a.tipo}">${ICONE[a.tipo] || '◎'}</div>
@@ -4039,6 +4233,7 @@ async function loadAttivita() {
         <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
           <div>
             <strong>${escapeHtml(a.oggetto || a.tipo)}</strong>
+            ${mine ? `<div style="margin-top:6px"><span class="attivita-assigned-pill">Assegnata a te</span></div>` : ''}
             ${a.ragione_sociale ? `<span style="color:var(--text-muted)"> — ${escapeHtml(a.ragione_sociale)}</span>` : ''}
           </div>
           ${renderStateBadge(a.stato || 'aperta')}
@@ -4046,7 +4241,7 @@ async function loadAttivita() {
         <div style="font-size:12px;color:var(--text-muted);margin-top:4px">
           ${a.data_ora ? new Date(a.data_ora).toLocaleString('it-IT') : ''}
           ${a.durata_minuti ? ` · ${a.durata_minuti} min` : ''}
-          ${a.assegnato_nome ? ` · Assegnata a ${escapeHtml(a.assegnato_nome)}` : ''}
+          ${assignedLabel ? ` · ${assignedLabel}` : ''}
           ${a.google_event_id ? ' · <span style="color:var(--accent)">Google Cal</span>' : ''}
           ${a.stato_origine === 'mepa_mail' ? ' · <span style="color:#d97706">Mail MEPA</span>' : ''}
         </div>

@@ -45,7 +45,9 @@ router.put('/settings', requirePermesso('utenti', 'admin'), (req, res) => {
 
 router.get('/public-config', (req, res) => {
   res.json({
-    googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY || ''
+    googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY || '',
+    webPushPublicKey: process.env.WEB_PUSH_PUBLIC_KEY || '',
+    webPushEnabled: !!(process.env.WEB_PUSH_PUBLIC_KEY && process.env.WEB_PUSH_PRIVATE_KEY)
   });
 });
 

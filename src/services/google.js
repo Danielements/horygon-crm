@@ -1,6 +1,7 @@
 const { google } = require('googleapis');
 const db = require('../db/database');
 const { writeSystemLog } = require('./system-log');
+const { sendPushToUserIds } = require('./push');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS mepa_mail_alerts (
@@ -608,10 +609,29 @@ function createNotificationForUsers({ tipo = 'info', titolo, messaggio, livello_
     INSERT OR IGNORE INTO notifiche_app (utente_id, tipo, titolo, messaggio, livello_urgenza, entita_tipo, entita_id, unique_key)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  const insertedUserIds = [];
   users.forEach(u => {
     const uniqueKey = [u.id, tipo, entita_tipo || '', entita_id || '', uniqueSuffix].join(':');
-    ins.run(u.id, tipo, titolo, messaggio, livello_urgenza, entita_tipo, entita_id, uniqueKey);
+    const result = ins.run(u.id, tipo, titolo, messaggio, livello_urgenza, entita_tipo, entita_id, uniqueKey);
+    if (result.lastInsertRowid) insertedUserIds.push(u.id);
   });
+  if (insertedUserIds.length) {
+    sendPushToUserIds(insertedUserIds, {
+      title: titolo,
+      body: messaggio || '',
+      tag: [tipo, entita_tipo || '', entita_id || '', uniqueSuffix].filter(Boolean).join(':'),
+      entitaTipo: entita_tipo,
+      entitaId: entita_id
+    }).catch(error => {
+      writeSystemLog({
+        livello: 'warning',
+        origine: 'notifications.createNotificationForUsers.push',
+        messaggio: error?.message || 'Invio push non riuscito',
+        stack: error?.stack || null,
+        dettagli: { insertedUserIds, tipo, entita_tipo, entita_id }
+      });
+    });
+  }
 }
 
 function createNotificationsForUserIds(userIds = [], { tipo = 'info', titolo, messaggio, livello_urgenza = 'media', entita_tipo = null, entita_id = null, uniqueSuffix = '' }) {
@@ -632,6 +652,24 @@ function createNotificationsForUserIds(userIds = [], { tipo = 'info', titolo, me
     const existing = db.prepare('SELECT id FROM notifiche_app WHERE unique_key = ? LIMIT 1').get(uniqueKey);
     targets.push({ userId, notificationId: existing?.id || null, uniqueKey, inserted: !!result.lastInsertRowid });
   });
+  const insertedUserIds = targets.filter(target => target.inserted).map(target => target.userId);
+  if (insertedUserIds.length) {
+    sendPushToUserIds(insertedUserIds, {
+      title: titolo,
+      body: messaggio || '',
+      tag: [tipo, entita_tipo || '', entita_id || '', uniqueSuffix].filter(Boolean).join(':'),
+      entitaTipo: entita_tipo,
+      entitaId: entita_id
+    }).catch(error => {
+      writeSystemLog({
+        livello: 'warning',
+        origine: 'notifications.createNotificationsForUserIds.push',
+        messaggio: error?.message || 'Invio push non riuscito',
+        stack: error?.stack || null,
+        dettagli: { insertedUserIds, tipo, entita_tipo, entita_id }
+      });
+    });
+  }
   return targets;
 }
 

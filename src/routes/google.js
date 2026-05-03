@@ -3,6 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const { authMiddleware } = require('../middleware/auth');
 const { getEvents, createEvent, updateEvent, deleteEvent, getDriveFiles, uploadToDrive, deleteFromDrive, getGoogleContacts, syncLocalContactsToGoogle, syncMepaGmail, listMepaMailAlerts, getMepaMailAlertById, updateMepaMailAlert, processMepaAutomation, processAllAutomations, listNotifications, markNotificationRead, updateNotification, listSettings, saveSettings } = require('../services/google');
+const { isPushConfigured, getPushPublicKey, upsertPushSubscription, disablePushSubscription, listUserPushSubscriptions, sendPushToUserIds } = require('../services/push');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -146,6 +147,44 @@ router.get('/settings', (req, res) => {
 router.put('/settings', (req, res) => {
   try {
     res.json(saveSettings(req.body?.items || []));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.get('/push/status', (req, res) => {
+  try {
+    const subscriptions = listUserPushSubscriptions(req.user.id);
+    res.json({
+      configured: isPushConfigured(),
+      publicKey: getPushPublicKey(),
+      permissionHint: 'enable_from_user_gesture',
+      activeSubscriptions: subscriptions.filter(item => item.enabled).length,
+      subscriptions
+    });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.post('/push/subscription', (req, res) => {
+  try {
+    const result = upsertPushSubscription(req.user.id, req.body?.subscription, req.headers['user-agent'] || '');
+    res.json(result);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.delete('/push/subscription', (req, res) => {
+  try {
+    res.json(disablePushSubscription(req.user.id, req.body?.endpoint || ''));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.post('/push/test', async (req, res) => {
+  try {
+    const result = await sendPushToUserIds([req.user.id], {
+      title: 'Test notifiche Horygon',
+      body: 'La PWA è pronta a ricevere notifiche push.',
+      tag: `push-test-${req.user.id}`,
+      url: '/?openNotifications=1'
+    });
+    res.json(result);
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
