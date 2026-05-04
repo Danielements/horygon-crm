@@ -3063,6 +3063,7 @@ async function loadRdoPage() {
     wrap.innerHTML = `
       <div class="rdo-layout-grid">
         ${renderRdoRowsTable(activeRows, 'RdO attive', 'Nessuna RdO attiva con i filtri correnti.')}
+        ${renderRdoRowsTable(expiredRows, 'RdO scadute', 'Nessuna RdO scaduta da mostrare.')}
         <div class="table-wrapper rdo-side-table">
           <table class="data-table" data-disable-tools="1">
             <thead>
@@ -3087,7 +3088,6 @@ async function loadRdoPage() {
             </tbody>
           </table>
         </div>
-        ${renderRdoRowsTable(expiredRows, 'RdO scadute', 'Nessuna RdO scaduta da mostrare.')}
       </div>`;
   } catch (e) {
     wrap.innerHTML = `<p style="color:var(--danger)">${escapeHtml(e.message || 'Errore RdO')}</p>`;
