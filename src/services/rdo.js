@@ -73,6 +73,10 @@ function pickField(row, predicate) {
 
 function guessRowFields(row = {}) {
   return {
+    codice_rdo: pickField(row, header =>
+      (header.includes('codice') || header.includes('numero') || header.includes('identificativo') || header.includes('id')) &&
+      (header.includes('rdo') || header.includes('gara') || header.includes('negoziazione') || header.includes('procedura'))
+    ),
     ente: pickField(row, header =>
       header.includes('ente') ||
       header.includes('amministrazione') ||
@@ -194,8 +198,21 @@ function getRdoMatches({ importId = null, q = '', matchedOnly = false } = {}) {
     ORDER BY row_index ASC
   `).all(selectedImportId);
 
+  const guessCodeFromRaw = (raw = {}) => pickField(raw, header =>
+    (header.includes('codice') || header.includes('numero') || header.includes('identificativo') || header === 'id') &&
+    (header.includes('rdo') || header.includes('gara') || header.includes('negoziazione') || header.includes('procedura'))
+  );
+  const guessTypeFromRaw = (raw = {}) => pickField(raw, header =>
+    header.includes('tipologia') ||
+    header.includes('tipo') ||
+    header.includes('procedura') ||
+    header.includes('negoziazione') ||
+    header.includes('modalita')
+  );
+
   const catalog = getCpvCatalogEntries({ activeOnly: true });
   const enriched = rows.map(row => {
+    const raw = JSON.parse(row.raw_json || '{}');
     const matches = catalog
       .map(entry => {
         const result = scoreDescriptionMatch(row.search_text, entry);
@@ -215,10 +232,12 @@ function getRdoMatches({ importId = null, q = '', matchedOnly = false } = {}) {
 
     return {
       ...row,
+      codice_rdo: guessCodeFromRaw(raw) || '',
+      tipologia_rdo: guessTypeFromRaw(raw) || '',
       match_count: matches.length,
       best_score: matches[0]?.score || 0,
       cpv_matches: matches,
-      raw: JSON.parse(row.raw_json || '{}'),
+      raw,
     };
   });
 
@@ -227,6 +246,8 @@ function getRdoMatches({ importId = null, q = '', matchedOnly = false } = {}) {
     if (matchedOnly && !row.match_count) return false;
     if (!loweredQuery) return true;
     const blob = [
+      row.codice_rdo,
+      row.tipologia_rdo,
       row.ente,
       row.gara,
       row.categoria,

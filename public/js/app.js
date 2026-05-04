@@ -2896,6 +2896,8 @@ async function loadMepaMailList() {
 async function loadRdoPage() {
   const wrap = document.getElementById('rdo-table-wrap');
   if (!wrap) return;
+  const title = document.querySelector('#section-rdo .page-header h1');
+  if (title) title.textContent = 'RdO attuale';
   const importSelect = document.getElementById('rdo-import-select');
   const q = document.getElementById('rdo-search')?.value?.trim() || '';
   const soloMatch = document.getElementById('rdo-only-matched')?.checked ? '1' : '0';
@@ -2931,6 +2933,17 @@ async function loadRdoPage() {
       return;
     }
 
+    const parseDeadlineValue = (value) => {
+      if (!value) return null;
+      const m = String(value).match(/(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?/);
+      const d = m ? new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4] || '9'), Number(m[5] || '0'), 0) : new Date(String(value).replace(' ', 'T'));
+      return Number.isNaN(d.getTime()) ? null : d;
+    };
+    const isExpiredRdo = (row) => {
+      const deadline = parseDeadlineValue(row?.scadenza);
+      return deadline ? deadline.getTime() < Date.now() : false;
+    };
+
     const categoriaMap = new Map();
     rows.forEach(r => {
       const key = String(r.categoria || 'Senza categoria').trim() || 'Senza categoria';
@@ -2943,9 +2956,101 @@ async function loadRdoPage() {
       .map(([categoria, stats]) => ({ categoria, ...stats }))
       .sort((a, b) => b.count - a.count);
 
+    const activeRows = rows.filter(r => !isExpiredRdo(r));
+    const expiredRows = rows.filter(r => isExpiredRdo(r));
+
+    const renderRdoRowsTable = (tableRows, titleText, emptyText) => `
+      <div class="table-wrapper rdo-main-table">
+        <div class="rdo-table-title">${escapeHtml(titleText)}</div>
+        ${tableRows.length ? `
+          <table class="data-table rdo-results-table">
+            <thead>
+              <tr>
+                <th style="width:170px">Numero RdO · Tipologia</th>
+                <th>Dettaglio RdO</th>
+                <th>Match trovati</th>
+                <th>CPV trovati</th>
+                <th style="width:120px">Scadenza</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${tableRows.map(r => {
+                const categorieTrovate = [...new Set((r.cpv_matches || []).map(m => m.categoria_catalogo).filter(Boolean))];
+                const cpvMatches = r.cpv_matches || [];
+                const cpvTrovati = cpvMatches.map(m => ({
+                  codice: m.codice_cpv_display || m.codice_cpv,
+                  score: m.score,
+                  descrizione: m.descrizione || '',
+                  reason: m.reason || '',
+                  categoria: m.categoria_catalogo || ''
+                }));
+                const topCpv = cpvTrovati.slice(0, 3);
+                const codiceRdo = r.codice_rdo || r.raw?.Codice || r.raw?.CODICE || r.raw?.Numero || r.raw?.NUMERO || '';
+                return `
+                  <tr>
+                    <td>
+                      <div class="rdo-code-cell">
+                        <strong>${escapeHtml(codiceRdo || '—')}</strong>
+                        <span>${escapeHtml(r.tipologia_rdo || 'Tipologia non indicata')}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="rdo-detail-cell">
+                        <div class="rdo-ente">${escapeHtml(r.ente || 'Ente non indicato')}</div>
+                        <div class="rdo-gara">${escapeHtml(r.gara || 'Oggetto non indicato')}</div>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="rdo-match-cell">
+                        <div class="rdo-category-main">${escapeHtml((r.categoria || 'Senza categoria').substring(0, 220))}</div>
+                        <div class="rdo-pill-row">
+                          <span class="rdo-pill ${cpvMatches.length ? 'rdo-pill-success' : 'rdo-pill-neutral'}">${cpvMatches.length} match</span>
+                          <span class="rdo-pill rdo-pill-neutral">${categorieTrovate.length} categorie</span>
+                        </div>
+                        <div class="rdo-category-list">
+                          ${categorieTrovate.length ? categorieTrovate.map(item => `<span class="rdo-tag">${escapeHtml(item)}</span>`).join('') : '<span style="color:var(--text-muted)">Nessuna categoria trovata</span>'}
+                        </div>
+                        ${cpvMatches.length ? `
+                          <div class="rdo-match-reasons">
+                            ${cpvMatches.slice(0, 2).map(item => `
+                              <div class="rdo-match-reason">
+                                <strong>${escapeHtml(item.codice_cpv_display || item.codice_cpv || '')}</strong>
+                                <span>${escapeHtml(item.reason || 'match descrittivo')}</span>
+                              </div>
+                            `).join('')}
+                          </div>
+                        ` : ''}
+                      </div>
+                    </td>
+                    <td>
+                      <div class="rdo-cpv-list">
+                        ${topCpv.length ? topCpv.map(item => `
+                          <div class="rdo-cpv-item">
+                            <code>${escapeHtml(item.codice)}</code>
+                            <span class="rdo-score">score ${escapeHtml(item.score)}</span>
+                            ${item.descrizione ? `<div class="rdo-cpv-desc">${escapeHtml(item.descrizione)}</div>` : ''}
+                          </div>
+                        `).join('') : '<span style="color:var(--text-muted)">Nessun CPV</span>'}
+                        ${cpvTrovati.length > 3 ? `<div class="rdo-more">+${cpvTrovati.length - 3} altri match</div>` : ''}
+                      </div>
+                    </td>
+                    <td>
+                      <span class="rdo-deadline" style="color:${getDeadlineColor(r.scadenza)}">${escapeHtml(r.scadenza || '-')}</span>
+                    </td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        ` : `<p class="rdo-empty-note">${escapeHtml(emptyText)}</p>`}
+      </div>
+    `;
+
     wrap.innerHTML = `
       <div class="rdo-layout-grid">
+        ${renderRdoRowsTable(activeRows, 'RdO attive', 'Nessuna RdO attiva con i filtri correnti.')}
         <div class="table-wrapper rdo-side-table">
+          <div class="rdo-table-title">Categorie RdO</div>
           <table class="data-table">
             <thead>
               <tr>
@@ -2969,72 +3074,7 @@ async function loadRdoPage() {
             </tbody>
           </table>
         </div>
-        <div class="table-wrapper rdo-main-table">
-          <table class="data-table rdo-results-table">
-            <thead>
-              <tr>
-                <th style="width:72px">Riga</th>
-                <th>Dettaglio RdO</th>
-                <th>Categoria e match</th>
-                <th>CPV trovati</th>
-                <th style="width:120px">Scadenza</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${rows.map(r => {
-                const categorieTrovate = [...new Set((r.cpv_matches || []).map(m => m.categoria_catalogo).filter(Boolean))];
-                const cpvMatches = r.cpv_matches || [];
-                const cpvTrovati = cpvMatches.map(m => ({
-                  codice: m.codice_cpv_display || m.codice_cpv,
-                  score: m.score,
-                  descrizione: m.descrizione_cpv || ''
-                }));
-                const topCpv = cpvTrovati.slice(0, 3);
-                return `
-                  <tr>
-                    <td>
-                      <div class="rdo-row-index">
-                        <strong>#${escapeHtml(r.row_index || '-')}</strong>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="rdo-detail-cell">
-                        <div class="rdo-ente">${escapeHtml(r.ente || 'Ente non indicato')}</div>
-                        <div class="rdo-gara">${escapeHtml(r.gara || 'Oggetto non indicato')}</div>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="rdo-match-cell">
-                        <div class="rdo-category-main">${escapeHtml((r.categoria || 'Senza categoria').substring(0, 180))}</div>
-                        <div class="rdo-pill-row">
-                          <span class="rdo-pill ${cpvMatches.length ? 'rdo-pill-success' : 'rdo-pill-neutral'}">${cpvMatches.length} match</span>
-                          <span class="rdo-pill rdo-pill-neutral">${categorieTrovate.length} categorie</span>
-                        </div>
-                        <div class="rdo-category-list">
-                          ${categorieTrovate.length ? categorieTrovate.map(item => `<span class="rdo-tag">${escapeHtml(item)}</span>`).join('') : '<span style="color:var(--text-muted)">Nessuna categoria trovata</span>'}
-                        </div>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="rdo-cpv-list">
-                        ${topCpv.length ? topCpv.map(item => `
-                          <div class="rdo-cpv-item">
-                            <div><code>${escapeHtml(item.codice)}</code> <span class="rdo-score">score ${escapeHtml(item.score)}</span></div>
-                            ${item.descrizione ? `<div class="rdo-cpv-desc">${escapeHtml(item.descrizione)}</div>` : ''}
-                          </div>
-                        `).join('') : '<span style="color:var(--text-muted)">Nessun CPV</span>'}
-                        ${cpvTrovati.length > 3 ? `<div class="rdo-more">+${cpvTrovati.length - 3} altri match</div>` : ''}
-                      </div>
-                    </td>
-                    <td>
-                      <span class="rdo-deadline" style="color:${getDeadlineColor(r.scadenza)}">${escapeHtml(r.scadenza || '-')}</span>
-                    </td>
-                  </tr>
-                `;
-              }).join('')}
-            </tbody>
-          </table>
-        </div>
+        ${renderRdoRowsTable(expiredRows, 'RdO scadute', 'Nessuna RdO scaduta da mostrare.')}
       </div>`;
   } catch (e) {
     wrap.innerHTML = `<p style="color:var(--danger)">${escapeHtml(e.message || 'Errore RdO')}</p>`;
