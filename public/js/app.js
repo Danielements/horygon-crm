@@ -2901,12 +2901,12 @@ async function loadRdoPage() {
   const importId = importSelect?.value ? `&import_id=${encodeURIComponent(importSelect.value)}` : '';
   wrap.innerHTML = '<p style="color:var(--text-muted)">Analisi RdO in corso...</p>';
   try {
-    const data = await api('GET', `/rdo/matches?q=${encodeURIComponent(q)}&solo_match=${soloMatch}${importId}`);
+    const data = await api('GET', `/rdo/matches?q=${encodeURIComponent(q)}&solo_match=${soloMatch}&limit=250${importId}`);
     const set = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
     set('rdo-total', (data?.total || 0).toLocaleString('it'));
     set('rdo-matched', (data?.matched || 0).toLocaleString('it'));
     set('rdo-unmatched', (data?.unmatched || 0).toLocaleString('it'));
-    set('rdo-visible', ((data?.results || []).length).toLocaleString('it'));
+    set('rdo-visible', Number(data?.filtered_total ?? (data?.results || []).length).toLocaleString('it'));
 
     if (importSelect) {
       const imports = data?.imports || [];
@@ -3024,8 +3024,13 @@ async function loadRdoPage() {
       ) : `<p class="rdo-empty-note">${escapeHtml(emptyText)}</p>`)
       + '</div>';
 
+    const truncationNote = data?.truncated
+      ? `<p class="rdo-empty-note">Mostro le prime ${escapeHtml(String(data.limit || 250))} righe su ${escapeHtml(String(data.filtered_total || 0))}. Affina la ricerca per restringere il risultato.</p>`
+      : '';
+
     wrap.innerHTML = `
       <div class="rdo-layout-grid">
+        ${truncationNote}
         ${renderRdoRowsTable(activeRows, 'RdO attive', 'Nessuna RdO attiva con i filtri correnti.')}
         ${renderRdoRowsTable(expiredRows, 'RdO scadute', 'Nessuna RdO scaduta da mostrare.')}
         <div class="table-wrapper rdo-side-table">

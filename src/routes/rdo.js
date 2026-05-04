@@ -16,6 +16,7 @@ router.get('/matches', (req, res) => {
         importId: req.query.import_id ? Number(req.query.import_id) : null,
         q: req.query.q || '',
         matchedOnly: req.query.solo_match === '1',
+        limit: req.query.limit ? Number(req.query.limit) : 250,
       }),
     });
   } catch (e) {

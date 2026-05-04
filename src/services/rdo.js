@@ -191,12 +191,13 @@ function listRdoImports() {
   `).all();
 }
 
-function getRdoMatches({ importId = null, q = '', matchedOnly = false } = {}) {
+function getRdoMatches({ importId = null, q = '', matchedOnly = false, limit = 250 } = {}) {
   const imports = listRdoImports();
   const selectedImportId = importId ? Number(importId) : (imports[0]?.id || null);
   if (!selectedImportId) {
     return { imports, selectedImportId: null, total: 0, matched: 0, unmatched: 0, results: [] };
   }
+  const safeLimit = Math.max(50, Math.min(Number(limit) || 250, 1000));
 
   const rows = db.prepare(`
     SELECT *
@@ -281,6 +282,9 @@ function getRdoMatches({ importId = null, q = '', matchedOnly = false } = {}) {
     ].filter(Boolean).join(' ').toLowerCase();
     return blob.includes(loweredQuery);
   });
+  const results = filtered
+    .slice(0, safeLimit)
+    .map(({ raw_json, search_text, ...row }) => row);
 
   return {
     imports,
@@ -288,7 +292,10 @@ function getRdoMatches({ importId = null, q = '', matchedOnly = false } = {}) {
     total: enriched.length,
     matched: enriched.filter(row => row.match_count > 0).length,
     unmatched: enriched.filter(row => !row.match_count).length,
-    results: filtered,
+    filtered_total: filtered.length,
+    limit: safeLimit,
+    truncated: filtered.length > safeLimit,
+    results,
   };
 }
 
