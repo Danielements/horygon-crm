@@ -209,6 +209,20 @@ function getRdoMatches({ importId = null, q = '', matchedOnly = false } = {}) {
     header.includes('negoziazione') ||
     header.includes('modalita')
   );
+  const guessPoNameFromRaw = (raw = {}) => pickField(raw, header =>
+    (header.includes('po') && (header.includes('nome') || header.includes('punto ordinante'))) ||
+    header.includes('punto ordinante') ||
+    header.includes('buyer')
+  );
+  const guessPhoneFromRaw = (raw = {}) => pickField(raw, header =>
+    (header.includes('telefon') || header.includes('tel')) &&
+    !header.includes('cell')
+  );
+  const guessMobileFromRaw = (raw = {}) => pickField(raw, header =>
+    header.includes('cell') ||
+    header.includes('mobile') ||
+    header.includes('cellulare')
+  );
 
   const catalog = getCpvCatalogEntries({ activeOnly: true });
   const enriched = rows.map(row => {
@@ -234,6 +248,9 @@ function getRdoMatches({ importId = null, q = '', matchedOnly = false } = {}) {
       ...row,
       codice_rdo: guessCodeFromRaw(raw) || '',
       tipologia_rdo: guessTypeFromRaw(raw) || '',
+      nome_po: guessPoNameFromRaw(raw) || '',
+      telefono_po: guessPhoneFromRaw(raw) || '',
+      cellulare_po: guessMobileFromRaw(raw) || '',
       match_count: matches.length,
       best_score: matches[0]?.score || 0,
       cpv_matches: matches,

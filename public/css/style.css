@@ -1646,10 +1646,22 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
   white-space: normal;
 }
 .rdo-detail-cell,
+.rdo-po-cell,
+.rdo-contact-cell,
 .rdo-match-cell,
 .rdo-cpv-list {
   display: grid;
   gap: 8px;
+}
+.rdo-po-cell strong,
+.rdo-contact-cell {
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: normal;
+  word-break: break-word;
+}
+.rdo-contact-cell {
+  color: var(--text-muted);
 }
 .rdo-ente {
   font-weight: 700;

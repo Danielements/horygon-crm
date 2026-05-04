@@ -2963,11 +2963,13 @@ async function loadRdoPage() {
       <div class="table-wrapper rdo-main-table">
         <div class="rdo-table-title">${escapeHtml(titleText)}</div>
         ${tableRows.length ? `
-          <table class="data-table rdo-results-table">
+          <table class="data-table rdo-results-table" data-disable-tools="1">
             <thead>
               <tr>
                 <th style="width:170px">Numero RdO · Tipologia</th>
                 <th>Dettaglio RdO</th>
+                <th style="width:180px">Nome PO</th>
+                <th style="width:190px">Contatti</th>
                 <th>Match trovati</th>
                 <th>CPV trovati</th>
                 <th style="width:120px">Scadenza</th>
@@ -2986,6 +2988,7 @@ async function loadRdoPage() {
                 }));
                 const topCpv = cpvTrovati.slice(0, 3);
                 const codiceRdo = r.codice_rdo || r.raw?.Codice || r.raw?.CODICE || r.raw?.Numero || r.raw?.NUMERO || '';
+                const garaCompact = String(r.gara || 'Oggetto non indicato').trim();
                 return `
                   <tr>
                     <td>
@@ -2997,7 +3000,18 @@ async function loadRdoPage() {
                     <td>
                       <div class="rdo-detail-cell">
                         <div class="rdo-ente">${escapeHtml(r.ente || 'Ente non indicato')}</div>
-                        <div class="rdo-gara">${escapeHtml(r.gara || 'Oggetto non indicato')}</div>
+                        <div class="rdo-gara">${escapeHtml(garaCompact.length > 160 ? `${garaCompact.slice(0, 160).trim()}…` : garaCompact)}</div>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="rdo-po-cell">
+                        <strong>${escapeHtml(r.nome_po || '—')}</strong>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="rdo-contact-cell">
+                        <div>Tel: ${escapeHtml(r.telefono_po || '—')}</div>
+                        <div>Cellulare: ${escapeHtml(r.cellulare_po || '—')}</div>
                       </div>
                     </td>
                     <td>
@@ -3050,8 +3064,7 @@ async function loadRdoPage() {
       <div class="rdo-layout-grid">
         ${renderRdoRowsTable(activeRows, 'RdO attive', 'Nessuna RdO attiva con i filtri correnti.')}
         <div class="table-wrapper rdo-side-table">
-          <div class="rdo-table-title">Categorie RdO</div>
-          <table class="data-table">
+          <table class="data-table" data-disable-tools="1">
             <thead>
               <tr>
                 <th>Categoria RdO</th>
@@ -3775,6 +3788,7 @@ function applyTableColumnFilters(table) {
 }
 
 function ensureTableToolbar(table) {
+  if (table.dataset.disableTools === '1') return;
   if (table.dataset.toolsEnhanced === '1') return;
   const wrapper = table.closest('.table-wrapper');
   if (!wrapper) return;
