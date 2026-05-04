@@ -526,7 +526,7 @@ function organizeNavigationLayout() {
   const nav = document.querySelector('#sidebar nav');
   if (!nav || nav.dataset.organized === '1') return;
   const itemMap = Object.fromEntries([...nav.querySelectorAll('.nav-item[data-section]')].map(item => [item.dataset.section, item]));
-  if (itemMap.analytics) itemMap.analytics.innerHTML = '<span class="nav-icon">�x`</span> Analisi API MEPA';
+  if (itemMap.analytics) itemMap.analytics.innerHTML = '<span class="nav-icon">&#128202;</span> Analisi API MEPA';
   const getItem = (section, label, icon, id = '') => itemMap[section] || createNavItem(section, label, icon, id);
   const groups = [
     { label: '', sections: ['dashboard'] },
@@ -546,34 +546,32 @@ function organizeNavigationLayout() {
       nav.appendChild(label);
     }
     group.sections.forEach(section => {
-      const item = section === 'dashboard' ? getItem('dashboard', 'Dashboard', '��')
-        : section === 'attivita' ? getItem('attivita', 'Attività CRM', '�x&')
-        : section === 'notifiche' ? getItem('notifiche', 'Notifiche', '�x')
-        : section === 'clienti' ? getItem('clienti', 'Clienti', '�x�')
-        : section === 'fornitori' ? getItem('fornitori', 'Fornitori', '�x��')
-        : section === 'contatti' ? getItem('contatti', 'Contatti', '�x!')
-        : section === 'mappa' ? getItem('mappa', 'Mappa CRM', '�x�️')
-        : section === 'prodotti' ? getItem('prodotti', 'Prodotti', '�x�')
-        : section === 'magazzino' ? getItem('magazzino', 'Magazzino', '�x��')
-        : section === 'preventivi' ? getItem('preventivi', 'Preventivi', '�x��')
-        : section === 'ordini' ? getItem('ordini', 'Ordini', '�x9')
-        : section === 'ddt' ? getItem('ddt', 'DDT', '�xaa')
-        : section === 'container' ? getItem('container', 'Container CN', '�xa�')
-        : section === 'documenti' ? getItem('documenti', 'Documenti', '�x�')
-        : section === 'fatture-attive' ? getItem('fatture-attive', 'Fatture attive', '�x��')
-        : section === 'fatture-passive' ? getItem('fatture-passive', 'Fatture passive', '�x��')
-        : section === 'fatture-fuori-campo' ? getItem('fatture-fuori-campo', 'Fuori campo IVA', '�x��')
-        : section === 'cig' ? getItem('cig', 'Stagionalità CIG', '�x0')
-        : section === 'mepa' ? getItem('mepa', 'Abilitazioni CPV MEPA', '�x`')
-        : section === 'rdo' ? getItem('rdo', 'RdO', '�x�')
-        : section === 'analytics' ? getItem('analytics', 'Analisi API MEPA', '�x`')
-        : section === 'statistics' ? getItem('statistics', 'Statistiche', '�x�')
-        : section === 'utenti' ? getItem('utenti', 'Utenti', '�a"️', 'nav-utenti')
-        : section === 'automazioni' ? getItem('automazioni', 'Automazioni', '�a�')
+      const item = section === 'dashboard' ? getItem('dashboard', 'Dashboard', '&#9672;')
+        : section === 'attivita' ? getItem('attivita', 'Attivita CRM', '&#128197;')
+        : section === 'notifiche' ? getItem('notifiche', 'Notifiche', '&#128276;')
+        : section === 'clienti' ? getItem('clienti', 'Clienti', '&#128101;')
+        : section === 'fornitori' ? getItem('fornitori', 'Fornitori', '&#127981;')
+        : section === 'contatti' ? getItem('contatti', 'Contatti', '&#128199;')
+        : section === 'mappa' ? getItem('mappa', 'Mappa CRM', '&#128506;')
+        : section === 'prodotti' ? getItem('prodotti', 'Prodotti', '&#128230;')
+        : section === 'magazzino' ? getItem('magazzino', 'Magazzino', '&#127970;')
+        : section === 'preventivi' ? getItem('preventivi', 'Preventivi', '&#129518;')
+        : section === 'ordini' ? getItem('ordini', 'Ordini', '&#128203;')
+        : section === 'ddt' ? getItem('ddt', 'DDT', '&#128666;')
+        : section === 'container' ? getItem('container', 'Container CN', '&#128674;')
+        : section === 'documenti' ? getItem('documenti', 'Documenti', '&#128193;')
+        : section === 'fatture-attive' ? getItem('fatture-attive', 'Fatture attive', '&#129534;')
+        : section === 'fatture-passive' ? getItem('fatture-passive', 'Fatture passive', '&#129534;')
+        : section === 'fatture-fuori-campo' ? getItem('fatture-fuori-campo', 'Fuori campo IVA', '&#129534;')
+        : section === 'cig' ? getItem('cig', 'Stagionalita CIG', '&#128201;')
+        : section === 'mepa' ? getItem('mepa', 'Abilitazioni CPV MEPA', '&#128202;')
+        : section === 'rdo' ? getItem('rdo', 'RdO', '&#128221;')
+        : section === 'analytics' ? getItem('analytics', 'Analisi API MEPA', '&#128202;')
+        : section === 'statistics' ? getItem('statistics', 'Statistiche', '&#128200;')
+        : section === 'utenti' ? getItem('utenti', 'Utenti', '&#9881;', 'nav-utenti')
+        : section === 'automazioni' ? getItem('automazioni', 'Automazioni', '&#9889;')
         : null;
-      if (item) {
-        nav.appendChild(item);
-      }
+      if (item) nav.appendChild(item);
     });
   });
   nav.dataset.organized = '1';
@@ -583,7 +581,7 @@ function ensureAuditNavLink() {
   const nav = document.querySelector('#sidebar nav');
   if (!nav || nav.querySelector('.nav-item[data-section="audit-log"]')) return;
   const utenti = nav.querySelector('.nav-item[data-section="utenti"]');
-  const item = createNavItem('audit-log', 'Log Attivita', '�x"�');
+  const item = createNavItem('audit-log', 'Log Attivita', '&#128344;');
   if (utenti?.parentNode) utenti.parentNode.insertBefore(item, utenti);
   else nav.appendChild(item);
 }
@@ -592,7 +590,7 @@ function ensureSystemLogNavLink() {
   const nav = document.querySelector('#sidebar nav');
   if (!nav || USER?.ruolo_id !== 4 || nav.querySelector('.nav-item[data-section="system-log"]')) return;
   const audit = nav.querySelector('.nav-item[data-section="audit-log"]');
-  const item = createNavItem('system-log', 'System Log', '�x��');
+  const item = createNavItem('system-log', 'System Log', '&#129519;');
   if (audit?.parentNode) audit.parentNode.insertBefore(item, audit.nextSibling);
   else nav.appendChild(item);
 }
@@ -600,13 +598,12 @@ function ensureSystemLogNavLink() {
 function configureMobileBottomNav() {
   const nav = document.getElementById('mobile-bottom-nav');
   if (!nav) return;
-  nav.innerHTML = `
-    <button class="mobile-tab active" data-section="dashboard" onclick="navigateTo('dashboard')"><span>�R</span><small>Home</small></button>
-    <button class="mobile-tab" data-section="clienti" onclick="navigateTo('clienti')"><span>�x�</span><small>Anagr.</small></button>
-    <button class="mobile-tab" data-section="ordini" onclick="navigateTo('ordini')"><span>�x9</span><small>Logistica</small></button>
-    <button class="mobile-tab" data-section="fatture-attive" onclick="navigateTo('fatture-attive')"><span>�x��</span><small>Contab.</small></button>
-    <button class="mobile-tab" data-section="automazioni" onclick="navigateTo('automazioni')"><span>�a�</span><small>Auto.</small></button>
-  `;
+  nav.innerHTML =
+    '<button class="mobile-tab active" data-section="dashboard" onclick="navigateTo(\'dashboard\')"><span>&#8962;</span><small>Home</small></button>'
+    + '<button class="mobile-tab" data-section="clienti" onclick="navigateTo(\'clienti\')"><span>&#128101;</span><small>Anagr.</small></button>'
+    + '<button class="mobile-tab" data-section="ordini" onclick="navigateTo(\'ordini\')"><span>&#128203;</span><small>Logistica</small></button>'
+    + '<button class="mobile-tab" data-section="fatture-attive" onclick="navigateTo(\'fatture-attive\')"><span>&#129534;</span><small>Contab.</small></button>'
+    + '<button class="mobile-tab" data-section="automazioni" onclick="navigateTo(\'automazioni\')"><span>&#9889;</span><small>Auto.</small></button>';
 }
 
 function startNotificationsPolling() {
@@ -3424,7 +3421,7 @@ function renderAutomationSections() {
     return acc;
   }, {});
   const groupTitles = {
-    attivita: 'Attività CRM',
+    attivita: 'Attivita CRM',
     ordini: 'Ordini'
   };
   target.innerHTML = Object.entries(grouped).map(([group, defs]) => `
@@ -4031,10 +4028,10 @@ const SEZIONI_LABEL = {
   'fatture-attive': 'Fatture attive',
   'fatture-passive': 'Fatture passive',
   'fatture-fuori-campo': 'Fuori campo IVA',
-  attivita: 'Attività CRM',
+  attivita: 'Attivita CRM',
   documenti: 'Documenti',
   mepa: 'Abilitazioni CPV MEPA',
-  cig: 'Stagionalità CIG',
+  cig: 'Stagionalita CIG',
   analytics: 'Analisi API MEPA',
   statistics: 'Statistics',
   settings: 'Impostazioni',
@@ -4346,7 +4343,7 @@ function buildGoogleEventFromActivity(body) {
   const start = body.data_ora ? new Date(body.data_ora) : new Date();
   const end = new Date(start.getTime() + (body.durata_minuti || 60) * 60000);
   return {
-    title: body.oggetto || body.tipo || 'Attività CRM',
+    title: body.oggetto || body.tipo || 'Attivita CRM',
     description: body.note || '',
     start: normalizeLocalDateTime(toDateTimeLocalValue(start)),
     end: normalizeLocalDateTime(toDateTimeLocalValue(end)),
