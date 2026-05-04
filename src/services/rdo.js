@@ -140,12 +140,8 @@ function importRdoWorkbook(buffer, fileName = 'rdo.xlsx') {
   const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
   if (!rows.length) throw new Error('Il file Excel non contiene righe utili');
 
-  const imported = db.prepare(`
-    INSERT INTO rdo_imports (file_name, sheet_name, row_count)
-    VALUES (?, ?, ?)
-  `).run(path.basename(fileName), sheetName, rows.length);
-
-  const importId = imported.lastInsertRowid;
+  let imported;
+  let importId;
   const insertRow = db.prepare(`
     INSERT INTO rdo_rows (import_id, row_index, ente, gara, categoria, scadenza, raw_json, search_text)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -153,6 +149,16 @@ function importRdoWorkbook(buffer, fileName = 'rdo.xlsx') {
 
   db.exec('BEGIN');
   try {
+    // Manteniamo un solo import operativo alla volta per evitare confronti con file RdO vecchi.
+    db.prepare('DELETE FROM rdo_rows').run();
+    db.prepare('DELETE FROM rdo_imports').run();
+
+    imported = db.prepare(`
+      INSERT INTO rdo_imports (file_name, sheet_name, row_count)
+      VALUES (?, ?, ?)
+    `).run(path.basename(fileName), sheetName, rows.length);
+
+    importId = imported.lastInsertRowid;
     rows.forEach((row, index) => {
       const guessed = guessRowFields(row);
       insertRow.run(
