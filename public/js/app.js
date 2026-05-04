@@ -2975,6 +2975,12 @@ async function loadRdoPage() {
       if (typeof value === 'object') return JSON.stringify(value);
       return String(value);
     };
+    const normalizeHeaderText = (value = '') => String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
 
     const renderRdoRowsTable = (tableRows, titleText, emptyText) =>
       '<div class="table-wrapper rdo-main-table">'
@@ -2996,7 +3002,7 @@ async function loadRdoPage() {
           }));
           return '<tr>'
             + rawHeaders.map(header => {
-              const normalizedHeader = normalizeText(header);
+              const normalizedHeader = normalizeHeaderText(header);
               const rawValue = formatRawCellValue(r.raw?.[header]);
               const isDeadlineColumn = normalizedHeader.includes('data limine stipula contratto') || normalizedHeader.includes('data limite stipula contratto');
               return '<td class="rdo-raw-cell">'
