@@ -95,6 +95,7 @@ function guessRowFields(row = {}) {
       header.includes('merceologica')
     ),
     scadenza: pickField(row, header =>
+      (header.includes('stipula') && header.includes('contratto')) ||
       header.includes('scadenza') ||
       header.includes('termine') ||
       header.includes('data')

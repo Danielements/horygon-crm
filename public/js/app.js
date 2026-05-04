@@ -1,6 +1,6 @@
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // STATE
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 let TOKEN = localStorage.getItem('horygon_token');
 let USER = null;
 let PERMS = {};
@@ -31,9 +31,9 @@ let openNotificationsOnBoot = new URLSearchParams(window.location.search).get('o
 const urlToken = new URLSearchParams(window.location.search).get('token');
 if (urlToken) { localStorage.setItem('horygon_token', urlToken); TOKEN = urlToken; history.replaceState({}, '', '/'); }
 
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // API
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 async function api(method, path, body) {
   const opts = {
     method,
@@ -234,20 +234,20 @@ async function togglePushNotifications() {
   await enablePushNotifications();
 }
 
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // TOAST
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 function toast(msg, type = 'info') {
   const el = document.createElement('div');
   el.className = `toast ${type}`;
-  el.innerHTML = `<span>${type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️'}</span> ${msg}`;
+  el.innerHTML = `<span>${type === 'success' ? '�S&' : type === 'error' ? '�R' : '��️'}</span> ${msg}`;
   document.getElementById('toast-container').appendChild(el);
   setTimeout(() => el.remove(), 3500);
 }
 
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // AUTH
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 async function init() {
   ensureAccountingSections();
   organizeNavigationLayout();
@@ -263,7 +263,7 @@ async function init() {
     FORCE_PASSWORD_CHANGE = !!me.force_password_change;
     // Applica tema
     document.body.className = `theme-${USER.tema || 'dark'}`;
-    document.getElementById('btn-tema').textContent = USER.tema === 'light' ? '🌙' : '☀️';
+    document.getElementById('btn-tema').textContent = USER.tema === 'light' ? '�xR"' : '�ܬ️';
     // UI utente
     document.getElementById('user-name').textContent = USER.nome;
     document.getElementById('user-role').textContent = RUOLI_LABEL?.[USER.ruolo_id] || '';
@@ -271,7 +271,7 @@ async function init() {
     const automationNavIcon = document.querySelector('.nav-item[data-section="automazioni"] .nav-icon');
     if (automationNavIcon) automationNavIcon.innerHTML = '&#9889;';
     // Google status
-    document.getElementById('btn-google').textContent = USER.hasGoogle ? '✅' : '🔗';
+    document.getElementById('btn-google').textContent = USER.hasGoogle ? '�S&' : '�x';
     // Permessi
     PERMS = {};
     (USER.permessi || []).forEach(p => { PERMS[p.sezione] = p; });
@@ -437,7 +437,7 @@ async function toggleTema() {
     TOKEN = data.token;
     USER.tema = newTema;
     document.body.className = `theme-${newTema}`;
-    document.getElementById('btn-tema').textContent = newTema === 'light' ? '🌙' : '☀️';
+    document.getElementById('btn-tema').textContent = newTema === 'light' ? '�xR"' : '�ܬ️';
   } catch {}
 }
 
@@ -526,7 +526,7 @@ function organizeNavigationLayout() {
   const nav = document.querySelector('#sidebar nav');
   if (!nav || nav.dataset.organized === '1') return;
   const itemMap = Object.fromEntries([...nav.querySelectorAll('.nav-item[data-section]')].map(item => [item.dataset.section, item]));
-  if (itemMap.analytics) itemMap.analytics.innerHTML = '<span class="nav-icon">📊</span> Analisi API MEPA';
+  if (itemMap.analytics) itemMap.analytics.innerHTML = '<span class="nav-icon">�x`</span> Analisi API MEPA';
   const getItem = (section, label, icon, id = '') => itemMap[section] || createNavItem(section, label, icon, id);
   const groups = [
     { label: '', sections: ['dashboard'] },
@@ -546,30 +546,30 @@ function organizeNavigationLayout() {
       nav.appendChild(label);
     }
     group.sections.forEach(section => {
-      const item = section === 'dashboard' ? getItem('dashboard', 'Dashboard', '◈')
-        : section === 'attivita' ? getItem('attivita', 'Attività CRM', '📅')
-        : section === 'notifiche' ? getItem('notifiche', 'Notifiche', '🔔')
-        : section === 'clienti' ? getItem('clienti', 'Clienti', '👥')
-        : section === 'fornitori' ? getItem('fornitori', 'Fornitori', '🏭')
-        : section === 'contatti' ? getItem('contatti', 'Contatti', '📇')
-        : section === 'mappa' ? getItem('mappa', 'Mappa CRM', '🗺️')
-        : section === 'prodotti' ? getItem('prodotti', 'Prodotti', '📦')
-        : section === 'magazzino' ? getItem('magazzino', 'Magazzino', '🏪')
-        : section === 'preventivi' ? getItem('preventivi', 'Preventivi', '🧮')
-        : section === 'ordini' ? getItem('ordini', 'Ordini', '📋')
-        : section === 'ddt' ? getItem('ddt', 'DDT', '🚚')
-        : section === 'container' ? getItem('container', 'Container CN', '🚢')
-        : section === 'documenti' ? getItem('documenti', 'Documenti', '📁')
-        : section === 'fatture-attive' ? getItem('fatture-attive', 'Fatture attive', '🧾')
-        : section === 'fatture-passive' ? getItem('fatture-passive', 'Fatture passive', '🧾')
-        : section === 'fatture-fuori-campo' ? getItem('fatture-fuori-campo', 'Fuori campo IVA', '🧾')
-        : section === 'cig' ? getItem('cig', 'Stagionalità CIG', '📉')
-        : section === 'mepa' ? getItem('mepa', 'Abilitazioni CPV MEPA', '📊')
-        : section === 'rdo' ? getItem('rdo', 'RdO', '📝')
-        : section === 'analytics' ? getItem('analytics', 'Analisi API MEPA', '📊')
-        : section === 'statistics' ? getItem('statistics', 'Statistiche', '📈')
-        : section === 'utenti' ? getItem('utenti', 'Utenti', '⚙️', 'nav-utenti')
-        : section === 'automazioni' ? getItem('automazioni', 'Automazioni', '⚡')
+      const item = section === 'dashboard' ? getItem('dashboard', 'Dashboard', '��')
+        : section === 'attivita' ? getItem('attivita', 'Attività CRM', '�x&')
+        : section === 'notifiche' ? getItem('notifiche', 'Notifiche', '�x')
+        : section === 'clienti' ? getItem('clienti', 'Clienti', '�x�')
+        : section === 'fornitori' ? getItem('fornitori', 'Fornitori', '�x��')
+        : section === 'contatti' ? getItem('contatti', 'Contatti', '�x!')
+        : section === 'mappa' ? getItem('mappa', 'Mappa CRM', '�x�️')
+        : section === 'prodotti' ? getItem('prodotti', 'Prodotti', '�x�')
+        : section === 'magazzino' ? getItem('magazzino', 'Magazzino', '�x��')
+        : section === 'preventivi' ? getItem('preventivi', 'Preventivi', '�x��')
+        : section === 'ordini' ? getItem('ordini', 'Ordini', '�x9')
+        : section === 'ddt' ? getItem('ddt', 'DDT', '�xaa')
+        : section === 'container' ? getItem('container', 'Container CN', '�xa�')
+        : section === 'documenti' ? getItem('documenti', 'Documenti', '�x�')
+        : section === 'fatture-attive' ? getItem('fatture-attive', 'Fatture attive', '�x��')
+        : section === 'fatture-passive' ? getItem('fatture-passive', 'Fatture passive', '�x��')
+        : section === 'fatture-fuori-campo' ? getItem('fatture-fuori-campo', 'Fuori campo IVA', '�x��')
+        : section === 'cig' ? getItem('cig', 'Stagionalità CIG', '�x0')
+        : section === 'mepa' ? getItem('mepa', 'Abilitazioni CPV MEPA', '�x`')
+        : section === 'rdo' ? getItem('rdo', 'RdO', '�x�')
+        : section === 'analytics' ? getItem('analytics', 'Analisi API MEPA', '�x`')
+        : section === 'statistics' ? getItem('statistics', 'Statistiche', '�x�')
+        : section === 'utenti' ? getItem('utenti', 'Utenti', '�a"️', 'nav-utenti')
+        : section === 'automazioni' ? getItem('automazioni', 'Automazioni', '�a�')
         : null;
       if (item) {
         nav.appendChild(item);
@@ -583,7 +583,7 @@ function ensureAuditNavLink() {
   const nav = document.querySelector('#sidebar nav');
   if (!nav || nav.querySelector('.nav-item[data-section="audit-log"]')) return;
   const utenti = nav.querySelector('.nav-item[data-section="utenti"]');
-  const item = createNavItem('audit-log', 'Log Attivita', '🕘');
+  const item = createNavItem('audit-log', 'Log Attivita', '�x"�');
   if (utenti?.parentNode) utenti.parentNode.insertBefore(item, utenti);
   else nav.appendChild(item);
 }
@@ -592,7 +592,7 @@ function ensureSystemLogNavLink() {
   const nav = document.querySelector('#sidebar nav');
   if (!nav || USER?.ruolo_id !== 4 || nav.querySelector('.nav-item[data-section="system-log"]')) return;
   const audit = nav.querySelector('.nav-item[data-section="audit-log"]');
-  const item = createNavItem('system-log', 'System Log', '🧯');
+  const item = createNavItem('system-log', 'System Log', '�x��');
   if (audit?.parentNode) audit.parentNode.insertBefore(item, audit.nextSibling);
   else nav.appendChild(item);
 }
@@ -601,11 +601,11 @@ function configureMobileBottomNav() {
   const nav = document.getElementById('mobile-bottom-nav');
   if (!nav) return;
   nav.innerHTML = `
-    <button class="mobile-tab active" data-section="dashboard" onclick="navigateTo('dashboard')"><span>⌂</span><small>Home</small></button>
-    <button class="mobile-tab" data-section="clienti" onclick="navigateTo('clienti')"><span>👥</span><small>Anagr.</small></button>
-    <button class="mobile-tab" data-section="ordini" onclick="navigateTo('ordini')"><span>📋</span><small>Logistica</small></button>
-    <button class="mobile-tab" data-section="fatture-attive" onclick="navigateTo('fatture-attive')"><span>🧾</span><small>Contab.</small></button>
-    <button class="mobile-tab" data-section="automazioni" onclick="navigateTo('automazioni')"><span>⚡</span><small>Auto.</small></button>
+    <button class="mobile-tab active" data-section="dashboard" onclick="navigateTo('dashboard')"><span>�R</span><small>Home</small></button>
+    <button class="mobile-tab" data-section="clienti" onclick="navigateTo('clienti')"><span>�x�</span><small>Anagr.</small></button>
+    <button class="mobile-tab" data-section="ordini" onclick="navigateTo('ordini')"><span>�x9</span><small>Logistica</small></button>
+    <button class="mobile-tab" data-section="fatture-attive" onclick="navigateTo('fatture-attive')"><span>�x��</span><small>Contab.</small></button>
+    <button class="mobile-tab" data-section="automazioni" onclick="navigateTo('automazioni')"><span>�a�</span><small>Auto.</small></button>
   `;
 }
 
@@ -668,9 +668,9 @@ function toggleAnagraficaPaFields() {
   if (box) box.style.display = tipo === 'pa' ? 'block' : 'none';
 }
 
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // NAVIGAZIONE
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 document.querySelectorAll('.nav-item').forEach(a => {
   a.addEventListener('click', e => { e.preventDefault(); const s = a.dataset.section; if (s) navigateTo(s); });
 });
@@ -775,9 +775,9 @@ function closeMobileSidebar() {
   isMobileSidebarOpen = false;
   app.classList.remove('sidebar-open');
 }
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // DASHBOARD
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 async function loadDashboard() {
   const [ordini, prodotti, clienti, container, notifications] = await Promise.all([
     api('GET', '/ordini'), api('GET', '/prodotti'),
@@ -795,9 +795,9 @@ async function loadDashboard() {
   loadNotifications(false);
 }
 
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // GOOGLE CALENDAR
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 async function loadCalendar() {
   if (!USER?.hasGoogle) {
     document.getElementById('cal-no-google').style.display = 'block';
@@ -825,7 +825,7 @@ function updateCalTitle() {
   else {
     const start = getWeekStart(calDate);
     const end = new Date(start); end.setDate(end.getDate() + 6);
-    document.getElementById('cal-title').textContent = `${start.getDate()} ${months[start.getMonth()]} – ${end.getDate()} ${months[end.getMonth()]} ${end.getFullYear()}`;
+    document.getElementById('cal-title').textContent = `${start.getDate()} ${months[start.getMonth()]} � ${end.getDate()} ${months[end.getMonth()]} ${end.getFullYear()}`;
   }
 }
 
@@ -881,11 +881,11 @@ function normalizeMailBody(value) {
 function compactText(value, max = 180) {
   const text = normalizeMailBody(value);
   if (text.length <= max) return text;
-  return `${text.slice(0, max).trim()}…`;
+  return `${text.slice(0, max).trim()}⬦`;
 }
 
 function formatDateTimeIt(value) {
-  if (!value) return '—';
+  if (!value) return '�';
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return String(value);
   return parsed.toLocaleString('it-IT', {
@@ -898,16 +898,16 @@ function formatDateTimeIt(value) {
 }
 
 function formatDateIt(value) {
-  if (!value) return '—';
+  if (!value) return '�';
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return String(value);
   return parsed.toLocaleDateString('it-IT');
 }
 
 function formatCurrencyIt(value) {
-  if (value === null || value === undefined || value === '') return '—';
+  if (value === null || value === undefined || value === '') return '�';
   const num = Number(value);
-  if (Number.isNaN(num)) return '—';
+  if (Number.isNaN(num)) return '�';
   return num.toLocaleString('it-IT', { style: 'currency', currency: 'EUR' });
 }
 
@@ -917,7 +917,7 @@ function renderSummaryCards(targetId, items = []) {
   box.innerHTML = items.map(item => `
     <div class="summary-card ${item.tone ? `tone-${item.tone}` : ''}">
       <div class="summary-card-top">
-        <span class="summary-card-icon">${item.icon || '•'}</span>
+        <span class="summary-card-icon">${item.icon || '⬢'}</span>
         <span class="summary-card-label">${escapeHtml(item.label || '')}</span>
       </div>
       <div class="summary-card-value">${escapeHtml(item.value ?? '0')}</div>
@@ -931,10 +931,10 @@ function renderDashboardFocusCards({ ordini = [], clienti = [], container = [], 
   const mepaClients = clienti.filter(c => !!c.pa_mepa).length;
   const highAlerts = notifications.filter(n => !n.letta && n.livello_urgenza === 'alta').length;
   renderSummaryCards('dashboard-focus-cards', [
-    { icon: '📦', label: 'Ordini da seguire', value: openOrders, meta: 'Lavorazione e consegne in corso', tone: 'primary' },
-    { icon: '🏛️', label: 'Clienti MEPA', value: mepaClients, meta: 'PA già pronte per opportunità', tone: 'cyan' },
-    { icon: '🚚', label: 'Logistica attiva', value: container.filter(c => c.stato === 'in_transito').length, meta: 'Container ancora in transito', tone: 'warning' },
-    { icon: '🔔', label: 'Alert urgenti', value: highAlerts, meta: highAlerts ? 'Da leggere subito' : 'Situazione sotto controllo', tone: highAlerts ? 'danger' : 'success' }
+    { icon: '�x�', label: 'Ordini da seguire', value: openOrders, meta: 'Lavorazione e consegne in corso', tone: 'primary' },
+    { icon: '�x�:️', label: 'Clienti MEPA', value: mepaClients, meta: 'PA già pronte per opportunità', tone: 'cyan' },
+    { icon: '�xaa', label: 'Logistica attiva', value: container.filter(c => c.stato === 'in_transito').length, meta: 'Container ancora in transito', tone: 'warning' },
+    { icon: '�x', label: 'Alert urgenti', value: highAlerts, meta: highAlerts ? 'Da leggere subito' : 'Situazione sotto controllo', tone: highAlerts ? 'danger' : 'success' }
   ]);
 }
 
@@ -959,9 +959,9 @@ function renderAnagraficheMobileCards(targetId, rows = [], tipo = 'cliente') {
           <span class="badge ${a.tipologia_cliente === 'pa' ? 'badge-pa' : ''}">${escapeHtml(a.tipologia_cliente || tipo)}</span>
         </div>
         <div class="mobile-record-meta">
-          <span><strong>P.IVA</strong> ${escapeHtml(a.piva || '—')}</span>
-          <span><strong>Tel</strong> ${escapeHtml(a.telefono || '—')}</span>
-          <span><strong>Email</strong> ${escapeHtml(a.email || '—')}</span>
+          <span><strong>P.IVA</strong> ${escapeHtml(a.piva || '�')}</span>
+          <span><strong>Tel</strong> ${escapeHtml(a.telefono || '�')}</span>
+          <span><strong>Email</strong> ${escapeHtml(a.email || '�')}</span>
         </div>
         ${channels.length ? `<div class="mobile-record-tags">${channels.map(tag => `<span class="record-tag">${tag}</span>`).join('')}</div>` : ''}
         <div class="mobile-record-actions">
@@ -1097,7 +1097,7 @@ function renderMobileAgendaView() {
   if (!upcoming.length) {
     body.innerHTML = `
       <div class="cal-agenda-empty">
-        <div style="font-size:28px">📭</div>
+        <div style="font-size:28px">�x�</div>
         <div>Nessun evento nelle prossime settimane</div>
         <button class="btn btn-accent btn-sm" onclick="openModal('modal-evento')">Nuovo evento</button>
       </div>`;
@@ -1197,14 +1197,14 @@ async function deleteEvento() {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // ANAGRAFICHE
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 function openModalAnagrafica(tipo) {
   ensureAnagraficaLogisticaFields();
   document.getElementById('anag-id').value = '';
   document.getElementById('anag-tipo').value = tipo;
-  document.getElementById('modal-anag-title').textContent = tipo === 'cliente' ? '👥 Cliente' : tipo === 'fornitore' ? '🏭 Fornitore' : '🏛️ PA';
+  document.getElementById('modal-anag-title').textContent = tipo === 'cliente' ? '�x� Cliente' : tipo === 'fornitore' ? '�x�� Fornitore' : '�x�:️ PA';
   ['ragione','piva','cf','indirizzo','cap','citta','prov','email','tel','lat','lng','note'].forEach(f => {
     const el = document.getElementById(`anag-${f}`);
     if (el) el.value = f === 'paese' ? 'IT' : '';
@@ -1226,18 +1226,18 @@ async function loadAnagrafiche(tipo) {
   tbody.innerHTML = (rows || []).map(a => `
     <tr>
       <td><strong>${a.ragione_sociale}</strong>${a.tipo === 'cliente' ? `<div style="font-size:11px;color:var(--text-muted)">Tipologia: ${a.tipologia_cliente || 'privato'}${a.tipologia_cliente === 'pa' ? ` | ${[a.pa_mepa ? 'MEPA' : '', a.pa_sda ? 'SDA' : '', a.pa_rdo ? 'RdO' : ''].filter(Boolean).join(', ') || 'nessun canale'}` : ''}</div>` : ''}</td>
-      <td>${a.citta || '—'}</td>
-      <td>${a.piva || '—'}</td>
-      <td>${a.telefono || '—'}</td>
-      <td>${a.email || '—'}</td>
+      <td>${a.citta || '�'}</td>
+      <td>${a.piva || '�'}</td>
+      <td>${a.telefono || '�'}</td>
+      <td>${a.email || '�'}</td>
       <td><button class="btn btn-outline btn-sm" onclick="editAnagrafica(${a.id})">Modifica</button></td>
     </tr>`).join('');
   if (tipo === 'cliente') {
     renderSummaryCards('clienti-summary', [
-      { icon: '👥', label: 'Clienti trovati', value: rows?.length || 0, meta: q ? `Filtro: ${q}` : 'Vista completa', tone: 'primary' },
-      { icon: '🏛️', label: 'Pubbliche Amministrazioni', value: (rows || []).filter(a => a.tipologia_cliente === 'pa').length, meta: 'Schede PA attive', tone: 'cyan' },
-      { icon: '🛒', label: 'Canale MEPA', value: (rows || []).filter(a => !!a.pa_mepa).length, meta: 'Clienti con flag MEPA', tone: 'warning' },
-      { icon: '✉️', label: 'Contattabili', value: (rows || []).filter(a => !!a.email || !!a.telefono).length, meta: 'Email o telefono presenti', tone: 'success' }
+      { icon: '�x�', label: 'Clienti trovati', value: rows?.length || 0, meta: q ? `Filtro: ${q}` : 'Vista completa', tone: 'primary' },
+      { icon: '�x�:️', label: 'Pubbliche Amministrazioni', value: (rows || []).filter(a => a.tipologia_cliente === 'pa').length, meta: 'Schede PA attive', tone: 'cyan' },
+      { icon: '�x:', label: 'Canale MEPA', value: (rows || []).filter(a => !!a.pa_mepa).length, meta: 'Clienti con flag MEPA', tone: 'warning' },
+      { icon: '�S0️', label: 'Contattabili', value: (rows || []).filter(a => !!a.email || !!a.telefono).length, meta: 'Email o telefono presenti', tone: 'success' }
     ]);
     renderAnagraficheMobileCards('clienti-mobile-list', rows || [], 'cliente');
   }
@@ -1248,7 +1248,7 @@ async function editAnagrafica(id) {
   const a = await api('GET', `/anagrafiche/${id}`);
   document.getElementById('anag-id').value = a.id;
   document.getElementById('anag-tipo').value = a.tipo;
-  document.getElementById('modal-anag-title').textContent = a.tipo === 'cliente' ? '👥 Cliente' : a.tipo === 'fornitore' ? '🏭 Fornitore' : '🏛️ PA';
+  document.getElementById('modal-anag-title').textContent = a.tipo === 'cliente' ? '�x� Cliente' : a.tipo === 'fornitore' ? '�x�� Fornitore' : '�x�:️ PA';
   document.getElementById('anag-ragione').value = a.ragione_sociale;
   document.getElementById('anag-piva').value = a.piva || '';
   document.getElementById('anag-cf').value = a.cf || '';
@@ -1306,9 +1306,9 @@ async function salvaAnagrafica() {
 }
 
 
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // PRODOTTI
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 async function loadProdotti() {
   const q = document.getElementById('search-prod')?.value || '';
   const rows = await api('GET', `/prodotti?q=${encodeURIComponent(q)}`);
@@ -1316,13 +1316,13 @@ async function loadProdotti() {
     const listino = p.listini?.find(l => l.canale === 'mepa') || p.listini?.[0];
     const fornitore = p.fornitori?.[0];
     const margine = listino?.prezzo && fornitore?.prezzo_acquisto
-      ? (((listino.prezzo - fornitore.prezzo_acquisto) / listino.prezzo) * 100).toFixed(1) + '%' : '—';
+      ? (((listino.prezzo - fornitore.prezzo_acquisto) / listino.prezzo) * 100).toFixed(1) + '%' : '�';
     return `<tr>
       <td><code>${p.codice_interno}</code></td>
       <td>${p.nome}<div style="font-size:11px;color:var(--text-muted)">${p.fatture_count || 0} fatture | ${p.ddt_count || 0} DDT</div></td>
-      <td>${p.categoria_nome || '—'}<div style="font-size:11px;color:var(--text-muted)">${p.cpv_mepa ? escapeHtml(formatCpvDisplay(p.cpv_mepa)) : 'CPV non assegnato'}</div></td>
+      <td>${p.categoria_nome || '�'}<div style="font-size:11px;color:var(--text-muted)">${p.cpv_mepa ? escapeHtml(formatCpvDisplay(p.cpv_mepa)) : 'CPV non assegnato'}</div></td>
       <td><strong style="color:${(p.giacenza||0) > 0 ? 'var(--success)' : 'var(--danger)'}">${p.giacenza || 0}</strong></td>
-      <td>${listino ? '€ ' + listino.prezzo.toFixed(2) : '—'}</td>
+      <td>${listino ? '�� ' + listino.prezzo.toFixed(2) : '�'}</td>
       <td>${margine}</td>
       <td>
         <button class="btn btn-outline btn-sm" onclick="editProdotto(${p.id})">Modifica</button>
@@ -1354,14 +1354,14 @@ async function editProdotto(id) {
   // Tab fornitori
   const fHtml = (p.fornitori||[]).length ? (p.fornitori||[]).map(f =>
     `<div style="padding:8px;border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
-      <strong>${f.ragione_sociale}</strong> — ${f.codice_fornitore||'—'}
-      <span style="float:right;color:var(--text-muted)">${f.prezzo_acquisto||'—'} ${f.valuta||'CNY'}</span>
+      <strong>${f.ragione_sociale}</strong> � ${f.codice_fornitore||'�'}
+      <span style="float:right;color:var(--text-muted)">${f.prezzo_acquisto||'�'} ${f.valuta||'CNY'}</span>
     </div>`).join('') : '<p style="color:var(--text-muted)">Nessun fornitore associato</p>';
   document.getElementById('prod-tab-fornitori').innerHTML = fHtml;
   // Tab fatture
   const fatHtml = (p.fatture||[]).length ? (p.fatture||[]).map(f =>
     `<div style="padding:8px;border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
-      Fattura <strong>${f.numero}</strong> — €${f.totale||0}
+      Fattura <strong>${f.numero}</strong> � ��${f.totale||0}
     </div>`).join('') : '<p style="color:var(--text-muted)">Nessuna fattura associata</p>';
   document.getElementById('prod-tab-fatture').innerHTML = fatHtml;
   const mediaHtml = renderProdottoMediaPanel(p);
@@ -1521,20 +1521,20 @@ async function getQR(id) {
   const win = window.open('', '_blank', 'width=400,height=450');
   win.document.write(`<html><body style="background:#f4f6f9;font-family:Inter,sans-serif;padding:30px;text-align:center">
     <h3>${data.codice}</h3><img src="${data.qr}" style="width:200px"><br>
-    <p>${data.nome}</p><a href="/api/etichetta/${id}/pdf">📥 PDF etichetta</a>
+    <p>${data.nome}</p><a href="/api/etichetta/${id}/pdf">�x� PDF etichetta</a>
   </body></html>`);
 }
 
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // MAGAZZINO
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 async function loadMagazzino() {
   const rows = await api('GET', '/prodotti/magazzino/giacenze');
   document.getElementById('mag-body').innerHTML = (rows||[]).map(p => `
-    <tr><td><code>${p.codice_interno}</code></td><td>${p.nome}</td><td>${p.categoria||'—'}</td>
+    <tr><td><code>${p.codice_interno}</code></td><td>${p.nome}</td><td>${p.categoria||'�'}</td>
     <td><strong style="color:${p.giacenza>0?'var(--success)':'var(--danger)'}">${p.giacenza}</strong></td></tr>`).join('');
   const sel = document.getElementById('mov-prodotto');
-  sel.innerHTML = '<option value="">Seleziona...</option>' + (rows||[]).map(p => `<option value="${p.id}">${p.codice_interno} — ${p.nome}</option>`).join('');
+  sel.innerHTML = '<option value="">Seleziona...</option>' + (rows||[]).map(p => `<option value="${p.id}">${p.codice_interno} � ${p.nome}</option>`).join('');
 }
 
 async function salvaMovimento() {
@@ -1544,9 +1544,9 @@ async function salvaMovimento() {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // ORDINI
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 function escapeAttr(value) {
   return String(value ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -1911,18 +1911,18 @@ async function loadPreventivi() {
   if (body) {
     body.innerHTML = (rows || []).map(p => `
       <tr><td><strong>${p.codice_preventivo}</strong></td>
-      <td>${p.ragione_sociale || '—'}</td><td>${p.data_preventivo || '—'}</td>
-      <td>${p.data_scadenza || '—'}</td>
-      <td>${p.totale ? 'EUR ' + Number(p.totale).toFixed(2) : '—'}</td>
+      <td>${p.ragione_sociale || '�'}</td><td>${p.data_preventivo || '�'}</td>
+      <td>${p.data_scadenza || '�'}</td>
+      <td>${p.totale ? 'EUR ' + Number(p.totale).toFixed(2) : '�'}</td>
       <td>${renderStateBadge(p.stato)}</td>
       <td><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-outline btn-sm" onclick="modificaPreventivo(${p.id})">Apri</button><button class="btn btn-outline btn-sm" onclick="openApiPdf('/preventivi/${p.id}/pdf')">PDF</button><button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('preventivo',${p.id})">Invia</button><select class="btn btn-outline btn-sm" onchange="cambiaStatoPreventivo(${p.id},this.value)">
         ${['bozza','inviato','accettato','rifiutato','scaduto'].map(s=>`<option value="${s}"${p.stato===s?' selected':''}>${s}</option>`).join('')}
       </select></div></td></tr>`).join('');
   }
   renderSummaryCards('preventivi-summary', [
-    { icon: '🧮', label: 'Preventivi', value: rows?.length || 0, meta: stato ? `Filtro: ${stato}` : 'Tutti gli stati', tone: 'primary' },
-    { icon: '📤', label: 'Inviati', value: (rows || []).filter(p => p.stato === 'inviato').length, meta: 'In attesa di risposta', tone: 'cyan' },
-    { icon: '✅', label: 'Accettati', value: (rows || []).filter(p => p.stato === 'accettato').length, meta: 'Pronti per ordine', tone: 'success' },
+    { icon: '�x��', label: 'Preventivi', value: rows?.length || 0, meta: stato ? `Filtro: ${stato}` : 'Tutti gli stati', tone: 'primary' },
+    { icon: '�x�', label: 'Inviati', value: (rows || []).filter(p => p.stato === 'inviato').length, meta: 'In attesa di risposta', tone: 'cyan' },
+    { icon: '�S&', label: 'Accettati', value: (rows || []).filter(p => p.stato === 'accettato').length, meta: 'Pronti per ordine', tone: 'success' },
     { icon: '⏳', label: 'Bozze', value: (rows || []).filter(p => p.stato === 'bozza').length, meta: 'Da completare', tone: 'warning' }
   ]);
   renderPreventiviMobileCards(rows || []);
@@ -1944,9 +1944,9 @@ function renderPreventiviMobileCards(rows) {
         ${renderStateBadge(p.stato)}
       </div>
       <div class="mobile-record-grid">
-        <div><span>Data</span><strong>${p.data_preventivo || '—'}</strong></div>
-        <div><span>Scadenza</span><strong>${p.data_scadenza || '—'}</strong></div>
-        <div><span>Totale</span><strong>${p.totale ? 'EUR ' + Number(p.totale).toFixed(2) : '—'}</strong></div>
+        <div><span>Data</span><strong>${p.data_preventivo || '�'}</strong></div>
+        <div><span>Scadenza</span><strong>${p.data_scadenza || '�'}</strong></div>
+        <div><span>Totale</span><strong>${p.totale ? 'EUR ' + Number(p.totale).toFixed(2) : '�'}</strong></div>
       </div>
       <div class="mobile-record-actions">
         <button class="btn btn-outline btn-sm" onclick="modificaPreventivo(${p.id})">Apri</button>
@@ -2044,17 +2044,17 @@ async function loadOrdini() {
   document.getElementById('ordini-body').innerHTML = (rows||[]).map(o => `
     <tr><td><strong>${o.codice_ordine}</strong></td>
     <td><span class="badge badge-${o.tipo==='vendita'?'cliente':'fornitore'}">${o.tipo}</span></td>
-    <td>${o.ragione_sociale||'—'}</td><td>${o.data_ordine||'—'}</td>
-    <td>${o.totale ? '€ '+o.totale.toFixed(2) : '—'}</td>
+    <td>${o.ragione_sociale||'�'}</td><td>${o.data_ordine||'�'}</td>
+    <td>${o.totale ? '�� '+o.totale.toFixed(2) : '�'}</td>
     <td>${renderStateBadge(o.stato)}</td>
       <td><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start"><button class="btn btn-outline btn-sm" onclick="openApiPdf('/ordini/${o.id}/pdf')">PDF</button><button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('ordine',${o.id})">Invia</button><button class="btn btn-outline btn-sm" onclick="creaDdtDaOrdine(${o.id})">Crea DDT</button><button class="btn btn-danger btn-sm" onclick="deleteOrdine(${o.id})">Elimina</button>${renderDocumentLogButton('ordine', o.id, 'desk')}<select class="btn btn-outline btn-sm" onchange="cambiaStatoOrdine(${o.id},this.value)">
       ${['ricevuto','confermato','in_lavorazione','spedito','consegnato','annullato'].map(s=>`<option value="${s}"${o.stato===s?' selected':''}>${s}</option>`).join('')}
     </select>${renderDocumentSendMeta(o)}</div></td></tr>`).join('');
   renderSummaryCards('ordini-summary', [
-    { icon: '📦', label: 'Ordini visibili', value: rows?.length || 0, meta: tipo ? `Filtro: ${tipo}` : 'Vendita e acquisto', tone: 'primary' },
-    { icon: '🟢', label: 'Vendite', value: (rows || []).filter(o => o.tipo === 'vendita').length, meta: 'Ordini lato cliente', tone: 'success' },
-    { icon: '🏭', label: 'Acquisti', value: (rows || []).filter(o => o.tipo === 'acquisto').length, meta: 'Ordini lato fornitore', tone: 'cyan' },
-    { icon: '🚚', label: 'Da chiudere', value: (rows || []).filter(o => !['consegnato', 'annullato'].includes(String(o.stato || '').toLowerCase())).length, meta: 'Ordini ancora attivi', tone: 'warning' }
+    { icon: '�x�', label: 'Ordini visibili', value: rows?.length || 0, meta: tipo ? `Filtro: ${tipo}` : 'Vendita e acquisto', tone: 'primary' },
+    { icon: '�xx�', label: 'Vendite', value: (rows || []).filter(o => o.tipo === 'vendita').length, meta: 'Ordini lato cliente', tone: 'success' },
+    { icon: '�x��', label: 'Acquisti', value: (rows || []).filter(o => o.tipo === 'acquisto').length, meta: 'Ordini lato fornitore', tone: 'cyan' },
+    { icon: '�xaa', label: 'Da chiudere', value: (rows || []).filter(o => !['consegnato', 'annullato'].includes(String(o.stato || '').toLowerCase())).length, meta: 'Ordini ancora attivi', tone: 'warning' }
   ]);
   renderOrdiniMobileCards(rows || []);
 }
@@ -2102,9 +2102,9 @@ async function creaOrdineDaPreventivo(id) {
   await openModal('modal-ordine', { fromPreventivoId: id });
 }
 
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // DDT
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 let ddtProdottiCache = [];
 
 function ensureDdtModal() {
@@ -2337,7 +2337,7 @@ async function toggleDocumentLog(kind, id, variant = 'desk') {
         ${events.length ? events.map(event => `
           <div class="doc-log-event">
             <div class="doc-log-event-title">${escapeHtml(getDocumentLogActionLabel(event))}</div>
-            <div class="doc-log-event-meta">${escapeHtml(event.user || 'Sistema')} • ${escapeHtml(formatDocumentLogDate(event.created_at))}</div>
+            <div class="doc-log-event-meta">${escapeHtml(event.user || 'Sistema')} ⬢ ${escapeHtml(formatDocumentLogDate(event.created_at))}</div>
           </div>
         `).join('') : '<div class="doc-log-empty">Nessun log disponibile</div>'}
       </div>
@@ -2444,10 +2444,10 @@ async function loadContainer() {
   const rows = await api('GET', '/container');
   document.getElementById('container-body').innerHTML = (rows||[]).map(c=>{
     const tot = ((c.costo_trasporto||0)+(c.costo_dogana||0)+(c.costo_altri||0)).toFixed(2);
-    return `<tr><td><strong>${c.numero_bl||'—'}</strong></td><td>${c.fornitore_nome||'—'}</td>
-    <td>${c.data_partenza||'—'}</td><td>${c.data_arrivo_prevista||'—'}</td>
+    return `<tr><td><strong>${c.numero_bl||'�'}</strong></td><td>${c.fornitore_nome||'�'}</td>
+    <td>${c.data_partenza||'�'}</td><td>${c.data_arrivo_prevista||'�'}</td>
     <td><span class="badge badge-${c.stato}">${c.stato.replace(/_/g,' ')}</span></td>
-    <td>€ ${tot}</td>
+    <td>�� ${tot}</td>
     <td><select class="btn btn-outline btn-sm" onchange="cambiaStatoContainer(${c.id},this.value)">
       ${['in_preparazione','in_transito','in_dogana','consegnato','annullato'].map(s=>`<option value="${s}"${c.stato===s?' selected':''}>${s.replace(/_/g,' ')}</option>`).join('')}
     </select></td></tr>`;
@@ -2456,17 +2456,17 @@ async function loadContainer() {
 
 async function cambiaStatoContainer(id, stato) { await api('PATCH', `/container/${id}/stato`, { stato }); loadContainer(); }
 
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // FATTURE
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 async function loadFatture() {
   const tipo = document.getElementById('filter-tipo-fattura')?.value || '';
   const rows = await api('GET', `/fatture?tipo=${tipo}`);
   document.getElementById('fatture-body').innerHTML = (rows||[]).map(f=>`
     <tr><td><strong>${f.numero}</strong></td>
     <td><span class="badge badge-${f.tipo==='ricevuta'?'fornitore':'cliente'}">${f.tipo}</span></td>
-    <td>${f.ragione_sociale||'—'}</td><td>${f.data||'—'}</td>
-    <td>${f.totale ? '€ '+f.totale.toFixed(2) : '—'}</td>
+    <td>${f.ragione_sociale||'�'}</td><td>${f.data||'�'}</td>
+    <td>${f.totale ? '�� '+f.totale.toFixed(2) : '�'}</td>
     <td><span class="badge badge-${f.stato}">${f.stato}</span></td>
     <td><select class="btn btn-outline btn-sm" onchange="cambiaStatoFattura(${f.id},this.value)">
       ${['ricevuta','pagata','scaduta','annullata'].map(s=>`<option value="${s}"${f.stato===s?' selected':''}>${s}</option>`).join('')}
@@ -2531,10 +2531,10 @@ async function importXML(input) {
     if (res?.parsed) {
       document.getElementById('xml-preview').style.display = 'block';
       document.getElementById('xml-data').innerHTML = `
-        <b>Numero:</b> ${res.parsed.numero||'—'}<br>
-        <b>Data:</b> ${res.parsed.data||'—'}<br>
-        <b>Totale:</b> € ${res.parsed.totale||0}<br>
-        <b>Fornitore P.IVA:</b> ${res.parsed.fornitore_piva||'—'}<br>
+        <b>Numero:</b> ${res.parsed.numero||'�'}<br>
+        <b>Data:</b> ${res.parsed.data||'�'}<br>
+        <b>Totale:</b> �� ${res.parsed.totale||0}<br>
+        <b>Fornitore P.IVA:</b> ${res.parsed.fornitore_piva||'�'}<br>
         <b>Righe:</b> ${res.parsed.righe?.length||0}`;
       toast('Fattura importata', 'success');
       loadFatture();
@@ -2542,10 +2542,10 @@ async function importXML(input) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // ATTIVITA
-// ═══════════════════════════════
-const ICONE = { telefonata:'📞', appuntamento:'📅', email:'✉️', visita:'🤝', nota:'📝' };
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
+const ICONE = { telefonata:'�x~', appuntamento:'�x&', email:'�S0️', visita:'�x��', nota:'�x�' };
 async function loadAttivita() {
   const [rows, meta] = await Promise.all([
     api('GET', '/attivita'),
@@ -2553,10 +2553,10 @@ async function loadAttivita() {
   ]);
   const todayKey = new Date().toDateString();
   renderSummaryCards('attivita-summary', [
-    { icon: '📋', label: 'Totali', value: rows?.length || 0, meta: 'Storico attività CRM', tone: 'primary' },
+    { icon: '�x9', label: 'Totali', value: rows?.length || 0, meta: 'Storico attività CRM', tone: 'primary' },
     { icon: '⏳', label: 'Aperte', value: (rows || []).filter(a => ['aperta', 'in_corso'].includes(String(a.stato || '').toLowerCase())).length, meta: 'Da seguire oggi', tone: 'warning' },
-    { icon: '🗓️', label: 'Oggi', value: (rows || []).filter(a => a.data_ora && new Date(a.data_ora).toDateString() === todayKey).length, meta: 'Attività con data odierna', tone: 'cyan' },
-    { icon: '☁️', label: 'Sync Google', value: (rows || []).filter(a => !!a.google_event_id).length, meta: 'Eventi agganciati al calendario', tone: 'success' }
+    { icon: '�x️', label: 'Oggi', value: (rows || []).filter(a => a.data_ora && new Date(a.data_ora).toDateString() === todayKey).length, meta: 'Attività con data odierna', tone: 'cyan' },
+    { icon: '�܁️', label: 'Sync Google', value: (rows || []).filter(a => !!a.google_event_id).length, meta: 'Eventi agganciati al calendario', tone: 'success' }
   ]);
   document.getElementById('attivita-list').innerHTML = (rows || []).map(a => {
     const noteFull = normalizeMailBody(a.note || '');
@@ -2567,13 +2567,13 @@ async function loadAttivita() {
       : (a.assegnato_nome ? `Assegnata a ${escapeHtml(a.assegnato_nome)}` : '');
     return `
     <div class="attivita-item ${mine ? 'is-mine' : ''}">
-      <div class="att-icon att-${a.tipo}">${ICONE[a.tipo] || '◎'}</div>
+      <div class="att-icon att-${a.tipo}">${ICONE[a.tipo] || '�}'}</div>
       <div style="min-width:0;flex:1">
         <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
           <div>
             <strong>${escapeHtml(a.oggetto || a.tipo)}</strong>
             ${mine ? `<div style="margin-top:6px"><span class="attivita-assigned-pill">Assegnata a te</span></div>` : ''}
-            ${a.ragione_sociale ? `<span style="color:var(--text-muted)"> — ${escapeHtml(a.ragione_sociale)}</span>` : ''}
+            ${a.ragione_sociale ? `<span style="color:var(--text-muted)"> � ${escapeHtml(a.ragione_sociale)}</span>` : ''}
           </div>
           ${renderStateBadge(a.stato || 'aperta')}
         </div>
@@ -2642,12 +2642,12 @@ async function salvaAttivita() {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // DOCUMENTI DRIVE
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 async function loadDocumenti() {
   if (!USER?.hasGoogle) {
-    document.getElementById('drive-files').innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)"><div style="font-size:40px">📁</div><p>Connetti Google per accedere ai documenti</p><button class="btn btn-accent" style="margin-top:16px" onclick="connectGoogle()">Connetti Google</button></div>';
+    document.getElementById('drive-files').innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)"><div style="font-size:40px">�x�</div><p>Connetti Google per accedere ai documenti</p><button class="btn btn-accent" style="margin-top:16px" onclick="connectGoogle()">Connetti Google</button></div>';
     const mepa = document.getElementById('mepa-mail-list');
     if (mepa) mepa.innerHTML = '<p style="color:var(--text-muted)">Connetti Google per leggere le mail MEPA.</p>';
     return;
@@ -2659,7 +2659,7 @@ async function loadDocumenti() {
   document.getElementById('drive-files').innerHTML = files.length ?
     files.map(f => `
       <div class="drive-file">
-        <button class="drive-file-del" onclick="deleteDriveFile('${f.id}',this)">✕</button>
+        <button class="drive-file-del" onclick="deleteDriveFile('${f.id}',this)">�S"</button>
         <div class="drive-file-icon">${driveIcon(f.mimeType)}</div>
         <a href="${f.webViewLink}" target="_blank" style="text-decoration:none">
           <div class="drive-file-name">${f.name}</div>
@@ -2939,8 +2939,17 @@ async function loadRdoPage() {
       const d = m ? new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4] || '9'), Number(m[5] || '0'), 0) : new Date(String(value).replace(' ', 'T'));
       return Number.isNaN(d.getTime()) ? null : d;
     };
+    const getRdoDeadlineValue = (row) =>
+      row?.raw?.['Data Limine Stipula contratto']
+      || row?.raw?.['Data Limite Stipula contratto']
+      || row?.raw?.['Data limite stipula contratto']
+      || row?.raw?.['Data limine stipula contratto']
+      || row?.raw?.['Data Limine stipula contratto']
+      || row?.raw?.['Data Limite stipula contratto']
+      || row?.scadenza
+      || '';
     const isExpiredRdo = (row) => {
-      const deadline = parseDeadlineValue(row?.scadenza);
+      const deadline = parseDeadlineValue(getRdoDeadlineValue(row));
       return deadline ? deadline.getTime() < Date.now() : false;
     };
 
@@ -2958,107 +2967,59 @@ async function loadRdoPage() {
 
     const activeRows = rows.filter(r => !isExpiredRdo(r));
     const expiredRows = rows.filter(r => isExpiredRdo(r));
+    const rawHeaders = [...new Set(rows.flatMap(r => Object.keys(r.raw || {})))];
 
-    const renderRdoRowsTable = (tableRows, titleText, emptyText) => `
-      <div class="table-wrapper rdo-main-table">
-        <div class="rdo-table-title">${escapeHtml(titleText)}</div>
-        ${tableRows.length ? `
-          <table class="data-table rdo-results-table" data-disable-tools="1">
-            <thead>
-              <tr>
-                <th style="width:170px">Numero RdO · Tipologia</th>
-                <th>Dettaglio RdO</th>
-                <th style="width:180px">Nome PO</th>
-                <th style="width:190px">Contatti</th>
-                <th>Match trovati</th>
-                <th>CPV trovati</th>
-                <th style="width:120px">Scadenza</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${tableRows.map(r => {
-                const categorieTrovate = [...new Set((r.cpv_matches || []).map(m => m.categoria_catalogo).filter(Boolean))];
-                const cpvMatches = r.cpv_matches || [];
-                const cpvTrovati = cpvMatches.map(m => ({
-                  codice: m.codice_cpv_display || m.codice_cpv,
-                  score: m.score,
-                  descrizione: m.descrizione || '',
-                  reason: m.reason || '',
-                  categoria: m.categoria_catalogo || ''
-                }));
-                const topCpv = cpvTrovati.slice(0, 3);
-                const codiceRdo = r.codice_rdo || r.raw?.Codice || r.raw?.CODICE || r.raw?.Numero || r.raw?.NUMERO || '';
-                const garaCompact = String(r.gara || 'Oggetto non indicato').trim();
-                return `
-                  <tr>
-                    <td>
-                      <div class="rdo-code-cell">
-                        <strong>${escapeHtml(codiceRdo || '—')}</strong>
-                        <span>${escapeHtml(r.tipologia_rdo || 'Tipologia non indicata')}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="rdo-detail-cell">
-                        <div class="rdo-ente">${escapeHtml(r.ente || 'Ente non indicato')}</div>
-                        <div class="rdo-gara">${escapeHtml(garaCompact.length > 160 ? `${garaCompact.slice(0, 160).trim()}…` : garaCompact)}</div>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="rdo-po-cell">
-                        <strong>${escapeHtml(r.nome_po || '—')}</strong>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="rdo-contact-cell">
-                        <div>Tel: ${escapeHtml(r.telefono_po || '—')}</div>
-                        <div>Cellulare: ${escapeHtml(r.cellulare_po || '—')}</div>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="rdo-match-cell">
-                        <div class="rdo-category-main">${escapeHtml((r.categoria || 'Senza categoria').substring(0, 220))}</div>
-                        <div class="rdo-pill-row">
-                          <span class="rdo-pill ${cpvMatches.length ? 'rdo-pill-success' : 'rdo-pill-neutral'}">${cpvMatches.length} match</span>
-                          <span class="rdo-pill rdo-pill-neutral">${categorieTrovate.length} categorie</span>
-                        </div>
-                        <div class="rdo-category-list">
-                          ${categorieTrovate.length ? categorieTrovate.map(item => `<span class="rdo-tag">${escapeHtml(item)}</span>`).join('') : '<span style="color:var(--text-muted)">Nessuna categoria trovata</span>'}
-                        </div>
-                        ${cpvMatches.length ? `
-                          <div class="rdo-match-reasons">
-                            ${cpvMatches.slice(0, 2).map(item => `
-                              <div class="rdo-match-reason">
-                                <strong>${escapeHtml(item.codice_cpv_display || item.codice_cpv || '')}</strong>
-                                <span>${escapeHtml(item.reason || 'match descrittivo')}</span>
-                              </div>
-                            `).join('')}
-                          </div>
-                        ` : ''}
-                      </div>
-                    </td>
-                    <td>
-                      <div class="rdo-cpv-list">
-                        ${topCpv.length ? topCpv.map(item => `
-                          <div class="rdo-cpv-item">
-                            <code>${escapeHtml(item.codice)}</code>
-                            <span class="rdo-score">score ${escapeHtml(item.score)}</span>
-                            ${item.descrizione ? `<div class="rdo-cpv-desc">${escapeHtml(item.descrizione)}</div>` : ''}
-                          </div>
-                        `).join('') : '<span style="color:var(--text-muted)">Nessun CPV</span>'}
-                        ${cpvTrovati.length > 3 ? `<div class="rdo-more">+${cpvTrovati.length - 3} altri match</div>` : ''}
-                      </div>
-                    </td>
-                    <td>
-                      <span class="rdo-deadline" style="color:${getDeadlineColor(r.scadenza)}">${escapeHtml(r.scadenza || '-')}</span>
-                    </td>
-                  </tr>
-                `;
-              }).join('')}
-            </tbody>
-          </table>
-        ` : `<p class="rdo-empty-note">${escapeHtml(emptyText)}</p>`}
-      </div>
-    `;
+    const formatRawCellValue = (value) => {
+      if (value === null || value === undefined) return '';
+      if (Array.isArray(value)) return value.join(', ');
+      if (typeof value === 'object') return JSON.stringify(value);
+      return String(value);
+    };
+
+    const renderRdoRowsTable = (tableRows, titleText, emptyText) =>
+      '<div class="table-wrapper rdo-main-table">'
+      + `<div class="rdo-table-title">${escapeHtml(titleText)}</div>`
+      + (tableRows.length ? (
+        '<table class="data-table rdo-results-table" data-disable-tools="1">'
+        + '<thead><tr>'
+        + rawHeaders.map(header => `<th>${escapeHtml(header)}</th>`).join('')
+        + '<th style="min-width:280px">CPV trovati</th>'
+        + '</tr></thead><tbody>'
+        + tableRows.map(r => {
+          const cpvMatches = r.cpv_matches || [];
+          const cpvTrovati = cpvMatches.map(m => ({
+            codice: m.codice_cpv_display || m.codice_cpv,
+            score: m.score,
+            descrizione: m.descrizione || '',
+            reason: m.reason || '',
+            categoria: m.categoria_catalogo || ''
+          }));
+          return '<tr>'
+            + rawHeaders.map(header => {
+              const normalizedHeader = normalizeText(header);
+              const rawValue = formatRawCellValue(r.raw?.[header]);
+              const isDeadlineColumn = normalizedHeader.includes('data limine stipula contratto') || normalizedHeader.includes('data limite stipula contratto');
+              return '<td class="rdo-raw-cell">'
+                + `<div class="rdo-raw-value"${isDeadlineColumn ? ` style="color:${getDeadlineColor(rawValue)}"` : ''}>${escapeHtml(rawValue || '�')}</div>`
+                + '</td>';
+            }).join('')
+            + '<td><div class="rdo-cpv-list">'
+            + (cpvTrovati.length ? cpvTrovati.map(item =>
+                '<div class="rdo-cpv-item">'
+                + `<code>${escapeHtml(item.codice)}</code>`
+                + `<span class="rdo-score">score ${escapeHtml(item.score)}</span>`
+                + (item.descrizione ? `<div class="rdo-cpv-desc">${escapeHtml(item.descrizione)}</div>` : '')
+                + (item.categoria ? `<div class="rdo-cpv-desc">${escapeHtml(item.categoria)}</div>` : '')
+                + (item.reason ? `<div class="rdo-cpv-desc">${escapeHtml(item.reason)}</div>` : '')
+                + '</div>'
+              ).join('') : '<span style="color:var(--text-muted)">Nessun CPV</span>')
+            + (cpvMatches.length ? `<div class="rdo-more">${cpvMatches.length} match trovati</div>` : '')
+            + '</div></td>'
+            + '</tr>';
+        }).join('')
+        + '</tbody></table>'
+      ) : `<p class="rdo-empty-note">${escapeHtml(emptyText)}</p>`)
+      + '</div>';
 
     wrap.innerHTML = `
       <div class="rdo-layout-grid">
@@ -3145,9 +3106,9 @@ async function removeMepaMail(id) {
 function getNotificationUrgencyMeta(level = 'media') {
   const key = ['alta', 'media', 'bassa'].includes(level) ? level : 'media';
   return {
-    alta: { label: 'Alta', icon: '▲', cls: 'urgency-alta' },
-    media: { label: 'Media', icon: '●', cls: 'urgency-media' },
-    bassa: { label: 'Bassa', icon: '■', cls: 'urgency-bassa' }
+    alta: { label: 'Alta', icon: '��', cls: 'urgency-alta' },
+    media: { label: 'Media', icon: '��', cls: 'urgency-media' },
+    bassa: { label: 'Bassa', icon: '��', cls: 'urgency-bassa' }
   }[key];
 }
 
@@ -3226,7 +3187,7 @@ function renderNotificationList(rows, { compact = false, targetId, emptyText }) 
           </div>
           <div class="notification-title-row">
             <h3>${escapeHtml(row.titolo || 'Notifica')}</h3>
-            <button class="btn btn-sm ${row.pinned ? 'btn-danger' : 'btn-outline'}" onclick="toggleNotificationPinned(${row.id}, ${row.pinned ? 1 : 0})" title="Metti in evidenza">${row.pinned ? '★' : '☆'}</button>
+            <button class="btn btn-sm ${row.pinned ? 'btn-danger' : 'btn-outline'}" onclick="toggleNotificationPinned(${row.id}, ${row.pinned ? 1 : 0})" title="Metti in evidenza">${row.pinned ? '��&' : '�� '}</button>
           </div>
           <p class="notification-message">${escapeHtml(message)}</p>
           <div class="notification-footer">
@@ -3372,21 +3333,21 @@ const AUTOMATION_SETTING_DEFS = [
   {
     key: 'automation.email_users_activity_assignments',
     label: 'Email utenti su nuove assegnazioni attività',
-    description: 'Quando assegniamo o riassegniamo un’attività, l’utente incaricato riceve anche una mail oltre alla notifica in-app.',
+    description: 'Quando assegniamo o riassegniamo un�"attività, l�"utente incaricato riceve anche una mail oltre alla notifica in-app.',
     group: 'attivita',
     audience: 'Utenti interni'
   },
   {
     key: 'automation.email_users_activity_updates',
     label: 'Email utenti su aggiornamenti attività',
-    description: 'Invia una mail agli utenti coinvolti quando cambiano stato, data o altri campi importanti dell’attività.',
+    description: 'Invia una mail agli utenti coinvolti quando cambiano stato, data o altri campi importanti dell�"attività.',
     group: 'attivita',
     audience: 'Utenti interni'
   },
   {
     key: 'automation.email_clients_activity_updates',
     label: 'Email clienti su aggiornamenti attività',
-    description: 'Manda una comunicazione esterna al cliente quando cambia stato o data di un’attività collegata.',
+    description: 'Manda una comunicazione esterna al cliente quando cambia stato o data di un�"attività collegata.',
     group: 'attivita',
     audience: 'Clienti'
   },
@@ -3426,24 +3387,24 @@ function renderAutomationSummary() {
   const summary = summarizeAutomationSettings();
   target.innerHTML = `
     <div class="summary-card tone-primary">
-      <div class="summary-card-top"><span class="summary-card-icon">⚙</span><span>Regole disponibili</span></div>
+      <div class="summary-card-top"><span class="summary-card-icon">�a"</span><span>Regole disponibili</span></div>
       <div class="summary-card-value">${summary.total}</div>
       <div class="summary-card-meta">Automazioni CRM pronte da gestire</div>
     </div>
     <div class="summary-card tone-success">
-      <div class="summary-card-top"><span class="summary-card-icon">✅</span><span>Automazioni attive</span></div>
+      <div class="summary-card-top"><span class="summary-card-icon">�S&</span><span>Automazioni attive</span></div>
       <div class="summary-card-value">${summary.enabled}</div>
       <div class="summary-card-meta">Flussi email attualmente accesi</div>
     </div>
     <div class="summary-card tone-warning">
-      <div class="summary-card-top"><span class="summary-card-icon">👥</span><span>Utenti interni</span></div>
+      <div class="summary-card-top"><span class="summary-card-icon">�x�</span><span>Utenti interni</span></div>
       <div class="summary-card-value">${summary.internal}</div>
       <div class="summary-card-meta">Regole attive verso il team</div>
     </div>
     <div class="summary-card tone-primary">
-      <div class="summary-card-top"><span class="summary-card-icon">📨</span><span>Clienti</span></div>
+      <div class="summary-card-top"><span class="summary-card-icon">�x�</span><span>Clienti</span></div>
       <div class="summary-card-value">${summary.clients}</div>
-      <div class="summary-card-meta">Regole attive verso l’esterno</div>
+      <div class="summary-card-meta">Regole attive verso l�"esterno</div>
     </div>
   `;
 }
@@ -3564,13 +3525,13 @@ async function saveSettingsPage() {
 }
 
 function formatAuditDetails(value) {
-  if (!value) return '—';
+  if (!value) return '�';
   try {
     const parsed = typeof value === 'string' ? JSON.parse(value) : value;
     if (!parsed || typeof parsed !== 'object') return escapeHtml(String(value));
     return Object.entries(parsed)
       .slice(0, 6)
-      .map(([k, v]) => `<div><strong>${escapeHtml(k)}:</strong> ${escapeHtml(Array.isArray(v) ? v.join(', ') : String(v ?? '—'))}</div>`)
+      .map(([k, v]) => `<div><strong>${escapeHtml(k)}:</strong> ${escapeHtml(Array.isArray(v) ? v.join(', ') : String(v ?? '�'))}</div>`)
       .join('');
   } catch {
     return escapeHtml(String(value));
@@ -3614,15 +3575,15 @@ async function loadAuditLog() {
   if (!body) return;
   body.innerHTML = rows.length ? rows.map(row => `
     <tr>
-      <td>${escapeHtml(String(row.creato_il || '—').replace('T', ' ').slice(0, 19))}</td>
+      <td>${escapeHtml(String(row.creato_il || '�').replace('T', ' ').slice(0, 19))}</td>
       <td>
         <strong>${escapeHtml(row.utente_nome || 'Sistema')}</strong>
         <div style="font-size:12px;color:var(--text-muted)">${escapeHtml(row.utente_email || '')}</div>
       </td>
-      <td><span class="status-chip status-chip-info">${escapeHtml(row.azione || '—')}</span></td>
+      <td><span class="status-chip status-chip-info">${escapeHtml(row.azione || '�')}</span></td>
       <td>
-        <strong>${escapeHtml(row.entita_tipo || '—')}</strong>
-        <div style="font-size:12px;color:var(--text-muted)">ID: ${escapeHtml(row.entita_id ?? '—')}</div>
+        <strong>${escapeHtml(row.entita_tipo || '�')}</strong>
+        <div style="font-size:12px;color:var(--text-muted)">ID: ${escapeHtml(row.entita_id ?? '�')}</div>
       </td>
       <td style="font-size:12px;line-height:1.5">${formatAuditDetails(row.dettagli)}</td>
     </tr>
@@ -3670,7 +3631,7 @@ async function loadSystemLog() {
   if (!body) return;
   body.innerHTML = rows.length ? rows.map(row => `
     <tr>
-      <td>${escapeHtml(String(row.creato_il || '—').replace('T', ' ').slice(0, 19))}</td>
+      <td>${escapeHtml(String(row.creato_il || '�').replace('T', ' ').slice(0, 19))}</td>
       <td><span class="status-chip ${row.livello === 'error' ? 'status-chip-danger' : row.livello === 'warn' ? 'status-chip-warning' : 'status-chip-info'}">${escapeHtml(row.livello || 'info')}</span></td>
       <td>${escapeHtml(row.origine || 'app')}</td>
       <td><div style="font-size:12px"><strong>${escapeHtml(row.metodo || '-')}</strong> ${escapeHtml(row.route || '-')}</div></td>
@@ -3688,13 +3649,13 @@ async function clearSystemLog() {
 }
 
 function driveIcon(mime) {
-  if (mime?.includes('pdf')) return '📄';
-  if (mime?.includes('image')) return '🖼️';
-  if (mime?.includes('spreadsheet') || mime?.includes('excel')) return '📊';
-  if (mime?.includes('presentation')) return '📊';
-  if (mime?.includes('document') || mime?.includes('word')) return '📝';
-  if (mime?.includes('folder')) return '📁';
-  return '📎';
+  if (mime?.includes('pdf')) return '�x';
+  if (mime?.includes('image')) return '�x�️';
+  if (mime?.includes('spreadsheet') || mime?.includes('excel')) return '�x`';
+  if (mime?.includes('presentation')) return '�x`';
+  if (mime?.includes('document') || mime?.includes('word')) return '�x�';
+  if (mime?.includes('folder')) return '�x�';
+  return '�x}';
 }
 
 function formatSize(bytes) {
@@ -3838,7 +3799,7 @@ function ensureTableFilterRow(table) {
       const filterable = label && !/azioni|^$/.test(label.toLowerCase());
       cell.innerHTML = filterable
         ? `<input class="table-filter-input" type="text" placeholder="Filtra ${escapeHtml(label)}" data-col="${index}">`
-        : '<span class="table-filter-placeholder">—</span>';
+        : '<span class="table-filter-placeholder">�</span>';
       filterRow.appendChild(cell);
     });
     thead.appendChild(filterRow);
@@ -3850,23 +3811,23 @@ function ensureTableFilterRow(table) {
   });
 }
 
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // MAPPA PA
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 async function loadMappa() {
   const pa = await api('GET', '/anagrafiche/pa/mappa');
   const c = document.getElementById('mappa-container');
   if (!pa?.length) { c.innerHTML = '<p style="padding:40px;color:var(--text-muted)">Nessuna PA con coordinate. Aggiungi lat/lng nelle anagrafiche PA.</p>'; return; }
   c.innerHTML = `<div style="padding:20px"><table class="data-table"><thead><tr><th>PA</th><th>Città</th><th>Categoria</th><th>Coordinate</th><th></th></tr></thead><tbody>
-    ${pa.map(p=>`<tr><td>${p.ragione_sociale}</td><td>${p.citta||'—'}</td><td>${p.categoria_pa||'—'}</td>
+    ${pa.map(p=>`<tr><td>${p.ragione_sociale}</td><td>${p.citta||'�'}</td><td>${p.categoria_pa||'�'}</td>
     <td style="font-size:11px;color:var(--text-muted)">${p.lat}, ${p.lng}</td>
-    <td><a href="https://maps.google.com/?q=${p.lat},${p.lng}" target="_blank" style="color:var(--accent)">Apri mappa →</a></td></tr>`).join('')}
+    <td><a href="https://maps.google.com/?q=${p.lat},${p.lng}" target="_blank" style="color:var(--accent)">Apri mappa � </a></td></tr>`).join('')}
     </tbody></table></div>`;
 }
 
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // UTENTI
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 function getMarkerColor(type) {
   if (type === 'fornitore') return '#f59e0b';
   if (type === 'pa') return '#0ea5e9';
@@ -3953,9 +3914,9 @@ function renderMappaFallback(points) {
             <tbody>
               ${points.map(p => `
                 <tr>
-                  <td>${p.title || '—'}</td>
-                  <td>${p.marker_type || p.category || '—'}</td>
-                  <td>${p.address || '—'}</td>
+                  <td>${p.title || '�'}</td>
+                  <td>${p.marker_type || p.category || '�'}</td>
+                  <td>${p.address || '�'}</td>
                   <td>${p.lat}, ${p.lng}</td>
                   <td><a href="https://maps.google.com/?q=${p.lat},${p.lng}" target="_blank" rel="noopener" style="color:var(--accent)">Apri mappa</a></td>
                 </tr>
@@ -4006,7 +3967,7 @@ async function renderGoogleMap(points) {
         <div style="min-width:220px;max-width:280px;padding:4px 2px">
           <div style="font-weight:700;margin-bottom:6px">${point.title || 'Punto CRM'}</div>
           <div style="font-size:12px;color:#475569;margin-bottom:6px">${point.address || 'Indirizzo non disponibile'}</div>
-          <div style="font-size:12px;color:#64748b;margin-bottom:8px">Tipo: ${point.marker_type || point.category || '—'}</div>
+          <div style="font-size:12px;color:#64748b;margin-bottom:8px">Tipo: ${point.marker_type || point.category || '�'}</div>
           <a href="https://maps.google.com/?q=${point.lat},${point.lng}" target="_blank" rel="noopener" style="color:#32477c;font-weight:600;text-decoration:none">Apri in Google Maps</a>
         </div>
       `);
@@ -4082,9 +4043,9 @@ async function loadUtenti() {
   ]);
   document.getElementById('utenti-body').innerHTML = (rows||[]).map(u=>`
     <tr><td>${u.nome}</td><td>${u.email}</td>
-    <td><span class="badge badge-${RUOLI_NOMI[u.ruolo_id]||''}">${u.ruolo_nome||'—'}</span></td>
-    <td>${u.tema==='light'?'☀️ Chiaro':'🌙 Scuro'}</td>
-    <td>${u.attivo?'✅':'❌'}</td>
+    <td><span class="badge badge-${RUOLI_NOMI[u.ruolo_id]||''}">${u.ruolo_nome||'�'}</span></td>
+    <td>${u.tema==='light'?'�ܬ️ Chiaro':'�xR" Scuro'}</td>
+    <td>${u.attivo?'�S&':'�R'}</td>
     <td>
       <button class="btn btn-outline btn-sm" onclick="editUtente(${u.id})">Modifica</button>
       <button class="btn btn-outline btn-sm" onclick="mostraBigliettoUtente(${u.id})">Biglietto</button>
@@ -4223,9 +4184,9 @@ async function salvaPermessi() {
   catch (e) { toast(e.message, 'error'); }
 }
 
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // MODAL UTILS
-// ═══════════════════════════════
+// �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 async function openModal(id, context = null) {
   if (id === 'modal-ddt') await preparaDdtModal(context);
   if (id === 'modal-preventivo') await preparePreventivoModal(context);
@@ -4286,10 +4247,10 @@ async function loadAttivita() {
   ]);
   const todayKey = new Date().toDateString();
   renderSummaryCards('attivita-summary', [
-    { icon: '📋', label: 'Totali', value: rows?.length || 0, meta: 'Storico attività CRM', tone: 'primary' },
+    { icon: '�x9', label: 'Totali', value: rows?.length || 0, meta: 'Storico attività CRM', tone: 'primary' },
     { icon: '⏳', label: 'Aperte', value: (rows || []).filter(a => ['aperta', 'in_corso'].includes(String(a.stato || '').toLowerCase())).length, meta: 'Da seguire oggi', tone: 'warning' },
-    { icon: '🗓️', label: 'Oggi', value: (rows || []).filter(a => a.data_ora && new Date(a.data_ora).toDateString() === todayKey).length, meta: 'Attività con data odierna', tone: 'cyan' },
-    { icon: '☁️', label: 'Sync Google', value: (rows || []).filter(a => !!a.google_event_id).length, meta: 'Eventi agganciati al calendario', tone: 'success' }
+    { icon: '�x️', label: 'Oggi', value: (rows || []).filter(a => a.data_ora && new Date(a.data_ora).toDateString() === todayKey).length, meta: 'Attività con data odierna', tone: 'cyan' },
+    { icon: '�܁️', label: 'Sync Google', value: (rows || []).filter(a => !!a.google_event_id).length, meta: 'Eventi agganciati al calendario', tone: 'success' }
   ]);
   document.getElementById('attivita-list').innerHTML = (rows || []).map(a => {
     const noteFull = normalizeMailBody(a.note || '');
@@ -4300,13 +4261,13 @@ async function loadAttivita() {
       : (a.assegnato_nome ? `Assegnata a ${escapeHtml(a.assegnato_nome)}` : '');
     return `
     <div class="attivita-item ${mine ? 'is-mine' : ''}">
-      <div class="att-icon att-${a.tipo}">${ICONE[a.tipo] || '◎'}</div>
+      <div class="att-icon att-${a.tipo}">${ICONE[a.tipo] || '�}'}</div>
       <div style="min-width:0;flex:1">
         <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
           <div>
             <strong>${escapeHtml(a.oggetto || a.tipo)}</strong>
             ${mine ? `<div style="margin-top:6px"><span class="attivita-assigned-pill">Assegnata a te</span></div>` : ''}
-            ${a.ragione_sociale ? `<span style="color:var(--text-muted)"> — ${escapeHtml(a.ragione_sociale)}</span>` : ''}
+            ${a.ragione_sociale ? `<span style="color:var(--text-muted)"> � ${escapeHtml(a.ragione_sociale)}</span>` : ''}
           </div>
           ${renderStateBadge(a.stato || 'aperta')}
         </div>

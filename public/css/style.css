@@ -1621,6 +1621,19 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
 .rdo-results-table td {
   vertical-align: top;
 }
+.rdo-results-table th,
+.rdo-results-table td {
+  white-space: normal;
+  word-break: break-word;
+}
+.rdo-raw-cell {
+  min-width: 140px;
+  max-width: 260px;
+}
+.rdo-raw-value {
+  font-size: 12px;
+  line-height: 1.45;
+}
 .rdo-category-cell strong {
   display: block;
   line-height: 1.35;
