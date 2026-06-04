@@ -45,6 +45,7 @@ app.use(session({
 }));
 
 // Routes
+app.use('/',                 require('./routes/public-products'));
 app.use('/api/auth',        require('./routes/auth'));
 app.use('/api/utenti',      require('./routes/utenti'));
 app.use('/api/anagrafiche', require('./routes/anagrafiche'));

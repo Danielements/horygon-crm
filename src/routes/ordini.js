@@ -15,6 +15,52 @@ const s = (v) => (v === undefined || v === '' || v === null) ? null : v;
 const n = (v) => { const p = parseFloat(v); return isNaN(p) ? null : p; };
 const i = (v) => { const p = parseInt(v); return isNaN(p) ? null : p; };
 
+function getGiacenza(prodottoId) {
+  const row = db.prepare(`
+    SELECT COALESCE(SUM(CASE
+      WHEN tipo = 'carico' THEN quantita
+      WHEN tipo IN ('scarico', 'reso') THEN -quantita
+      WHEN tipo = 'rettifica' THEN quantita
+      ELSE 0
+    END), 0) AS giacenza
+    FROM magazzino_movimenti
+    WHERE prodotto_id = ?
+  `).get(prodottoId);
+  return Number(row?.giacenza || 0);
+}
+
+function normalizeOrdineRighe(righe = []) {
+  return (righe || [])
+    .map((riga) => ({
+      prodotto_id: i(riga.prodotto_id),
+      quantita: i(riga.quantita),
+      prezzo_unitario: n(riga.prezzo_unitario),
+      sconto: n(riga.sconto) || 0
+    }))
+    .filter((riga) => riga.prodotto_id && riga.quantita && riga.quantita > 0);
+}
+
+function syncMovimentiFromOrdine(ordineId, tipo, righe = []) {
+  if (tipo !== 'vendita') return;
+  const ins = db.prepare(`
+    INSERT INTO magazzino_movimenti (prodotto_id,tipo,quantita,riferimento_tipo,riferimento_id,note)
+    VALUES (?,?,?,?,?,?)
+  `);
+  righe.forEach((riga) => {
+    if (getGiacenza(riga.prodotto_id) < riga.quantita) {
+      throw new Error(`Giacenza insufficiente per il prodotto ${riga.prodotto_id}`);
+    }
+    ins.run(
+      riga.prodotto_id,
+      'scarico',
+      riga.quantita,
+      'ordine',
+      ordineId,
+      'Movimento automatico da ordine vendita'
+    );
+  });
+}
+
 // Upload allegati ordini
 const storageOrdini = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -99,25 +145,76 @@ router.get('/:id/pdf', requirePermesso('ordini', 'read'), async (req, res) => {
 router.post('/', requirePermesso('ordini', 'edit'), (req, res) => {
   const b = req.body || {};
   try {
+    const cleanRighe = normalizeOrdineRighe(b.righe);
+    db.exec('BEGIN');
     const r = db.prepare(`
       INSERT INTO ordini (codice_ordine,tipo,anagrafica_id,canale,data_ordine,data_consegna_prevista,imponibile,iva,totale,note,numero_spedizione,corriere,preventivo_id)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(s(b.codice_ordine), s(b.tipo), i(b.anagrafica_id), s(b.canale),
            s(b.data_ordine), s(b.data_consegna_prevista), n(b.imponibile) || 0, n(b.iva) || 0, n(b.totale), s(b.note),
            s(b.numero_spedizione), s(b.corriere), i(b.preventivo_id));
-    const id = r.lastInsertRowid;
-    if (b.righe?.length) {
+    const id = Number(r.lastInsertRowid);
+    if (cleanRighe.length) {
       const ins = db.prepare('INSERT INTO ordini_righe (ordine_id,prodotto_id,quantita,prezzo_unitario,sconto) VALUES (?,?,?,?,?)');
-      b.righe.forEach(riga => {
-        ins.run(id, i(riga.prodotto_id), i(riga.quantita), n(riga.prezzo_unitario), n(riga.sconto) || 0);
-        if (b.tipo === 'vendita') {
-          db.prepare('INSERT INTO magazzino_movimenti (prodotto_id,tipo,quantita,riferimento_tipo,riferimento_id) VALUES (?,?,?,?,?)')
-            .run(i(riga.prodotto_id), 'scarico', i(riga.quantita), 'ordine', id);
-        }
-      });
+      cleanRighe.forEach((riga) => ins.run(id, riga.prodotto_id, riga.quantita, riga.prezzo_unitario, riga.sconto));
+      syncMovimentiFromOrdine(id, s(b.tipo), cleanRighe);
     }
+    db.exec('COMMIT');
     res.json({ id });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch {}
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.put('/:id', requirePermesso('ordini', 'edit'), (req, res) => {
+  const ordineId = Number(req.params.id);
+  const b = req.body || {};
+  const existing = db.prepare('SELECT * FROM ordini WHERE id = ?').get(ordineId);
+  if (!existing) return res.status(404).json({ error: 'Ordine non trovato' });
+
+  const linkedDdt = db.prepare('SELECT id, numero_ddt FROM ddt WHERE ordine_id = ? LIMIT 1').get(ordineId);
+  if (linkedDdt) {
+    return res.status(400).json({ error: `Ordine collegato al DDT ${linkedDdt.numero_ddt || linkedDdt.id}` });
+  }
+
+  try {
+    const cleanRighe = normalizeOrdineRighe(b.righe);
+    db.exec('BEGIN');
+    db.prepare('DELETE FROM magazzino_movimenti WHERE riferimento_tipo = ? AND riferimento_id = ?').run('ordine', ordineId);
+    db.prepare('DELETE FROM ordini_righe WHERE ordine_id = ?').run(ordineId);
+    db.prepare(`
+      UPDATE ordini
+      SET codice_ordine=?, tipo=?, anagrafica_id=?, canale=?, data_ordine=?, data_consegna_prevista=?,
+          imponibile=?, iva=?, totale=?, note=?, numero_spedizione=?, corriere=?, preventivo_id=?
+      WHERE id=?
+    `).run(
+      s(b.codice_ordine),
+      s(b.tipo),
+      i(b.anagrafica_id),
+      s(b.canale),
+      s(b.data_ordine),
+      s(b.data_consegna_prevista),
+      n(b.imponibile) || 0,
+      n(b.iva) || 0,
+      n(b.totale),
+      s(b.note),
+      s(b.numero_spedizione),
+      s(b.corriere),
+      i(b.preventivo_id),
+      ordineId
+    );
+    if (cleanRighe.length) {
+      const ins = db.prepare('INSERT INTO ordini_righe (ordine_id,prodotto_id,quantita,prezzo_unitario,sconto) VALUES (?,?,?,?,?)');
+      cleanRighe.forEach((riga) => ins.run(ordineId, riga.prodotto_id, riga.quantita, riga.prezzo_unitario, riga.sconto));
+      syncMovimentiFromOrdine(ordineId, s(b.tipo), cleanRighe);
+    }
+    db.exec('COMMIT');
+    res.json({ id: ordineId });
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch {}
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // Aggiorna stato con automazioni
@@ -177,12 +274,6 @@ router.patch('/:id/stato', requirePermesso('ordini', 'edit'), async (req, res, n
     if (e.code === 'SQLITE_CONSTRAINT') return next();
     res.status(400).json({ error: e.message });
   }
-});
-
-// Aggiorna stato
-router.patch('/:id/stato', requirePermesso('ordini', 'edit'), (req, res) => {
-  db.prepare('UPDATE ordini SET stato=? WHERE id=?').run(s(req.body.stato), req.params.id);
-  res.json({ ok: true });
 });
 
 // Aggiorna tracking

@@ -97,8 +97,6 @@ function getGiacenza(prodottoId) {
 
 function syncMovimentiFromDdt(ddtId, tipo, righe = []) {
   if (!['entrata', 'uscita'].includes(tipo)) return;
-  const existing = db.prepare(`SELECT COUNT(*) as n FROM magazzino_movimenti WHERE riferimento_tipo = 'ddt' AND riferimento_id = ?`).get(ddtId);
-  if (existing.n > 0) return;
   const movTipo = tipo === 'entrata' ? 'carico' : 'scarico';
   const ins = db.prepare('INSERT INTO magazzino_movimenti (prodotto_id,tipo,quantita,riferimento_tipo,riferimento_id,note) VALUES (?,?,?,?,?,?)');
   righe.forEach(r => {
@@ -152,7 +150,7 @@ router.delete('/ddt/:id', requirePermesso('ddt', 'delete'), (req, res) => {
   res.json({ ok: true });
 });
 
-router.post('/ddt', (req, res) => {
+router.post('/ddt', requirePermesso('ddt', 'edit'), (req, res) => {
   const {
     numero_ddt, tipo, ordine_id, fattura_id, data, mittente_id, destinatario_id,
     indirizzo_consegna, lat_consegna, lng_consegna, vettore, spedizione_attiva,
@@ -173,7 +171,7 @@ router.post('/ddt', (req, res) => {
         s(indirizzo_consegna), lat_consegna || null, lng_consegna || null, s(vettore),
         spedizione_attiva ? 1 : 0, s(corriere), s(numero_spedizione), s(tracking_url), s(note_spedizione),
         s(causale), s(resa), s(porto), i(colli), n(peso_totale), s(aspetto_beni), s(data_ora_trasporto), s(note));
-    const id = r.lastInsertRowid;
+    const id = Number(r.lastInsertRowid);
     if (cleanRighe.length) {
       const ins = db.prepare('INSERT INTO ddt_righe (ddt_id,prodotto_id,quantita,lotto) VALUES (?,?,?,?)');
       cleanRighe.forEach(riga => ins.run(id, riga.prodotto_id, riga.quantita, riga.lotto));
@@ -181,6 +179,72 @@ router.post('/ddt', (req, res) => {
     }
     db.exec('COMMIT');
     res.json({ id });
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch {}
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.put('/ddt/:id', requirePermesso('ddt', 'edit'), (req, res) => {
+  const ddtId = Number(req.params.id);
+  const existing = db.prepare('SELECT * FROM ddt WHERE id = ?').get(ddtId);
+  if (!existing) return res.status(404).json({ error: 'DDT non trovato' });
+
+  const {
+    numero_ddt, tipo, ordine_id, fattura_id, data, mittente_id, destinatario_id,
+    indirizzo_consegna, lat_consegna, lng_consegna, vettore, spedizione_attiva,
+    corriere, numero_spedizione, tracking_url, note_spedizione, causale, resa,
+    porto, colli, peso_totale, aspetto_beni, data_ora_trasporto, note, righe
+  } = req.body || {};
+
+  try {
+    const ddtTipo = ['entrata', 'uscita'].includes(s(tipo)) ? s(tipo) : 'uscita';
+    const cleanRighe = (righe || [])
+      .map(r => ({ prodotto_id: i(r.prodotto_id), quantita: i(r.quantita), lotto: s(r.lotto) }))
+      .filter(r => r.prodotto_id && r.quantita && r.quantita > 0);
+
+    db.exec('BEGIN');
+    db.prepare('DELETE FROM magazzino_movimenti WHERE riferimento_tipo = ? AND riferimento_id = ?').run('ddt', ddtId);
+    db.prepare('DELETE FROM ddt_righe WHERE ddt_id = ?').run(ddtId);
+    db.prepare(`UPDATE ddt SET
+      numero_ddt=?, tipo=?, ordine_id=?, fattura_id=?, data=?, mittente_id=?, destinatario_id=?,
+      indirizzo_consegna=?, lat_consegna=?, lng_consegna=?, vettore=?, spedizione_attiva=?, corriere=?,
+      numero_spedizione=?, tracking_url=?, note_spedizione=?, causale=?, resa=?, porto=?, colli=?,
+      peso_totale=?, aspetto_beni=?, data_ora_trasporto=?, note=?
+      WHERE id=?`).run(
+      s(numero_ddt) || existing.numero_ddt,
+      ddtTipo,
+      i(ordine_id),
+      i(fattura_id),
+      s(data),
+      i(mittente_id),
+      i(destinatario_id),
+      s(indirizzo_consegna),
+      n(lat_consegna),
+      n(lng_consegna),
+      s(vettore),
+      spedizione_attiva ? 1 : 0,
+      s(corriere),
+      s(numero_spedizione),
+      s(tracking_url),
+      s(note_spedizione),
+      s(causale),
+      s(resa),
+      s(porto),
+      i(colli),
+      n(peso_totale),
+      s(aspetto_beni),
+      s(data_ora_trasporto),
+      s(note),
+      ddtId
+    );
+    if (cleanRighe.length) {
+      const ins = db.prepare('INSERT INTO ddt_righe (ddt_id,prodotto_id,quantita,lotto) VALUES (?,?,?,?)');
+      cleanRighe.forEach(riga => ins.run(ddtId, riga.prodotto_id, riga.quantita, riga.lotto));
+      syncMovimentiFromDdt(ddtId, ddtTipo, cleanRighe);
+    }
+    db.exec('COMMIT');
+    res.json({ id: ddtId });
   } catch (e) {
     try { db.exec('ROLLBACK'); } catch {}
     res.status(400).json({ error: e.message });
@@ -233,6 +297,9 @@ router.post('/ordini/:id/convert-to-ddt', (req, res) => {
     const ddtId = r.lastInsertRowid;
     const ins = db.prepare('INSERT INTO ddt_righe (ddt_id,prodotto_id,quantita,lotto) VALUES (?,?,?,?)');
     cleanRighe.forEach(riga => ins.run(ddtId, riga.prodotto_id, riga.quantita, riga.lotto));
+    if (ordine.tipo === 'vendita') {
+      db.prepare('DELETE FROM magazzino_movimenti WHERE riferimento_tipo = ? AND riferimento_id = ?').run('ordine', ordine.id);
+    }
     syncMovimentiFromDdt(ddtId, ddtTipo, cleanRighe);
     db.exec('COMMIT');
     res.json({ ok: true, ddt_id: ddtId, numero_ddt: ddtNumero });

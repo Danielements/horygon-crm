@@ -238,9 +238,10 @@ async function togglePushNotifications() {
 // TOAST
 // �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 function toast(msg, type = 'info') {
+  const icon = type === 'success' ? '&#10003;' : type === 'error' ? '&#9888;' : '&#9432;';
   const el = document.createElement('div');
   el.className = `toast ${type}`;
-  el.innerHTML = `<span>${type === 'success' ? '�S&' : type === 'error' ? '�R' : '��️'}</span> ${msg}`;
+  el.innerHTML = `<span>${icon}</span> ${msg}`;
   document.getElementById('toast-container').appendChild(el);
   setTimeout(() => el.remove(), 3500);
 }
@@ -263,7 +264,7 @@ async function init() {
     FORCE_PASSWORD_CHANGE = !!me.force_password_change;
     // Applica tema
     document.body.className = `theme-${USER.tema || 'dark'}`;
-    document.getElementById('btn-tema').textContent = USER.tema === 'light' ? '�xR"' : '�ܬ️';
+    document.getElementById('btn-tema').textContent = USER.tema === 'light' ? 'Tema chiaro' : 'Tema scuro';
     // UI utente
     document.getElementById('user-name').textContent = USER.nome;
     document.getElementById('user-role').textContent = RUOLI_LABEL?.[USER.ruolo_id] || '';
@@ -271,7 +272,7 @@ async function init() {
     const automationNavIcon = document.querySelector('.nav-item[data-section="automazioni"] .nav-icon');
     if (automationNavIcon) automationNavIcon.innerHTML = '&#9889;';
     // Google status
-    document.getElementById('btn-google').textContent = USER.hasGoogle ? '�S&' : '�x';
+    document.getElementById('btn-google').textContent = USER.hasGoogle ? 'Google collegato' : 'Collega Google';
     // Permessi
     PERMS = {};
     (USER.permessi || []).forEach(p => { PERMS[p.sezione] = p; });
@@ -437,7 +438,7 @@ async function toggleTema() {
     TOKEN = data.token;
     USER.tema = newTema;
     document.body.className = `theme-${newTema}`;
-    document.getElementById('btn-tema').textContent = newTema === 'light' ? '�xR"' : '�ܬ️';
+    document.getElementById('btn-tema').textContent = newTema === 'light' ? 'Tema chiaro' : 'Tema scuro';
   } catch {}
 }
 
@@ -878,11 +879,11 @@ function normalizeMailBody(value) {
 function compactText(value, max = 180) {
   const text = normalizeMailBody(value);
   if (text.length <= max) return text;
-  return `${text.slice(0, max).trim()}⬦`;
+  return `${text.slice(0, max).trim()}...`;
 }
 
 function formatDateTimeIt(value) {
-  if (!value) return '�';
+  if (!value) return '-';
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return String(value);
   return parsed.toLocaleString('it-IT', {
@@ -895,16 +896,16 @@ function formatDateTimeIt(value) {
 }
 
 function formatDateIt(value) {
-  if (!value) return '�';
+  if (!value) return '-';
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return String(value);
   return parsed.toLocaleDateString('it-IT');
 }
 
 function formatCurrencyIt(value) {
-  if (value === null || value === undefined || value === '') return '�';
+  if (value === null || value === undefined || value === '') return '-';
   const num = Number(value);
-  if (Number.isNaN(num)) return '�';
+  if (Number.isNaN(num)) return '-';
   return num.toLocaleString('it-IT', { style: 'currency', currency: 'EUR' });
 }
 
@@ -914,7 +915,7 @@ function renderSummaryCards(targetId, items = []) {
   box.innerHTML = items.map(item => `
     <div class="summary-card ${item.tone ? `tone-${item.tone}` : ''}">
       <div class="summary-card-top">
-        <span class="summary-card-icon">${item.icon || '⬢'}</span>
+        <span class="summary-card-icon">${item.icon || "&bull;"}</span>
         <span class="summary-card-label">${escapeHtml(item.label || '')}</span>
       </div>
       <div class="summary-card-value">${escapeHtml(item.value ?? '0')}</div>
@@ -928,10 +929,10 @@ function renderDashboardFocusCards({ ordini = [], clienti = [], container = [], 
   const mepaClients = clienti.filter(c => !!c.pa_mepa).length;
   const highAlerts = notifications.filter(n => !n.letta && n.livello_urgenza === 'alta').length;
   renderSummaryCards('dashboard-focus-cards', [
-    { icon: '�x�', label: 'Ordini da seguire', value: openOrders, meta: 'Lavorazione e consegne in corso', tone: 'primary' },
-    { icon: '�x�:️', label: 'Clienti MEPA', value: mepaClients, meta: 'PA già pronte per opportunità', tone: 'cyan' },
-    { icon: '�xaa', label: 'Logistica attiva', value: container.filter(c => c.stato === 'in_transito').length, meta: 'Container ancora in transito', tone: 'warning' },
-    { icon: '�x', label: 'Alert urgenti', value: highAlerts, meta: highAlerts ? 'Da leggere subito' : 'Situazione sotto controllo', tone: highAlerts ? 'danger' : 'success' }
+    { icon: '&#128230;', label: 'Ordini da seguire', value: openOrders, meta: 'Lavorazione e consegne in corso', tone: 'primary' },
+    { icon: '&#128202;', label: 'Clienti MEPA', value: mepaClients, meta: 'PA gia pronte per opportunita', tone: 'cyan' },
+    { icon: '&#128666;', label: 'Logistica attiva', value: container.filter(c => c.stato === 'in_transito').length, meta: 'Container ancora in transito', tone: 'warning' },
+    { icon: '&#9888;', label: 'Alert urgenti', value: highAlerts, meta: highAlerts ? 'Da leggere subito' : 'Situazione sotto controllo', tone: highAlerts ? 'danger' : 'success' }
   ]);
 }
 
@@ -994,6 +995,7 @@ function renderOrdiniMobileCards(rows = []) {
       </div>
       ${renderDocumentSendMeta(o)}
       <div class="mobile-record-actions">
+        <button class="btn btn-outline btn-sm" onclick="editOrdine(${o.id})">Apri</button>
         <button class="btn btn-outline btn-sm" onclick="openApiPdf('/ordini/${o.id}/pdf')">PDF</button>
         <button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('ordine',${o.id})">Invia</button>
         <button class="btn btn-outline btn-sm" onclick="creaDdtDaOrdine(${o.id})">Crea DDT</button>
@@ -1518,7 +1520,9 @@ async function getQR(id) {
   const win = window.open('', '_blank', 'width=400,height=450');
   win.document.write(`<html><body style="background:#f4f6f9;font-family:Inter,sans-serif;padding:30px;text-align:center">
     <h3>${data.codice}</h3><img src="${data.qr}" style="width:200px"><br>
-    <p>${data.nome}</p><a href="/api/etichetta/${id}/pdf">�x� PDF etichetta</a>
+    <p>${data.nome}</p>
+    <p><a href="${data.url}" target="_blank" rel="noopener">Apri scheda pubblica prodotto</a></p>
+    <p><a href="/api/etichetta/${id}/pdf">PDF etichetta</a></p>
   </body></html>`);
 }
 
@@ -1998,6 +2002,9 @@ async function prepareOrdineModal(context = null) {
   const [anag, prodotti] = await Promise.all([api('GET', '/anagrafiche'), api('GET', '/prodotti')]);
   ordineAnagraficheCache = anag || [];
   ordineProdottiCache = prodotti || [];
+  const editingId = Number(context?.ordineId || 0) || null;
+  const title = document.querySelector('#modal-ordine .modal-title');
+  if (title) title.textContent = editingId ? '📋 Modifica ordine' : '📋 Ordine';
   document.getElementById('ord-righe').innerHTML = '';
   document.getElementById('ord-id').value = '';
   document.getElementById('ord-preventivo-id').value = '';
@@ -2013,6 +2020,27 @@ async function prepareOrdineModal(context = null) {
   document.getElementById('ord-iva').value = '';
   document.getElementById('ord-totale').value = '';
   document.getElementById('ord-note').value = '';
+
+  if (editingId) {
+    const o = await api('GET', `/ordini/${editingId}`);
+    document.getElementById('ord-id').value = o.id;
+    document.getElementById('ord-preventivo-id').value = o.preventivo_id || '';
+    document.getElementById('ord-preventivo-label').value = o.preventivo_id ? (o.codice_preventivo || `#${o.preventivo_id}`) : '';
+    document.getElementById('ord-anagrafica').value = o.anagrafica_id || '';
+    document.getElementById('ord-anagrafica-label').value = o.ragione_sociale || '';
+    document.getElementById('ord-codice').value = o.codice_ordine || '';
+    document.getElementById('ord-tipo').value = o.tipo || 'vendita';
+    document.getElementById('ord-canale').value = o.canale || 'diretto';
+    document.getElementById('ord-data').value = o.data_ordine || new Date().toISOString().slice(0,10);
+    document.getElementById('ord-consegna').value = o.data_consegna_prevista || '';
+    document.getElementById('ord-imponibile').value = o.imponibile ?? '';
+    document.getElementById('ord-iva').value = o.iva ?? '';
+    document.getElementById('ord-totale').value = o.totale ?? '';
+    document.getElementById('ord-note').value = o.note || '';
+    (o.righe?.length ? o.righe : [{}]).forEach(aggiungiRigaOrdine);
+    ricalcolaRigheDocumento('ord');
+    return;
+  }
 
   if (context?.fromPreventivoId) {
     const p = await api('GET', `/preventivi/${context.fromPreventivoId}`);
@@ -2038,25 +2066,29 @@ async function prepareOrdineModal(context = null) {
 async function loadOrdini() {
   const tipo = document.getElementById('filter-tipo-ordine')?.value || '';
   const rows = await api('GET', `/ordini?tipo=${tipo}`);
-  document.getElementById('ordini-body').innerHTML = (rows||[]).map(o => `
+  document.getElementById('ordini-body').innerHTML = (rows || []).map(o => `
     <tr><td><strong>${o.codice_ordine}</strong></td>
-    <td><span class="badge badge-${o.tipo==='vendita'?'cliente':'fornitore'}">${o.tipo}</span></td>
-    <td>${o.ragione_sociale||'�'}</td><td>${o.data_ordine||'�'}</td>
-    <td>${o.totale ? '�� '+o.totale.toFixed(2) : '�'}</td>
+    <td><span class="badge badge-${o.tipo === 'vendita' ? 'cliente' : 'fornitore'}">${o.tipo}</span></td>
+    <td>${o.ragione_sociale || '-'}</td><td>${o.data_ordine || '-'}</td>
+    <td>${o.totale ? formatCurrencyIt(o.totale) : '-'}</td>
     <td>${renderStateBadge(o.stato)}</td>
-      <td><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start"><button class="btn btn-outline btn-sm" onclick="openApiPdf('/ordini/${o.id}/pdf')">PDF</button><button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('ordine',${o.id})">Invia</button><button class="btn btn-outline btn-sm" onclick="creaDdtDaOrdine(${o.id})">Crea DDT</button><button class="btn btn-danger btn-sm" onclick="deleteOrdine(${o.id})">Elimina</button>${renderDocumentLogButton('ordine', o.id, 'desk')}<select class="btn btn-outline btn-sm" onchange="cambiaStatoOrdine(${o.id},this.value)">
-      ${['ricevuto','confermato','in_lavorazione','spedito','consegnato','annullato'].map(s=>`<option value="${s}"${o.stato===s?' selected':''}>${s}</option>`).join('')}
+      <td><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start"><button class="btn btn-outline btn-sm" onclick="editOrdine(${o.id})">Apri</button><button class="btn btn-outline btn-sm" onclick="openApiPdf('/ordini/${o.id}/pdf')">PDF</button><button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('ordine',${o.id})">Invia</button><button class="btn btn-outline btn-sm" onclick="creaDdtDaOrdine(${o.id})">Crea DDT</button><button class="btn btn-danger btn-sm" onclick="deleteOrdine(${o.id})">Elimina</button>${renderDocumentLogButton('ordine', o.id, 'desk')}<select class="btn btn-outline btn-sm" onchange="cambiaStatoOrdine(${o.id},this.value)">
+      ${['ricevuto','confermato','in_lavorazione','spedito','consegnato','annullato'].map(s => `<option value="${s}"${o.stato === s ? ' selected' : ''}>${s}</option>`).join('')}
     </select>${renderDocumentSendMeta(o)}</div></td></tr>`).join('');
   renderSummaryCards('ordini-summary', [
-    { icon: '�x�', label: 'Ordini visibili', value: rows?.length || 0, meta: tipo ? `Filtro: ${tipo}` : 'Vendita e acquisto', tone: 'primary' },
-    { icon: '�xx�', label: 'Vendite', value: (rows || []).filter(o => o.tipo === 'vendita').length, meta: 'Ordini lato cliente', tone: 'success' },
-    { icon: '�x��', label: 'Acquisti', value: (rows || []).filter(o => o.tipo === 'acquisto').length, meta: 'Ordini lato fornitore', tone: 'cyan' },
-    { icon: '�xaa', label: 'Da chiudere', value: (rows || []).filter(o => !['consegnato', 'annullato'].includes(String(o.stato || '').toLowerCase())).length, meta: 'Ordini ancora attivi', tone: 'warning' }
+    { icon: '&#128230;', label: 'Ordini visibili', value: rows?.length || 0, meta: tipo ? `Filtro: ${tipo}` : 'Vendita e acquisto', tone: 'primary' },
+    { icon: '&#128722;', label: 'Vendite', value: (rows || []).filter(o => o.tipo === 'vendita').length, meta: 'Ordini lato cliente', tone: 'success' },
+    { icon: '&#127981;', label: 'Acquisti', value: (rows || []).filter(o => o.tipo === 'acquisto').length, meta: 'Ordini lato fornitore', tone: 'cyan' },
+    { icon: '&#9203;', label: 'Da chiudere', value: (rows || []).filter(o => !['consegnato', 'annullato'].includes(String(o.stato || '').toLowerCase())).length, meta: 'Ordini ancora attivi', tone: 'warning' }
   ]);
   renderOrdiniMobileCards(rows || []);
 }
 
 async function cambiaStatoOrdine(id, stato) { await api('PATCH', `/ordini/${id}/stato`, { stato }); loadOrdini(); }
+
+async function editOrdine(id) {
+  await openModal('modal-ordine', { ordineId: id });
+}
 
 async function deleteOrdine(id) {
   if (!confirm('Eliminare questo ordine?')) return;
@@ -2077,6 +2109,7 @@ async function creaDdtDaOrdine(id) {
 }
 
 async function salvaOrdine() {
+  const ordineId = Number(document.getElementById('ord-id').value || 0) || null;
   const body = {
     preventivo_id: document.getElementById('ord-preventivo-id').value || null,
     codice_ordine: document.getElementById('ord-codice').value,
@@ -2091,7 +2124,14 @@ async function salvaOrdine() {
     note: document.getElementById('ord-note').value,
     righe: collectDocumentoRighe('ord')
   };
-  try { await api('POST', '/ordini', body); closeAllModals(); toast('Ordine salvato', 'success'); loadOrdini(); loadPreventivi(); }
+  try {
+    await api(ordineId ? 'PUT' : 'POST', ordineId ? `/ordini/${ordineId}` : '/ordini', body);
+    closeAllModals();
+    toast(ordineId ? 'Ordine aggiornato' : 'Ordine salvato', 'success');
+    loadOrdini();
+    loadPreventivi();
+    loadMagazzino();
+  }
   catch (e) { toast(e.message, 'error'); }
 }
 
@@ -2112,6 +2152,7 @@ function ensureDdtModal() {
   modal.innerHTML = `
     <div class="modal-box doc-theme-box doc-theme-ddt">
       <div class="modal-title">DDT</div>
+      <input type="hidden" id="ddt-id">
       <div class="form-section-card">
         <div class="section-card-title">Anagrafica e dati testata</div>
         <div class="form-row">
@@ -2160,9 +2201,13 @@ function ensureDdtModal() {
   document.body.appendChild(modal);
 }
 
-async function preparaDdtModal() {
+async function preparaDdtModal(context = null) {
   ensureDdtModal();
+  const editingId = Number(context?.ddtId || 0) || null;
+  const title = document.querySelector('#modal-ddt .modal-title');
+  if (title) title.textContent = editingId ? 'Modifica DDT' : 'DDT';
   const today = new Date().toISOString().slice(0, 10);
+  document.getElementById('ddt-id').value = '';
   document.getElementById('ddt-data').value = today;
   document.getElementById('ddt-numero').value = 'DDT-' + today.replaceAll('-', '') + '-' + Math.floor(Math.random() * 1000);
   ['ddt-vettore','ddt-tracking','ddt-note','ddt-note-spedizione','ddt-causale','ddt-resa','ddt-colli','ddt-peso','ddt-aspetto','ddt-data-trasporto'].forEach(id => {
@@ -2178,10 +2223,34 @@ async function preparaDdtModal() {
   document.getElementById('ddt-destinatario').innerHTML = '<option value="">Seleziona...</option>' + (anag||[]).map(a=>`<option value="${a.id}">${a.ragione_sociale}</option>`).join('');
   document.getElementById('ddt-fattura').innerHTML = '<option value="">Nessuna</option>' + (fatture||[]).map(f=>`<option value="${f.id}">${f.numero} - ${f.ragione_sociale || ''}</option>`).join('');
   document.getElementById('ddt-righe').innerHTML = '';
+  if (editingId) {
+    const d = await api('GET', `/ddt/${editingId}`);
+    document.getElementById('ddt-id').value = d.id;
+    document.getElementById('ddt-numero').value = d.numero_ddt || '';
+    document.getElementById('ddt-tipo').value = d.tipo || 'uscita';
+    document.getElementById('ddt-data').value = d.data || today;
+    document.getElementById('ddt-destinatario').value = d.destinatario_id || '';
+    document.getElementById('ddt-fattura').value = d.fattura_id || '';
+    document.getElementById('ddt-vettore').value = d.vettore || '';
+    document.getElementById('ddt-spedizione').checked = !!d.spedizione_attiva;
+    document.getElementById('ddt-corriere').value = d.corriere || '';
+    document.getElementById('ddt-tracking').value = d.numero_spedizione || '';
+    document.getElementById('ddt-causale').value = d.causale || '';
+    document.getElementById('ddt-porto').value = d.porto || '';
+    document.getElementById('ddt-resa').value = d.resa || '';
+    document.getElementById('ddt-colli').value = d.colli ?? '';
+    document.getElementById('ddt-peso').value = d.peso_totale ?? '';
+    document.getElementById('ddt-aspetto').value = d.aspetto_beni || '';
+    document.getElementById('ddt-data-trasporto').value = d.data_ora_trasporto || '';
+    document.getElementById('ddt-note').value = d.note || '';
+    document.getElementById('ddt-note-spedizione').value = d.note_spedizione || '';
+    (d.righe?.length ? d.righe : [{}]).forEach(aggiungiRigaDdt);
+    return;
+  }
   aggiungiRigaDdt();
 }
 
-function aggiungiRigaDdt() {
+function aggiungiRigaDdt(data = {}) {
   const wrap = document.getElementById('ddt-righe');
   if (!wrap) return;
   const row = document.createElement('div');
@@ -2190,10 +2259,10 @@ function aggiungiRigaDdt() {
   row.style.marginBottom = '8px';
   row.innerHTML = `
     <div class="form-group"><label>Prodotto</label><select class="ddt-riga-prodotto">
-      <option value="">Seleziona...</option>${ddtProdottiCache.map(p=>`<option value="${p.id}" data-giacenza="${p.giacenza || 0}">${p.codice_interno} - ${p.nome} (${p.giacenza || 0})</option>`).join('')}
+      <option value="">Seleziona...</option>${ddtProdottiCache.map(p=>`<option value="${p.id}" data-giacenza="${p.giacenza || 0}"${String(p.id) === String(data.prodotto_id || '') ? ' selected' : ''}>${p.codice_interno} - ${p.nome} (${p.giacenza || 0})</option>`).join('')}
     </select></div>
-    <div class="form-group"><label>Quantita</label><input class="ddt-riga-quantita" type="number" min="1"></div>
-    <div class="form-group"><label>Lotto</label><input class="ddt-riga-lotto" type="text"></div>
+    <div class="form-group"><label>Quantita</label><input class="ddt-riga-quantita" type="number" min="1" value="${escapeAttr(data.quantita ?? '')}"></div>
+    <div class="form-group"><label>Lotto</label><input class="ddt-riga-lotto" type="text" value="${escapeAttr(data.lotto ?? '')}"></div>
     <button type="button" class="btn btn-danger btn-sm" onclick="this.closest('.ddt-riga').remove()">Rimuovi</button>`;
   wrap.appendChild(row);
 }
@@ -2211,7 +2280,11 @@ async function loadDdt() {
     <td>${d.fattura_numero || '-'}</td>
     <td>${d.spedizione_attiva ? `${d.corriere || '-'} ${d.numero_spedizione || ''}` : '-'}</td>
     <td>${d.righe_count || 0}</td>
-    <td><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start"><button class="btn btn-outline btn-sm" onclick="openApiPdf('/ddt/${d.id}/pdf')">PDF</button><button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('ddt',${d.id})">Invia</button><button class="btn btn-danger btn-sm" onclick="deleteDdt(${d.id})">Elimina</button>${renderDocumentLogButton('ddt', d.id, 'desk')}${renderDocumentSendMeta(d)}</div></td></tr>`).join('');
+    <td><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start"><button class="btn btn-outline btn-sm" onclick="editDdt(${d.id})">Apri</button><button class="btn btn-outline btn-sm" onclick="openApiPdf('/ddt/${d.id}/pdf')">PDF</button><button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('ddt',${d.id})">Invia</button><button class="btn btn-danger btn-sm" onclick="deleteDdt(${d.id})">Elimina</button>${renderDocumentLogButton('ddt', d.id, 'desk')}${renderDocumentSendMeta(d)}</div></td></tr>`).join('');
+}
+
+async function editDdt(id) {
+  await openModal('modal-ddt', { ddtId: id });
 }
 
 async function deleteDdt(id) {
@@ -2405,6 +2478,7 @@ async function sendDocumentEmail() {
 }
 
 async function salvaDdt() {
+  const ddtId = Number(document.getElementById('ddt-id')?.value || 0) || null;
   const righe = [...document.querySelectorAll('.ddt-riga')].map(row => ({
     prodotto_id: row.querySelector('.ddt-riga-prodotto')?.value || null,
     quantita: parseInt(row.querySelector('.ddt-riga-quantita')?.value) || null,
@@ -2413,6 +2487,7 @@ async function salvaDdt() {
   const body = {
     numero_ddt: document.getElementById('ddt-numero').value,
     tipo: document.getElementById('ddt-tipo').value,
+    ordine_id: null,
     data: document.getElementById('ddt-data').value,
     destinatario_id: document.getElementById('ddt-destinatario').value || null,
     fattura_id: document.getElementById('ddt-fattura').value || null,
@@ -2432,8 +2507,11 @@ async function salvaDdt() {
     righe,
   };
   try {
-    await api('POST', '/ddt', body);
-    closeAllModals(); toast('DDT salvato', 'success'); loadDdt(); loadMagazzino();
+    await api(ddtId ? 'PUT' : 'POST', ddtId ? `/ddt/${ddtId}` : '/ddt', body);
+    closeAllModals();
+    toast(ddtId ? 'DDT aggiornato' : 'DDT salvato', 'success');
+    loadDdt();
+    loadMagazzino();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -2542,7 +2620,7 @@ async function importXML(input) {
 // �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // ATTIVITA
 // �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
-const ICONE = { telefonata:'�x~', appuntamento:'�x&', email:'�S0️', visita:'�x��', nota:'�x�' };
+const ICONE = { telefonata:'&#9742;', appuntamento:'&#128197;', email:'&#9993;', visita:'&#128101;', nota:'&#128221;' };
 async function loadAttivita() {
   const [rows, meta] = await Promise.all([
     api('GET', '/attivita'),
@@ -2570,7 +2648,7 @@ async function loadAttivita() {
           <div>
             <strong>${escapeHtml(a.oggetto || a.tipo)}</strong>
             ${mine ? `<div style="margin-top:6px"><span class="attivita-assigned-pill">Assegnata a te</span></div>` : ''}
-            ${a.ragione_sociale ? `<span style="color:var(--text-muted)"> � ${escapeHtml(a.ragione_sociale)}</span>` : ''}
+            ${a.ragione_sociale ? `<span style="color:var(--text-muted)"> - ${escapeHtml(a.ragione_sociale)}</span>` : ''}
           </div>
           ${renderStateBadge(a.stato || 'aperta')}
         </div>
@@ -3114,9 +3192,9 @@ async function removeMepaMail(id) {
 function getNotificationUrgencyMeta(level = 'media') {
   const key = ['alta', 'media', 'bassa'].includes(level) ? level : 'media';
   return {
-    alta: { label: 'Alta', icon: '��', cls: 'urgency-alta' },
-    media: { label: 'Media', icon: '��', cls: 'urgency-media' },
-    bassa: { label: 'Bassa', icon: '��', cls: 'urgency-bassa' }
+    alta: { label: 'Alta', icon: '&#9888;', cls: 'urgency-alta' },
+    media: { label: 'Media', icon: '&#9432;', cls: 'urgency-media' },
+    bassa: { label: 'Bassa', icon: '&#10003;', cls: 'urgency-bassa' }
   }[key];
 }
 
@@ -3657,13 +3735,13 @@ async function clearSystemLog() {
 }
 
 function driveIcon(mime) {
-  if (mime?.includes('pdf')) return '�x';
-  if (mime?.includes('image')) return '�x�️';
-  if (mime?.includes('spreadsheet') || mime?.includes('excel')) return '�x`';
-  if (mime?.includes('presentation')) return '�x`';
-  if (mime?.includes('document') || mime?.includes('word')) return '�x�';
-  if (mime?.includes('folder')) return '�x�';
-  return '�x}';
+  if (mime?.includes('pdf')) return '&#128196;';
+  if (mime?.includes('image')) return '&#128247;';
+  if (mime?.includes('spreadsheet') || mime?.includes('excel')) return '&#128202;';
+  if (mime?.includes('presentation')) return '&#128200;';
+  if (mime?.includes('document') || mime?.includes('word')) return '&#128209;';
+  if (mime?.includes('folder')) return '&#128193;';
+  return '&#128196;';
 }
 
 function formatSize(bytes) {
@@ -4275,7 +4353,7 @@ async function loadAttivita() {
           <div>
             <strong>${escapeHtml(a.oggetto || a.tipo)}</strong>
             ${mine ? `<div style="margin-top:6px"><span class="attivita-assigned-pill">Assegnata a te</span></div>` : ''}
-            ${a.ragione_sociale ? `<span style="color:var(--text-muted)"> � ${escapeHtml(a.ragione_sociale)}</span>` : ''}
+            ${a.ragione_sociale ? `<span style="color:var(--text-muted)"> - ${escapeHtml(a.ragione_sociale)}</span>` : ''}
           </div>
           ${renderStateBadge(a.stato || 'aperta')}
         </div>
@@ -4546,3 +4624,4 @@ window.addEventListener('load', () => {
   organizeDashboardLayout();
   syncMobileLayoutState();
 });
+
