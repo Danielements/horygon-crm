@@ -1651,10 +1651,16 @@ function calcolaTotaleRiga({ quantita, prezzo_unitario, sconto = 0, aliquota_iva
   return { imponibile, importo_iva, totale_riga: imponibile + importo_iva };
 }
 
+function getPublicProductUrl(productId) {
+  return productId ? `${window.location.origin}/prodotto/${productId}` : '';
+}
+
 function buildDocumentoRigaHtml(prefix, cache, data = {}) {
   const selectedProduct = (cache || []).find(p => String(p.id) === String(data.prodotto_id || ''));
+  const publicUrl = selectedProduct ? getPublicProductUrl(selectedProduct.id) : '';
+  const cardClass = prefix === 'prev' ? 'dynamic-line-card preventivo-line-card' : 'dynamic-line-card';
   return `
-    <div class="${prefix}-riga dynamic-line-card">
+    <div class="${prefix}-riga ${cardClass}">
       <div class="form-row">
         <div class="form-group">
           <label>Articolo</label>
@@ -1676,9 +1682,30 @@ function buildDocumentoRigaHtml(prefix, cache, data = {}) {
         <div class="form-group"><label>Natura IVA</label><input type="text" class="${prefix}-natura" value="${escapeAttr(data.natura_iva)}"></div>
         <div class="form-group"><label>Totale riga</label><input type="number" step="0.01" class="${prefix}-totale" value="${escapeAttr(data.totale_riga ?? 0)}" readonly></div>
       </div>
-      <div style="display:flex;justify-content:flex-end"><button type="button" class="btn btn-danger btn-sm" onclick="this.closest('.dynamic-line-card').remove(); ricalcolaRigheDocumento('${prefix}')">Rimuovi</button></div>
+      <div class="document-line-footer">
+        <div class="document-line-links">
+          <a class="document-line-public-link ${prefix}-public-link" href="${escapeAttr(publicUrl || '#')}" target="_blank" rel="noopener" ${publicUrl ? '' : 'onclick="return false;" style="opacity:.55;pointer-events:none"'}>Apri scheda prodotto via QR</a>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button type="button" class="btn btn-outline btn-sm" onclick="aggiungiRigaDocumentoSotto(this,'${prefix}')">+ Aggiungi sotto</button>
+          <button type="button" class="btn btn-danger btn-sm" onclick="this.closest('.dynamic-line-card').remove(); ricalcolaRigheDocumento('${prefix}')">Rimuovi</button>
+        </div>
+      </div>
     </div>
   `;
+}
+
+function aggiungiRigaDocumentoSotto(button, prefix) {
+  const row = button.closest(`.${prefix}-riga`);
+  if (!row) return;
+  row.insertAdjacentHTML('afterend', buildDocumentoRigaHtml(prefix, getDocumentoCache(prefix), {}));
+  ricalcolaRigheDocumento(prefix);
+}
+
+function getDocumentoCache(prefix) {
+  if (prefix === 'prev') return preventivoProdottiCache;
+  if (prefix === 'ord') return ordineProdottiCache;
+  return fatturaProdottiCache;
 }
 
 function openProductPickerForRow(button, prefix) {
@@ -1698,6 +1725,14 @@ function openProductPickerForRow(button, prefix) {
       label.value = getRecordLabel('prodotti', product);
       const desc = row.querySelector(`.${prefix}-descrizione`);
       if (desc && !desc.value) desc.value = product.nome || product.descrizione || '';
+      const publicLink = row.querySelector(`.${prefix}-public-link`);
+      if (publicLink) {
+        publicLink.href = getPublicProductUrl(product.id);
+        publicLink.textContent = 'Apri scheda prodotto via QR';
+        publicLink.style.opacity = '1';
+        publicLink.style.pointerEvents = 'auto';
+        publicLink.onclick = null;
+      }
     }
   });
 }

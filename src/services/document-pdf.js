@@ -34,6 +34,16 @@ function bufferFromDoc(doc) {
   });
 }
 
+function addPageNumbers(doc) {
+  const range = doc.bufferedPageRange();
+  const total = range.count;
+  for (let index = 0; index < total; index += 1) {
+    doc.switchToPage(index);
+    doc.font('Helvetica').fontSize(8).fillColor('#6b7280')
+      .text(`${index + 1}/${total}`, 0, 792, { width: doc.page.width, align: 'center' });
+  }
+}
+
 function formatAddress(name, address, cap, city, province) {
   const line2 = [cap, city, province ? `(${province})` : ''].filter(Boolean).join(' ').trim();
   return [name, address, line2].filter(Boolean).join('\n') || '-';
@@ -107,6 +117,7 @@ function drawRowsTable(doc, theme, setup) {
   const rows = setup.rows || [];
   const title = setup.title || 'Righe';
   const footerTop = 730;
+  const continuationY = setup.continuationY || 156;
 
   const headerHeight = 24;
   const drawHeader = () => {
@@ -123,24 +134,36 @@ function drawRowsTable(doc, theme, setup) {
   drawHeader();
 
   rows.forEach((row, idx) => {
-    const rowHeight = 26;
-    if (y > footerTop) {
+    const rowHeight = typeof setup.rowHeight === 'function' ? setup.rowHeight(row) : (setup.rowHeight || 26);
+    if (y + rowHeight > footerTop) {
       doc.addPage();
       drawCommonFrame(doc, theme, setup.headerLines || []);
-      y = 72;
+      y = continuationY;
       drawHeader();
     }
     const fill = idx % 2 === 0 ? '#ffffff' : '#f8fafc';
     doc.roundedRect(startX, y, width, rowHeight, 4).fillAndStroke(fill, colors.line);
-    doc.fillColor(colors.ink).font('Helvetica').fontSize(8.5);
-    columns.forEach((col) => {
-      const value = typeof col.value === 'function' ? col.value(row) : row[col.key];
-      doc.text(String(value ?? '-'), startX + col.x, y + 8, { width: col.width, align: col.align || 'left' });
-    });
+    if (typeof setup.drawRow === 'function') {
+      setup.drawRow({ doc, row, y, rowHeight, startX, width, colors, columns, theme });
+    } else {
+      doc.fillColor(colors.ink).font('Helvetica').fontSize(8.5);
+      columns.forEach((col) => {
+        const value = typeof col.value === 'function' ? col.value(row) : row[col.key];
+        doc.text(String(value ?? '-'), startX + col.x, y + 8, { width: col.width, align: col.align || 'left' });
+      });
+    }
     y += rowHeight + 4;
   });
 
   return y;
+}
+
+function ensureDocumentSpace(doc, theme, headerLines, requiredHeight, currentY, continuationY = 156) {
+  const footerTop = 730;
+  if (currentY + requiredHeight <= footerTop) return currentY;
+  doc.addPage();
+  drawCommonFrame(doc, theme, headerLines || []);
+  return continuationY;
 }
 
 async function createPreventivoPdfBuffer(id) {
@@ -159,9 +182,10 @@ async function createPreventivoPdfBuffer(id) {
     ORDER BY r.id
   `).all(id);
 
-  const doc = new PDFDocument({ size: 'A4', margin: 40 });
+  const doc = new PDFDocument({ size: 'A4', margin: 40, bufferPages: true });
   const done = bufferFromDoc(doc);
   const theme = DOC_THEMES.preventivo;
+  const publicBaseUrl = process.env.BASE_URL || 'http://localhost:3001';
   const frame = drawCommonFrame(doc, theme, [
     `Numero: ${row.codice_preventivo || row.id}`,
     `Data: ${row.data_preventivo || '-'}`,
@@ -194,6 +218,7 @@ async function createPreventivoPdfBuffer(id) {
   y = drawRowsTable(doc, theme, {
     ...frame,
     y,
+    continuationY: 156,
     title: 'Articoli preventivo',
     headerLines: [
       `Numero: ${row.codice_preventivo || row.id}`,
@@ -201,6 +226,33 @@ async function createPreventivoPdfBuffer(id) {
       `Scadenza: ${row.data_scadenza || '-'}`
     ],
     rows: righe,
+    rowHeight: (r) => {
+      doc.font('Helvetica').fontSize(8.3);
+      const desc = r.descrizione || r.nome || '-';
+      const descHeight = doc.heightOfString(desc, { width: 200 });
+      const linkHeight = r.prodotto_id ? 11 : 0;
+      return Math.max(26, 14 + descHeight + linkHeight);
+    },
+    drawRow: ({ doc: currentDoc, row: currentRow, y: rowY, startX: tableStartX, colors: tableColors, theme: tableTheme }) => {
+      const publicUrl = currentRow.prodotto_id ? `${publicBaseUrl}/prodotto/${currentRow.prodotto_id}` : '';
+      const description = currentRow.descrizione || currentRow.nome || '-';
+      currentDoc.fillColor(tableColors.ink).font('Helvetica').fontSize(8.3);
+      currentDoc.text(currentRow.codice_interno || '-', tableStartX + 8, rowY + 8, { width: 72 });
+      currentDoc.text(description, tableStartX + 86, rowY + 8, { width: 200 });
+      const descHeight = currentDoc.heightOfString(description, { width: 200 });
+      if (publicUrl) {
+        currentDoc.fillColor(tableTheme.accent).fontSize(7.5).text('Scheda prodotto / QR', tableStartX + 86, rowY + 10 + descHeight, {
+          width: 200,
+          underline: true,
+          link: publicUrl
+        });
+      }
+      currentDoc.fillColor(tableColors.ink).font('Helvetica').fontSize(8.3);
+      currentDoc.text(Number(currentRow.quantita || 0).toFixed(2), tableStartX + 292, rowY + 8, { width: 40, align: 'right' });
+      currentDoc.text(money(currentRow.prezzo_unitario || 0, row.valuta || 'EUR'), tableStartX + 338, rowY + 8, { width: 64, align: 'right' });
+      currentDoc.text(currentRow.natura_iva || `${Number(currentRow.aliquota_iva || 0).toFixed(0)}%`, tableStartX + 408, rowY + 8, { width: 40, align: 'right' });
+      currentDoc.text(money(currentRow.totale_riga || 0, row.valuta || 'EUR'), tableStartX + 454, rowY + 8, { width: 53, align: 'right' });
+    },
     columns: [
       { label: 'Codice', x: 8, width: 72, value: (r) => r.codice_interno || '-' },
       { label: 'Descrizione', x: 86, width: 200, value: (r) => r.descrizione || r.nome || '-' },
@@ -212,6 +264,11 @@ async function createPreventivoPdfBuffer(id) {
   });
 
   y += 18;
+  y = ensureDocumentSpace(doc, theme, [
+    `Numero: ${row.codice_preventivo || row.id}`,
+    `Data: ${row.data_preventivo || '-'}`,
+    `Scadenza: ${row.data_scadenza || '-'}`
+  ], 92, y);
   drawInfoBox(doc, colors, theme.accent, 305, y, 250, 86, 'Totali', [
     `Imponibile: ${money(row.imponibile || 0, row.valuta || 'EUR')}`,
     `IVA: ${money(row.iva || 0, row.valuta || 'EUR')}`,
@@ -219,6 +276,7 @@ async function createPreventivoPdfBuffer(id) {
   ].join('\n'), theme.fill);
   drawInfoBox(doc, colors, theme.accent, 40, y, 250, 86, 'Note', row.note || 'Nessuna nota');
 
+  addPageNumbers(doc);
   doc.end();
   return {
     buffer: await done,
@@ -243,7 +301,7 @@ async function createOrdinePdfBuffer(id) {
     ORDER BY r.id
   `).all(id);
 
-  const doc = new PDFDocument({ size: 'A4', margin: 40 });
+  const doc = new PDFDocument({ size: 'A4', margin: 40, bufferPages: true });
   const done = bufferFromDoc(doc);
   const theme = DOC_THEMES.ordine;
   const frame = drawCommonFrame(doc, theme, [
@@ -296,6 +354,11 @@ async function createOrdinePdfBuffer(id) {
   });
 
   y += 18;
+  y = ensureDocumentSpace(doc, theme, [
+    `Numero: ${row.codice_ordine || row.id}`,
+    `Data: ${row.data_ordine || '-'}`,
+    `Consegna: ${row.data_consegna_prevista || '-'}`
+  ], 92, y);
   drawInfoBox(doc, colors, theme.accent, 305, y, 250, 86, 'Totali', [
     `Imponibile: ${money(row.imponibile || 0, 'EUR')}`,
     `IVA: ${money(row.iva || 0, 'EUR')}`,
@@ -303,6 +366,7 @@ async function createOrdinePdfBuffer(id) {
   ].join('\n'), theme.fill);
   drawInfoBox(doc, colors, theme.accent, 40, y, 250, 86, 'Note', row.note || 'Nessuna nota');
 
+  addPageNumbers(doc);
   doc.end();
   return {
     buffer: await done,
@@ -335,7 +399,7 @@ async function createDdtPdfBuffer(id) {
     ORDER BY r.id
   `).all(id);
 
-  const doc = new PDFDocument({ size: 'A4', margin: 40 });
+  const doc = new PDFDocument({ size: 'A4', margin: 40, bufferPages: true });
   const done = bufferFromDoc(doc);
   const theme = DOC_THEMES.ddt;
   const frame = drawCommonFrame(doc, theme, [
@@ -388,6 +452,11 @@ async function createDdtPdfBuffer(id) {
   });
 
   y += 18;
+  y = ensureDocumentSpace(doc, theme, [
+    `Numero: ${row.numero_ddt || row.id}`,
+    `Data: ${row.data || '-'}`,
+    `Tipo: ${row.tipo || '-'}`
+  ], 78, y);
   drawInfoBox(doc, colors, theme.accent, 40, y, 515, 72, 'Annotazioni', [
     row.vettore ? `Vettore: ${row.vettore}` : '',
     row.corriere ? `Corriere: ${row.corriere}` : '',
@@ -396,6 +465,7 @@ async function createDdtPdfBuffer(id) {
     row.note ? `Note: ${row.note}` : ''
   ].filter(Boolean).join('\n') || 'Nessuna annotazione');
 
+  addPageNumbers(doc);
   doc.end();
   return {
     buffer: await done,

@@ -1524,6 +1524,38 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
   border-radius: 12px;
   background: color-mix(in srgb, var(--bg-card) 82%, white 18%);
 }
+.document-lines-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 12px;
+}
+.preventivo-line-card {
+  background: color-mix(in srgb, var(--bg-card) 94%, #f3f4f6 6%);
+  border-color: color-mix(in srgb, var(--border) 75%, #d1d5db 25%);
+}
+.document-line-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.document-line-links {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.document-line-public-link {
+  color: var(--accent);
+  font-size: 12px;
+  text-decoration: none;
+  font-weight: 600;
+}
+.document-line-public-link:hover {
+  text-decoration: underline;
+}
 .form-section-card {
   margin-bottom: 16px;
   padding: 16px;
@@ -1574,6 +1606,13 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
 .modal-box-wide {
   width: min(1100px, 92vw);
 }
+.modal-box-preventivo {
+  width: min(60vw, 1280px);
+}
+#modal-preventivo {
+  width: min(60vw, 1280px);
+  max-width: 96vw;
+}
 .doc-theme-box {
   --doc-accent: var(--accent);
   border-top: 4px solid var(--doc-accent);
@@ -1587,6 +1626,13 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
 }
 .doc-theme-box .section-card-title {
   color: var(--doc-accent);
+}
+.preventivo-section-highlight {
+  background: color-mix(in srgb, var(--bg-card) 88%, rgba(197, 155, 8, 0.08) 12%);
+  box-shadow: inset 0 0 0 1px rgba(197, 155, 8, 0.12);
+}
+.preventivo-section-soft {
+  background: color-mix(in srgb, var(--bg-card) 92%, #f5f5f5 8%);
 }
 .doc-theme-preventivo {
   --doc-accent: #c59b08;

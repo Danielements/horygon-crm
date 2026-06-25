@@ -1147,10 +1147,10 @@
 
 <!-- MODAL PREVENTIVO -->
 <div id="modal-preventivo" class="modal">
-  <div class="modal-box doc-theme-box doc-theme-preventivo">
+  <div class="modal-box modal-box-preventivo doc-theme-box doc-theme-preventivo">
     <div class="modal-title">🧮 Preventivo</div>
     <input type="hidden" id="prev-id">
-    <div class="form-section-card">
+    <div class="form-section-card preventivo-section-highlight">
       <div class="section-card-title">Anagrafica e dati testata</div>
       <div class="form-row">
         <div class="form-group"><label>Codice Preventivo *</label><input type="text" id="prev-codice"></div>
@@ -1172,12 +1172,14 @@
         <div class="form-group"><label>Scadenza</label><input type="date" id="prev-scadenza"></div>
       </div>
     </div>
-    <div class="form-section-card">
-      <div class="section-card-title section-card-title-between">
+    <div class="form-section-card preventivo-section-soft">
+      <div class="section-card-title">
         <span>Articoli</span>
-        <button type="button" class="btn btn-outline btn-sm" onclick="aggiungiRigaPreventivo()">+ Riga</button>
       </div>
       <div id="prev-righe" class="dynamic-lines"></div>
+      <div class="document-lines-actions">
+        <button type="button" class="btn btn-outline btn-sm" onclick="aggiungiRigaPreventivo()">+ Aggiungi articolo</button>
+      </div>
     </div>
     <div class="form-section-card">
       <div class="section-card-title">Totali</div>
