@@ -1456,6 +1456,56 @@ async function loadProdotti() {
   scheduleResponsiveEnhancement();
 }
 
+async function loadProdotti() {
+  if ((document.getElementById('filter-prod-categoria')?.options?.length || 0) <= 1) {
+    await loadCategorie();
+  }
+  const q = document.getElementById('search-prod')?.value || '';
+  const categoriaId = document.getElementById('filter-prod-categoria')?.value || '';
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (categoriaId) params.set('categoria_id', categoriaId);
+  const rows = await api('GET', `/prodotti${params.toString() ? `?${params.toString()}` : ''}`);
+  document.getElementById('prod-body').innerHTML = (rows || []).map(p => {
+    const listino = p.listini?.find(l => l.canale === 'mepa') || p.listini?.[0];
+    const fornitore = p.fornitori?.[0];
+    const tags = String(p.tags || '').split(',').map(tag => tag.trim()).filter(Boolean);
+    const preview = p.immagine
+      ? `<img src="${escapeAttr(p.immagine)}" alt="${escapeAttr(p.nome || 'Prodotto')}" class="product-thumb">`
+      : '<div class="product-thumb product-thumb-placeholder">IMG</div>';
+    const categoriaLabel = p.categoria_nome || '-';
+    const prezzoLabel = listino?.prezzo ? `EUR ${listino.prezzo.toFixed(2)}` : '-';
+    const margineLabel = listino?.prezzo && fornitore?.prezzo_acquisto
+      ? (((listino.prezzo - fornitore.prezzo_acquisto) / listino.prezzo) * 100).toFixed(1) + '%'
+      : '-';
+    return `<tr>
+      <td data-prod-col="codice"><code>${p.codice_interno}</code></td>
+      <td data-prod-col="foto" class="product-photo-cell">${preview}</td>
+      <td data-prod-col="nome">
+        <div class="product-name-cell">
+          <div>
+            <div>${escapeHtml(p.nome || '-')}</div>
+            <div style="font-size:11px;color:var(--text-muted)">${p.fatture_count || 0} fatture | ${p.ddt_count || 0} DDT</div>
+            ${tags.length ? `<div class="product-tag-list">${tags.map(tag => `<span class="product-tag-chip">${escapeHtml(tag)}</span>`).join('')}</div>` : ''}
+          </div>
+        </div>
+      </td>
+      <td data-prod-col="categoria">${escapeHtml(categoriaLabel)}<div style="font-size:11px;color:var(--text-muted)">${p.cpv_mepa ? escapeHtml(formatCpvDisplay(p.cpv_mepa)) : 'CPV non assegnato'}</div></td>
+      <td data-prod-col="giacenza"><strong style="color:${(p.giacenza || 0) > 0 ? 'var(--success)' : 'var(--danger)'}">${p.giacenza || 0}</strong></td>
+      <td data-prod-col="prezzo">${prezzoLabel}</td>
+      <td data-prod-col="margine">${margineLabel}</td>
+      <td data-prod-col="azioni">
+        <button class="btn btn-outline btn-sm" onclick="editProdotto(${p.id})">Modifica</button>
+        <button class="btn btn-outline btn-sm" onclick="getQR(${p.id})">QR</button>
+        <button class="btn btn-danger btn-sm" onclick="eliminaProdotto(${p.id}, '${String(p.nome || '').replace(/'/g, "\\'")}')">Elimina</button>
+      </td>
+    </tr>`;
+  }).join('');
+  syncProductColumnMenu();
+  applyProductColumnVisibility();
+  scheduleResponsiveEnhancement();
+}
+
 async function editProdotto(id) {
   const p = await api('GET', `/prodotti/${id}`);
   document.getElementById('prod-id').value = p.id;

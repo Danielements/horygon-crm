@@ -1673,8 +1673,11 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
 }
 
 .product-thumb {
-  width: 64px;
-  height: 64px;
+  display: block;
+  width: 64px !important;
+  height: 64px !important;
+  max-width: 64px !important;
+  max-height: 64px !important;
   border-radius: 12px;
   border: 1px solid var(--border);
   object-fit: contain;
@@ -1694,11 +1697,13 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
   letter-spacing: 0.08em;
 }
 .product-photo-cell {
-  width: 84px;
+  width: 88px;
+  min-width: 88px;
+  text-align: center;
 }
 
 .product-col-hidden {
-  display: none;
+  display: none !important;
 }
 .modal-box-wide {
   width: min(1100px, 92vw);

@@ -49,6 +49,27 @@ const uploadProdotto = multer({ storage: storageProdotti });
 router.use(authMiddleware);
 
 router.get('/categorie', (req, res) => {
+  const mepaCategories = db.prepare(`
+    SELECT DISTINCT TRIM(nome) as nome, TRIM(descrizione) as descrizione
+    FROM mepa_categorie_abilitate
+    WHERE attiva = 1 AND TRIM(IFNULL(nome, '')) <> ''
+    ORDER BY nome COLLATE NOCASE
+  `).all();
+
+  const syncCategory = db.prepare(`
+    INSERT INTO categorie (nome, descrizione)
+    VALUES (?, ?)
+    ON CONFLICT(nome) DO UPDATE SET
+      descrizione = CASE
+        WHEN categorie.descrizione IS NULL OR categorie.descrizione = '' THEN excluded.descrizione
+        ELSE categorie.descrizione
+      END
+  `);
+
+  mepaCategories.forEach(row => {
+    syncCategory.run(row.nome, row.descrizione || null);
+  });
+
   const rows = db.prepare(`
     SELECT c.*,
       COUNT(p.id) as prodotti_count
