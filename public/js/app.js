@@ -1334,8 +1334,8 @@ async function loadProdottiLegacy() {
     const fornitore = p.fornitori?.[0];
     const tags = String(p.tags || '').split(',').map(tag => tag.trim()).filter(Boolean);
     const preview = p.immagine
-      ? `<img src="${escapeAttr(p.immagine)}" alt="${escapeAttr(p.nome || 'Prodotto')}" class="product-thumb">`
-      : '<div class="product-thumb product-thumb-placeholder">IMG</div>';
+      ? `<img src="${escapeAttr(p.immagine)}" alt="${escapeAttr(p.nome || 'Prodotto')}" class="product-thumb" style="display:block;width:64px;height:64px;max-width:64px;max-height:64px;min-width:64px;min-height:64px;object-fit:contain;object-position:center;margin:0 auto;border:1px solid var(--border);border-radius:12px;background:var(--bg-input);padding:4px;box-sizing:border-box;">`
+      : '<div class="product-thumb product-thumb-placeholder" style="display:flex;width:64px;height:64px;max-width:64px;max-height:64px;align-items:center;justify-content:center;margin:0 auto;border:1px solid var(--border);border-radius:12px;background:var(--bg-input);box-sizing:border-box;">IMG</div>';
     const margine = listino?.prezzo && fornitore?.prezzo_acquisto
       ? (((listino.prezzo - fornitore.prezzo_acquisto) / listino.prezzo) * 100).toFixed(1) + '%' : '�';
     return `<tr>
@@ -1381,13 +1381,17 @@ function applyProductColumnVisibility() {
   const headerCells = [...document.querySelectorAll('#section-prodotti table.data-table thead tr:first-child [data-prod-col]')];
   document.querySelectorAll('[data-prod-col]').forEach(cell => {
     const key = cell.getAttribute('data-prod-col');
-    cell.classList.toggle('product-col-hidden', state[key] === false);
+    const hidden = state[key] === false;
+    cell.classList.toggle('product-col-hidden', hidden);
+    cell.style.display = hidden ? 'none' : '';
   });
   const filterCells = document.querySelectorAll('#section-prodotti table.data-table thead tr.table-filter-row th');
   headerCells.forEach((cell, index) => {
     const key = cell.getAttribute('data-prod-col');
     if (filterCells[index]) {
-      filterCells[index].classList.toggle('product-col-hidden', state[key] === false);
+      const hidden = state[key] === false;
+      filterCells[index].classList.toggle('product-col-hidden', hidden);
+      filterCells[index].style.display = hidden ? 'none' : '';
     }
   });
 }
@@ -1433,13 +1437,13 @@ async function loadProdottiDeprecated() {
     const fornitore = p.fornitori?.[0];
     const tags = String(p.tags || '').split(',').map(tag => tag.trim()).filter(Boolean);
     const preview = p.immagine
-      ? `<img src="${escapeAttr(p.immagine)}" alt="${escapeAttr(p.nome || 'Prodotto')}" class="product-thumb">`
-      : '<div class="product-thumb product-thumb-placeholder">IMG</div>';
+      ? `<img src="${escapeAttr(p.immagine)}" alt="${escapeAttr(p.nome || 'Prodotto')}" class="product-thumb" style="display:block;width:64px;height:64px;max-width:64px;max-height:64px;min-width:64px;min-height:64px;object-fit:contain;object-position:center;margin:0 auto;border:1px solid var(--border);border-radius:12px;background:var(--bg-input);padding:4px;box-sizing:border-box;">`
+      : '<div class="product-thumb product-thumb-placeholder" style="display:flex;width:64px;height:64px;max-width:64px;max-height:64px;align-items:center;justify-content:center;margin:0 auto;border:1px solid var(--border);border-radius:12px;background:var(--bg-input);box-sizing:border-box;">IMG</div>';
     const margine = listino?.prezzo && fornitore?.prezzo_acquisto
       ? (((listino.prezzo - fornitore.prezzo_acquisto) / listino.prezzo) * 100).toFixed(1) + '%' : 'ï¿½';
     return `<tr>
       <td data-prod-col="codice"><code>${p.codice_interno}</code></td>
-      <td data-prod-col="foto" class="product-photo-cell">${preview}</td>
+      <td data-prod-col="foto" class="product-photo-cell" style="width:88px;min-width:88px;text-align:center;">${preview}</td>
       <td data-prod-col="nome"><div class="product-name-cell"><div><div>${p.nome}</div><div style="font-size:11px;color:var(--text-muted)">${p.fatture_count || 0} fatture | ${p.ddt_count || 0} DDT</div>${tags.length ? `<div class="product-tag-list">${tags.map(tag => `<span class="product-tag-chip">${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</div></div></td>
       <td data-prod-col="categoria">${p.categoria_nome || 'ï¿½'}<div style="font-size:11px;color:var(--text-muted)">${p.cpv_mepa ? escapeHtml(formatCpvDisplay(p.cpv_mepa)) : 'CPV non assegnato'}</div></td>
       <td data-prod-col="giacenza"><strong style="color:${(p.giacenza||0) > 0 ? 'var(--success)' : 'var(--danger)'}">${p.giacenza || 0}</strong></td>
@@ -1472,8 +1476,8 @@ async function loadProdotti() {
     const fornitore = p.fornitori?.[0];
     const tags = String(p.tags || '').split(',').map(tag => tag.trim()).filter(Boolean);
     const preview = p.immagine
-      ? `<img src="${escapeAttr(p.immagine)}" alt="${escapeAttr(p.nome || 'Prodotto')}" class="product-thumb">`
-      : '<div class="product-thumb product-thumb-placeholder">IMG</div>';
+      ? `<img src="${escapeAttr(p.immagine)}" alt="${escapeAttr(p.nome || 'Prodotto')}" class="product-thumb" style="display:block;width:64px;height:64px;max-width:64px;max-height:64px;min-width:64px;min-height:64px;object-fit:contain;object-position:center;margin:0 auto;border:1px solid var(--border);border-radius:12px;background:var(--bg-input);padding:4px;box-sizing:border-box;">`
+      : '<div class="product-thumb product-thumb-placeholder" style="display:flex;width:64px;height:64px;max-width:64px;max-height:64px;align-items:center;justify-content:center;margin:0 auto;border:1px solid var(--border);border-radius:12px;background:var(--bg-input);box-sizing:border-box;">IMG</div>';
     const categoriaLabel = p.categoria_nome || '-';
     const prezzoLabel = listino?.prezzo ? `EUR ${listino.prezzo.toFixed(2)}` : '-';
     const margineLabel = listino?.prezzo && fornitore?.prezzo_acquisto
@@ -1481,7 +1485,7 @@ async function loadProdotti() {
       : '-';
     return `<tr>
       <td data-prod-col="codice"><code>${p.codice_interno}</code></td>
-      <td data-prod-col="foto" class="product-photo-cell">${preview}</td>
+      <td data-prod-col="foto" class="product-photo-cell" style="width:88px;min-width:88px;text-align:center;">${preview}</td>
       <td data-prod-col="nome">
         <div class="product-name-cell">
           <div>
