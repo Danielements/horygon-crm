@@ -834,17 +834,45 @@ nav { flex: 1; padding: 10px 8px; overflow-y: auto; }
 .modal {
   display: none; position: fixed;
   top: 50%; left: 50%; transform: translate(-50%, -50%);
-  z-index: 101; width: 580px;
-  max-width: 95vw; max-height: 92vh; overflow-y: auto;
+  z-index: 101; width: min(80vw, 1400px);
+  max-width: 96vw; max-height: 92vh; overflow-y: auto;
 }
 
 .modal-box {
   background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: 14px; padding: 28px; box-shadow: var(--shadow-md);
+  border-radius: 18px; padding: 28px; box-shadow: var(--shadow-md);
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
-.modal-title { font-size: 17px; font-weight: 700; margin-bottom: 22px; display: flex; align-items: center; gap: 10px; }
+.modal-title {
+  font-size: 17px; font-weight: 700; margin-bottom: 0;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+}
 
-.form-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.modal-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-input);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  transition: all var(--transition);
+}
+
+.modal-close-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.form-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 0; }
 .form-group label { font-size: 12px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; }
 .form-group input, .form-group select, .form-group textarea {
   background: var(--bg-input); border: 1px solid var(--border);
@@ -858,9 +886,23 @@ nav { flex: 1; padding: 10px 8px; overflow-y: auto; }
 }
 .form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap: 12px; }
 
+.modal-box > .form-group,
+.modal-box > .form-row,
+.modal-box > .table-wrapper,
+.modal-box > #prod-tabs,
+.modal-box > .saved-file-links,
+.modal-box > .picker-input-row,
+.modal-box > .upload-zone {
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--bg-card) 90%, white 10%);
+}
+
 .modal-actions {
   display: flex; gap: 10px; justify-content: flex-end;
-  margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border);
+  margin-top: 0; padding-top: 18px; border-top: 1px solid var(--border);
 }
 
 /* ═══════════════════════════════════════
@@ -1722,13 +1764,13 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
   }
 }
 .modal-box-wide {
-  width: min(1100px, 92vw);
+  width: min(80vw, 1400px);
 }
 .modal-box-preventivo {
-  width: min(60vw, 1280px);
+  width: 100%;
 }
 #modal-preventivo {
-  width: min(60vw, 1280px);
+  width: min(80vw, 1400px);
   max-width: 96vw;
 }
 .doc-theme-box {

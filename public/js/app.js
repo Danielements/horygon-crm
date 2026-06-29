@@ -4614,12 +4614,28 @@ async function openModal(id, context = null) {
   if (id === 'modal-preventivo') await preparePreventivoModal(context);
   if (id === 'modal-ordine') await prepareOrdineModal(context);
   if (id === 'modal-fattura') await prepareFatturaModal(context);
+  ensureModalChrome(id);
   document.getElementById('overlay').style.display = 'block';
   document.getElementById(id).style.display = 'block';
 }
 function closeAllModals() {
   document.getElementById('overlay').style.display = 'none';
   document.querySelectorAll('.modal').forEach(m => { m.style.display = 'none'; });
+}
+
+function ensureModalChrome(id) {
+  const modal = document.getElementById(id);
+  if (!modal) return;
+  const title = modal.querySelector('.modal-title');
+  if (title && !title.querySelector('.modal-close-btn')) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'modal-close-btn';
+    btn.setAttribute('aria-label', 'Chiudi popup');
+    btn.innerHTML = '&times;';
+    btn.onclick = closeAllModals;
+    title.appendChild(btn);
+  }
 }
 
 function enhanceResponsiveTables() {
