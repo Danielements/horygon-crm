@@ -232,12 +232,25 @@
           <select id="filter-prod-categoria" onchange="loadProdotti()">
             <option value="">Tutte le categorie</option>
           </select>
+          <div class="product-columns-shell">
+            <button class="btn btn-outline" type="button" onclick="toggleProductColumnsMenu(event)">Visualizza colonne</button>
+            <div id="product-columns-menu" class="product-columns-menu">
+              <label><input type="checkbox" data-col-toggle="codice" checked onchange="toggleProductColumn('codice', this.checked)"> Codice</label>
+              <label><input type="checkbox" data-col-toggle="foto" checked onchange="toggleProductColumn('foto', this.checked)"> Foto</label>
+              <label><input type="checkbox" data-col-toggle="nome" checked onchange="toggleProductColumn('nome', this.checked)"> Nome</label>
+              <label><input type="checkbox" data-col-toggle="categoria" checked onchange="toggleProductColumn('categoria', this.checked)"> Categoria</label>
+              <label><input type="checkbox" data-col-toggle="giacenza" checked onchange="toggleProductColumn('giacenza', this.checked)"> Giacenza</label>
+              <label><input type="checkbox" data-col-toggle="prezzo" checked onchange="toggleProductColumn('prezzo', this.checked)"> Prezzo MEPA</label>
+              <label><input type="checkbox" data-col-toggle="margine" checked onchange="toggleProductColumn('margine', this.checked)"> Margine</label>
+              <label><input type="checkbox" data-col-toggle="azioni" checked onchange="toggleProductColumn('azioni', this.checked)"> Azioni</label>
+            </div>
+          </div>
           <button class="btn btn-outline" onclick="openCategorieModal()">Categorie</button>
           <button class="btn btn-accent" onclick="nuovoProdotto()">+ Nuovo Prodotto</button>
         </div>
       </div>
       <div class="table-wrapper">
-        <table class="data-table"><thead><tr><th>Codice</th><th>Nome</th><th>Categoria</th><th>Giacenza</th><th>Prezzo MEPA</th><th>Margine</th><th>Azioni</th></tr></thead>
+        <table class="data-table"><thead><tr><th data-prod-col="codice">Codice</th><th data-prod-col="foto">Foto</th><th data-prod-col="nome">Nome</th><th data-prod-col="categoria">Categoria</th><th data-prod-col="giacenza">Giacenza</th><th data-prod-col="prezzo">Prezzo MEPA</th><th data-prod-col="margine">Margine</th><th data-prod-col="azioni">Azioni</th></tr></thead>
         <tbody id="prod-body"></tbody></table>
       </div>
     </section>

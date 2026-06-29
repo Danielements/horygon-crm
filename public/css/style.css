@@ -273,6 +273,36 @@ nav { flex: 1; padding: 10px 8px; overflow-y: auto; }
   background: var(--bg-card); border: 1px solid var(--border);
   border-radius: 6px; padding: 8px 12px; color: var(--text); font-size: 13px;
 }
+.product-columns-shell {
+  position: relative;
+}
+
+.product-columns-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 220px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-md);
+  z-index: 30;
+}
+
+.product-columns-menu.open {
+  display: grid;
+  gap: 8px;
+}
+
+.product-columns-menu label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
 
 /* ═══════════════════════════════════════
    BUTTONS
@@ -1628,14 +1658,14 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
 }
 
 .product-thumb {
-  width: 56px;
-  height: 56px;
+  width: 64px;
+  height: 64px;
   border-radius: 12px;
   border: 1px solid var(--border);
   object-fit: contain;
   object-position: center;
   background: var(--bg-input);
-  flex: 0 0 56px;
+  flex: 0 0 64px;
   padding: 4px;
 }
 
@@ -1647,6 +1677,13 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.08em;
+}
+.product-photo-cell {
+  width: 84px;
+}
+
+.product-col-hidden {
+  display: none;
 }
 .modal-box-wide {
   width: min(1100px, 92vw);

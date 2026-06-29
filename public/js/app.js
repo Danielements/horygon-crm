@@ -2,6 +2,17 @@
 // STATE
 // �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 let TOKEN = localStorage.getItem('horygon_token');
+const PRODUCT_COLUMNS_KEY = 'horygon_product_columns';
+const DEFAULT_PRODUCT_COLUMNS = {
+  codice: true,
+  foto: true,
+  nome: true,
+  categoria: true,
+  giacenza: true,
+  prezzo: true,
+  margine: true,
+  azioni: true,
+};
 let USER = null;
 let PERMS = {};
 let calDate = new Date();
@@ -1341,6 +1352,95 @@ async function loadProdotti() {
       </td>
     </tr>`;
   }).join('');
+}
+
+function getProductColumnState() {
+  try {
+    return { ...DEFAULT_PRODUCT_COLUMNS, ...(JSON.parse(localStorage.getItem(PRODUCT_COLUMNS_KEY) || '{}')) };
+  } catch {
+    return { ...DEFAULT_PRODUCT_COLUMNS };
+  }
+}
+
+function setProductColumnState(state) {
+  localStorage.setItem(PRODUCT_COLUMNS_KEY, JSON.stringify(state));
+}
+
+function syncProductColumnMenu() {
+  const state = getProductColumnState();
+  document.querySelectorAll('[data-col-toggle]').forEach(input => {
+    input.checked = state[input.getAttribute('data-col-toggle')] !== false;
+  });
+}
+
+function applyProductColumnVisibility() {
+  const state = getProductColumnState();
+  document.querySelectorAll('[data-prod-col]').forEach(cell => {
+    const key = cell.getAttribute('data-prod-col');
+    cell.classList.toggle('product-col-hidden', state[key] === false);
+  });
+}
+
+function toggleProductColumn(column, visible) {
+  const state = getProductColumnState();
+  state[column] = !!visible;
+  setProductColumnState(state);
+  applyProductColumnVisibility();
+}
+
+function toggleProductColumnsMenu(event) {
+  event?.stopPropagation();
+  const menu = document.getElementById('product-columns-menu');
+  if (!menu) return;
+  syncProductColumnMenu();
+  menu.classList.toggle('open');
+}
+
+document.addEventListener('click', (event) => {
+  const menu = document.getElementById('product-columns-menu');
+  const shell = document.querySelector('.product-columns-shell');
+  if (!menu || !shell) return;
+  if (!shell.contains(event.target)) {
+    menu.classList.remove('open');
+  }
+});
+
+async function loadProdotti() {
+  if ((document.getElementById('filter-prod-categoria')?.options?.length || 0) <= 1) {
+    await loadCategorie();
+  }
+  const q = document.getElementById('search-prod')?.value || '';
+  const categoriaId = document.getElementById('filter-prod-categoria')?.value || '';
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (categoriaId) params.set('categoria_id', categoriaId);
+  const rows = await api('GET', `/prodotti${params.toString() ? `?${params.toString()}` : ''}`);
+  document.getElementById('prod-body').innerHTML = (rows || []).map(p => {
+    const listino = p.listini?.find(l => l.canale === 'mepa') || p.listini?.[0];
+    const fornitore = p.fornitori?.[0];
+    const tags = String(p.tags || '').split(',').map(tag => tag.trim()).filter(Boolean);
+    const preview = p.immagine
+      ? `<img src="${escapeAttr(p.immagine)}" alt="${escapeAttr(p.nome || 'Prodotto')}" class="product-thumb">`
+      : '<div class="product-thumb product-thumb-placeholder">IMG</div>';
+    const margine = listino?.prezzo && fornitore?.prezzo_acquisto
+      ? (((listino.prezzo - fornitore.prezzo_acquisto) / listino.prezzo) * 100).toFixed(1) + '%' : 'ï¿½';
+    return `<tr>
+      <td data-prod-col="codice"><code>${p.codice_interno}</code></td>
+      <td data-prod-col="foto" class="product-photo-cell">${preview}</td>
+      <td data-prod-col="nome"><div class="product-name-cell"><div><div>${p.nome}</div><div style="font-size:11px;color:var(--text-muted)">${p.fatture_count || 0} fatture | ${p.ddt_count || 0} DDT</div>${tags.length ? `<div class="product-tag-list">${tags.map(tag => `<span class="product-tag-chip">${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</div></div></td>
+      <td data-prod-col="categoria">${p.categoria_nome || 'ï¿½'}<div style="font-size:11px;color:var(--text-muted)">${p.cpv_mepa ? escapeHtml(formatCpvDisplay(p.cpv_mepa)) : 'CPV non assegnato'}</div></td>
+      <td data-prod-col="giacenza"><strong style="color:${(p.giacenza||0) > 0 ? 'var(--success)' : 'var(--danger)'}">${p.giacenza || 0}</strong></td>
+      <td data-prod-col="prezzo">${listino ? 'ï¿½ï¿½ ' + listino.prezzo.toFixed(2) : 'ï¿½'}</td>
+      <td data-prod-col="margine">${margine}</td>
+      <td data-prod-col="azioni">
+        <button class="btn btn-outline btn-sm" onclick="editProdotto(${p.id})">Modifica</button>
+        <button class="btn btn-outline btn-sm" onclick="getQR(${p.id})">QR</button>
+        <button class="btn btn-danger btn-sm" onclick="eliminaProdotto(${p.id}, '${String(p.nome || '').replace(/'/g, "\\'")}')">Elimina</button>
+      </td>
+    </tr>`;
+  }).join('');
+  syncProductColumnMenu();
+  applyProductColumnVisibility();
 }
 
 async function editProdotto(id) {
