@@ -235,14 +235,14 @@
           <div class="product-columns-shell">
             <button class="btn btn-outline" type="button" onclick="toggleProductColumnsMenu(event)">Visualizza colonne</button>
             <div id="product-columns-menu" class="product-columns-menu">
-              <label><input type="checkbox" data-col-toggle="codice" checked onchange="toggleProductColumn('codice', this.checked)"> Codice</label>
-              <label><input type="checkbox" data-col-toggle="foto" checked onchange="toggleProductColumn('foto', this.checked)"> Foto</label>
-              <label><input type="checkbox" data-col-toggle="nome" checked onchange="toggleProductColumn('nome', this.checked)"> Nome</label>
-              <label><input type="checkbox" data-col-toggle="categoria" checked onchange="toggleProductColumn('categoria', this.checked)"> Categoria</label>
-              <label><input type="checkbox" data-col-toggle="giacenza" checked onchange="toggleProductColumn('giacenza', this.checked)"> Giacenza</label>
-              <label><input type="checkbox" data-col-toggle="prezzo" checked onchange="toggleProductColumn('prezzo', this.checked)"> Prezzo MEPA</label>
-              <label><input type="checkbox" data-col-toggle="margine" checked onchange="toggleProductColumn('margine', this.checked)"> Margine</label>
-              <label><input type="checkbox" data-col-toggle="azioni" checked onchange="toggleProductColumn('azioni', this.checked)"> Azioni</label>
+              <button type="button" class="product-column-toggle" data-col-toggle="codice" onclick="toggleProductColumn('codice')">Codice</button>
+              <button type="button" class="product-column-toggle" data-col-toggle="foto" onclick="toggleProductColumn('foto')">Foto</button>
+              <button type="button" class="product-column-toggle" data-col-toggle="nome" onclick="toggleProductColumn('nome')">Nome</button>
+              <button type="button" class="product-column-toggle" data-col-toggle="categoria" onclick="toggleProductColumn('categoria')">Categoria</button>
+              <button type="button" class="product-column-toggle" data-col-toggle="giacenza" onclick="toggleProductColumn('giacenza')">Giacenza</button>
+              <button type="button" class="product-column-toggle" data-col-toggle="prezzo" onclick="toggleProductColumn('prezzo')">Prezzo MEPA</button>
+              <button type="button" class="product-column-toggle" data-col-toggle="margine" onclick="toggleProductColumn('margine')">Margine</button>
+              <button type="button" class="product-column-toggle" data-col-toggle="azioni" onclick="toggleProductColumn('azioni')">Azioni</button>
             </div>
           </div>
           <button class="btn btn-outline" onclick="openCategorieModal()">Categorie</button>

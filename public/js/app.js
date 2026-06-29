@@ -1398,6 +1398,7 @@ function toggleProductColumn(column) {
   setProductColumnState(state);
   syncProductColumnMenu();
   applyProductColumnVisibility();
+  scheduleResponsiveEnhancement();
 }
 
 function toggleProductColumnsMenu(event) {
