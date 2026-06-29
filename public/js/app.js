@@ -1537,6 +1537,63 @@ async function editProdotto(id) {
       <span style="float:right;color:var(--text-muted)">${f.prezzo_acquisto||'�'} ${f.valuta||'CNY'}</span>
     </div>`).join('') : '<p style="color:var(--text-muted)">Nessun fornitore associato</p>';
   document.getElementById('prod-tab-fornitori').innerHTML = fHtml;
+  const fornitoriAssociatiHtml = (p.fornitori || []).length
+    ? (p.fornitori || []).map(f => `
+      <div style="padding:12px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px;background:var(--bg-elevated)">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+          <div>
+            <strong>${escapeHtml(f.ragione_sociale || 'Fornitore')}</strong>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:4px">Codice fornitore: ${escapeHtml(f.codice_fornitore || '-')}</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:4px">Lead time: ${escapeHtml(f.lead_time_giorni || '-')} giorni</div>
+          </div>
+          <div style="text-align:right;min-width:120px">
+            <div style="font-weight:700">${escapeHtml(f.prezzo_acquisto || '-')} ${escapeHtml(f.valuta || 'CNY')}</div>
+            ${f.note ? `<div style="font-size:12px;color:var(--text-muted);margin-top:4px">${escapeHtml(f.note)}</div>` : ''}
+          </div>
+        </div>
+      </div>`).join('')
+    : '<p style="color:var(--text-muted)">Nessun fornitore associato</p>';
+  document.getElementById('prod-tab-fornitori').innerHTML = `
+    <div class="form-section-card">
+      <div class="form-section-title">Associa fornitore</div>
+      <div class="grid-2">
+        <div class="field">
+          <label>Fornitore</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="hidden" id="prod-fornitore-id">
+            <input id="prod-fornitore-label" placeholder="Seleziona un fornitore" readonly>
+            <button type="button" class="btn btn-outline" onclick="openRecordPicker('anagrafiche', { targetId: 'prod-fornitore-id', labelId: 'prod-fornitore-label', filterTipo: 'fornitore' })">Scegli</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>Codice fornitore</label>
+          <input id="prod-fornitore-codice" placeholder="Codice articolo presso il fornitore">
+        </div>
+        <div class="field">
+          <label>Prezzo acquisto</label>
+          <input id="prod-fornitore-prezzo" type="number" min="0" step="0.01" placeholder="0.00">
+        </div>
+        <div class="field">
+          <label>Valuta</label>
+          <input id="prod-fornitore-valuta" value="CNY" maxlength="8">
+        </div>
+        <div class="field">
+          <label>Lead time giorni</label>
+          <input id="prod-fornitore-lead" type="number" min="0" step="1" placeholder="0">
+        </div>
+        <div class="field">
+          <label>Note</label>
+          <input id="prod-fornitore-note" placeholder="Note interne sul rapporto col fornitore">
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:12px">
+        <button type="button" class="btn btn-primary" onclick="salvaProdottoFornitore(${p.id})">Associa fornitore</button>
+      </div>
+    </div>
+    <div class="form-section-card" style="margin-top:12px">
+      <div class="form-section-title">Fornitori associati</div>
+      ${fornitoriAssociatiHtml}
+    </div>`;
   // Tab fatture
   const fatHtml = (p.fatture||[]).length ? (p.fatture||[]).map(f =>
     `<div style="padding:8px;border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
@@ -1618,6 +1675,29 @@ function showProdTab(tab) {
   document.querySelectorAll('.prod-tab').forEach((b,i) => {
     b.classList.toggle('active', ['fornitori','fatture','listini'][i] === tab);
   });
+}
+
+async function salvaProdottoFornitore(prodottoId) {
+  const body = {
+    fornitore_id: document.getElementById('prod-fornitore-id')?.value || null,
+    codice_fornitore: document.getElementById('prod-fornitore-codice')?.value || null,
+    prezzo_acquisto: document.getElementById('prod-fornitore-prezzo')?.value || null,
+    valuta: document.getElementById('prod-fornitore-valuta')?.value || 'CNY',
+    lead_time_giorni: document.getElementById('prod-fornitore-lead')?.value || null,
+    note: document.getElementById('prod-fornitore-note')?.value || null,
+  };
+  if (!body.fornitore_id) {
+    toast('Seleziona prima un fornitore', 'error');
+    return;
+  }
+  try {
+    await api('POST', `/prodotti/${prodottoId}/fornitore`, body);
+    toast('Fornitore associato al prodotto', 'success');
+    await editProdotto(prodottoId);
+    showProdTab('fornitori');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
 }
 
 async function salvaProdotto() {
