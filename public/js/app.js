@@ -1319,7 +1319,7 @@ async function salvaAnagrafica() {
 // �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 // PRODOTTI
 // �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
-async function loadProdotti() {
+async function loadProdottiLegacy() {
   if ((document.getElementById('filter-prod-categoria')?.options?.length || 0) <= 1) {
     await loadCategorie();
   }
@@ -1368,23 +1368,35 @@ function setProductColumnState(state) {
 
 function syncProductColumnMenu() {
   const state = getProductColumnState();
-  document.querySelectorAll('[data-col-toggle]').forEach(input => {
-    input.checked = state[input.getAttribute('data-col-toggle')] !== false;
+  document.querySelectorAll('.product-column-toggle[data-col-toggle]').forEach(button => {
+    const key = button.getAttribute('data-col-toggle');
+    const active = state[key] !== false;
+    button.classList.toggle('is-active', active);
+    button.textContent = `${active ? 'Nascondi' : 'Mostra'} ${key === 'prezzo' ? 'Prezzo MEPA' : key.charAt(0).toUpperCase() + key.slice(1)}`;
   });
 }
 
 function applyProductColumnVisibility() {
   const state = getProductColumnState();
+  const headerCells = [...document.querySelectorAll('#section-prodotti table.data-table thead tr:first-child [data-prod-col]')];
   document.querySelectorAll('[data-prod-col]').forEach(cell => {
     const key = cell.getAttribute('data-prod-col');
     cell.classList.toggle('product-col-hidden', state[key] === false);
   });
+  const filterCells = document.querySelectorAll('#section-prodotti table.data-table thead tr.table-filter-row th');
+  headerCells.forEach((cell, index) => {
+    const key = cell.getAttribute('data-prod-col');
+    if (filterCells[index]) {
+      filterCells[index].classList.toggle('product-col-hidden', state[key] === false);
+    }
+  });
 }
 
-function toggleProductColumn(column, visible) {
+function toggleProductColumn(column) {
   const state = getProductColumnState();
-  state[column] = !!visible;
+  state[column] = state[column] === false;
   setProductColumnState(state);
+  syncProductColumnMenu();
   applyProductColumnVisibility();
 }
 
@@ -1441,6 +1453,7 @@ async function loadProdotti() {
   }).join('');
   syncProductColumnMenu();
   applyProductColumnVisibility();
+  scheduleResponsiveEnhancement();
 }
 
 async function editProdotto(id) {

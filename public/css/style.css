@@ -296,12 +296,27 @@ nav { flex: 1; padding: 10px 8px; overflow-y: auto; }
   gap: 8px;
 }
 
-.product-columns-menu label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
+.product-column-toggle {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-input);
   color: var(--text);
+  padding: 9px 10px;
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.product-column-toggle:hover {
+  border-color: var(--accent);
+}
+
+.product-column-toggle.is-active {
+  background: rgba(var(--accent-rgb), 0.12);
+  border-color: rgba(var(--accent-rgb), 0.35);
+  color: var(--accent);
 }
 
 /* ═══════════════════════════════════════
