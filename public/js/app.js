@@ -1418,7 +1418,7 @@ document.addEventListener('click', (event) => {
   }
 });
 
-async function loadProdotti() {
+async function loadProdottiDeprecated() {
   if ((document.getElementById('filter-prod-categoria')?.options?.length || 0) <= 1) {
     await loadCategorie();
   }
