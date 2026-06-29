@@ -352,7 +352,8 @@ function ensureColumn(table, definition) {
 ].forEach(col => ensureColumn('ordini', col));
 
 [
-  "cpv_mepa TEXT"
+  "cpv_mepa TEXT",
+  "tags TEXT"
 ].forEach(col => ensureColumn('prodotti', col));
 
 db.exec(`

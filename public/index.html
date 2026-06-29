@@ -229,6 +229,10 @@
         <h1>Prodotti</h1>
         <div class="header-actions">
           <input type="text" id="search-prod" placeholder="Cerca..." oninput="loadProdotti()">
+          <select id="filter-prod-categoria" onchange="loadProdotti()">
+            <option value="">Tutte le categorie</option>
+          </select>
+          <button class="btn btn-outline" onclick="openCategorieModal()">Categorie</button>
           <button class="btn btn-accent" onclick="nuovoProdotto()">+ Nuovo Prodotto</button>
         </div>
       </div>
@@ -1042,18 +1046,25 @@
     <div class="form-group"><label>Nome *</label><input type="text" id="prod-nome"></div>
     <div class="form-group"><label>Descrizione</label><input type="text" id="prod-desc"></div>
     <div class="form-row">
-      <div class="form-group"><label>Categoria</label><select id="prod-categoria"></select></div>
+      <div class="form-group">
+        <label>Categoria</label>
+        <div class="picker-input-row">
+          <select id="prod-categoria"></select>
+          <button type="button" class="btn btn-outline btn-sm" onclick="openCategorieModal()">Gestisci</button>
+        </div>
+      </div>
       <div class="form-group">
         <label>CPV MEPA</label>
         <input type="hidden" id="prod-cpv-mepa">
         <div class="picker-input-row">
           <input type="text" id="prod-cpv-mepa-label" readonly placeholder="Seleziona dalle abilitazioni CPV MEPA">
-          <button type="button" class="btn btn-outline btn-sm" onclick="openRecordPicker('mepa-cpv',{targetId:'prod-cpv-mepa',labelId:'prod-cpv-mepa-label'})">Scegli</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="openRecordPicker('mepa-cpv', getMepaCpvPickerOptions())">Scegli</button>
         </div>
       </div>
       <div class="form-group"><label>U.M.</label><input type="text" id="prod-um" value="pz"></div>
       <div class="form-group"><label>Peso (kg)</label><input type="number" step="0.01" id="prod-peso"></div>
     </div>
+    <div class="form-group"><label>Tag prodotto</label><input type="text" id="prod-tags" placeholder="Es. carta, A4, riciclata, ufficio"></div>
     <div class="form-row">
       <div class="form-group">
         <label>Foto prodotto</label>
@@ -1089,6 +1100,28 @@
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
       <button class="btn btn-accent" onclick="salvaProdotto()">Salva</button>
+    </div>
+  </div>
+</div>
+
+<div id="modal-categorie" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">Categorie Prodotto</div>
+    <input type="hidden" id="categoria-id">
+    <div class="form-row">
+      <div class="form-group"><label>Nome categoria</label><input type="text" id="categoria-nome"></div>
+      <div class="form-group"><label>Descrizione</label><input type="text" id="categoria-descrizione"></div>
+    </div>
+    <div class="modal-actions" style="margin-bottom:12px">
+      <button class="btn btn-outline" onclick="resetCategoriaForm()">Nuova</button>
+      <button class="btn btn-outline" onclick="importaCategorieDaMepa()">Importa da MEPA</button>
+      <button class="btn btn-accent" onclick="salvaCategoriaProdotto()">Salva categoria</button>
+    </div>
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead><tr><th>Categoria</th><th>Descrizione</th><th>Prodotti</th><th>Azioni</th></tr></thead>
+        <tbody id="categorie-body"></tbody>
+      </table>
     </div>
   </div>
 </div>

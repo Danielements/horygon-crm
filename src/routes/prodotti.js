@@ -9,6 +9,14 @@ const { authMiddleware, requirePermesso } = require('../middleware/auth');
 const s = (v) => (v === undefined || v === '' || v === null) ? null : v;
 const n = (v) => { const p = parseFloat(v); return isNaN(p) ? null : p; };
 const i = (v) => { const p = parseInt(v); return isNaN(p) ? null : p; };
+const normalizeTags = (value) => {
+  if (Array.isArray(value)) {
+    const tags = value.map(item => String(item || '').trim()).filter(Boolean);
+    return tags.length ? Array.from(new Set(tags)).join(', ') : null;
+  }
+  const tags = String(value || '').split(',').map(item => item.trim()).filter(Boolean);
+  return tags.length ? Array.from(new Set(tags)).join(', ') : null;
+};
 
 function getGiacenza(prodottoId) {
   const row = db.prepare(`
@@ -40,13 +48,67 @@ const uploadProdotto = multer({ storage: storageProdotti });
 
 router.use(authMiddleware);
 
+router.get('/categorie', (req, res) => {
+  const rows = db.prepare(`
+    SELECT c.*,
+      COUNT(p.id) as prodotti_count
+    FROM categorie c
+    LEFT JOIN prodotti p ON p.categoria_id = c.id AND p.attivo = 1
+    GROUP BY c.id
+    ORDER BY c.nome COLLATE NOCASE
+  `).all();
+  res.json(rows);
+});
+
+router.post('/categorie', requirePermesso('prodotti', 'edit'), (req, res) => {
+  try {
+    const body = req.body || {};
+    db.prepare(`
+      INSERT INTO categorie (nome, descrizione)
+      VALUES (?, ?)
+      ON CONFLICT(nome) DO UPDATE SET
+        descrizione = COALESCE(excluded.descrizione, categorie.descrizione)
+    `).run(s(body.nome), s(body.descrizione));
+    const row = db.prepare('SELECT * FROM categorie WHERE nome = ?').get(s(body.nome));
+    res.json({ id: row?.id, categoria: row });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.put('/categorie/:id', requirePermesso('prodotti', 'edit'), (req, res) => {
+  try {
+    const body = req.body || {};
+    db.prepare(`
+      UPDATE categorie
+      SET nome = ?, descrizione = ?
+      WHERE id = ?
+    `).run(s(body.nome), s(body.descrizione), req.params.id);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.delete('/categorie/:id', requirePermesso('prodotti', 'delete'), (req, res) => {
+  const used = db.prepare('SELECT COUNT(*) as n FROM prodotti WHERE categoria_id = ? AND attivo = 1').get(req.params.id);
+  if ((used?.n || 0) > 0) {
+    return res.status(400).json({ error: 'Categoria ancora associata a prodotti attivi' });
+  }
+  db.prepare('DELETE FROM categorie WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
 // Lista prodotti con giacenza
 router.get('/', (req, res) => {
   const { q, categoria_id } = req.query;
   let sql = `SELECT p.*, c.nome as categoria_nome FROM prodotti p
     LEFT JOIN categorie c ON c.id = p.categoria_id WHERE p.attivo = 1`;
   const params = [];
-  if (q) { sql += ' AND (p.nome LIKE ? OR p.codice_interno LIKE ?)'; params.push(`%${q}%`, `%${q}%`); }
+  if (q) {
+    sql += ' AND (p.nome LIKE ? OR p.codice_interno LIKE ? OR IFNULL(p.descrizione, \'\') LIKE ? OR IFNULL(p.tags, \'\') LIKE ?)';
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+  }
   if (categoria_id) { sql += ' AND p.categoria_id = ?'; params.push(categoria_id); }
   const rows = db.prepare(sql + ' ORDER BY p.nome').all(...params);
   // Aggiungi giacenza e prima immagine
@@ -114,10 +176,10 @@ router.post('/', requirePermesso('prodotti', 'edit'), (req, res) => {
   const b = req.body || {};
   try {
     const r = db.prepare(`
-      INSERT INTO prodotti (codice_interno,barcode,nome,descrizione,categoria_id,unita_misura,peso_kg,cpv_mepa)
-      VALUES (?,?,?,?,?,?,?,?)
+      INSERT INTO prodotti (codice_interno,barcode,nome,descrizione,categoria_id,unita_misura,peso_kg,cpv_mepa,tags)
+      VALUES (?,?,?,?,?,?,?,?,?)
     `).run(s(b.codice_interno), s(b.barcode), s(b.nome), s(b.descrizione),
-          i(b.categoria_id), s(b.unita_misura) || 'pz', n(b.peso_kg), s(b.cpv_mepa));
+          i(b.categoria_id), s(b.unita_misura) || 'pz', n(b.peso_kg), s(b.cpv_mepa), normalizeTags(b.tags));
     res.json({ id: r.lastInsertRowid });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -127,10 +189,10 @@ router.put('/:id', requirePermesso('prodotti', 'edit'), (req, res) => {
   const b = req.body || {};
   try {
     db.prepare(`
-      UPDATE prodotti SET codice_interno=?,barcode=?,nome=?,descrizione=?,categoria_id=?,unita_misura=?,peso_kg=?,cpv_mepa=?,attivo=?
+      UPDATE prodotti SET codice_interno=?,barcode=?,nome=?,descrizione=?,categoria_id=?,unita_misura=?,peso_kg=?,cpv_mepa=?,tags=?,attivo=?
       WHERE id=?
     `).run(s(b.codice_interno), s(b.barcode), s(b.nome), s(b.descrizione),
-           i(b.categoria_id), s(b.unita_misura), n(b.peso_kg), s(b.cpv_mepa),
+           i(b.categoria_id), s(b.unita_misura), n(b.peso_kg), s(b.cpv_mepa), normalizeTags(b.tags),
            b.attivo !== undefined ? i(b.attivo) : 1,
            req.params.id);
     res.json({ ok: true });

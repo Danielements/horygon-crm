@@ -83,7 +83,9 @@ router.get('/opportunita-non-attive', (req, res) => {
 router.get('/cpv-catalog', (req, res) => {
   try {
     const activeOnly = req.query.attivo === '1';
-    res.json(getCpvCatalogEntries({ activeOnly }));
+    const categoryId = req.query.categoria_id ? Number(req.query.categoria_id) : null;
+    const categoryName = String(req.query.categoria_nome || '').trim();
+    res.json(getCpvCatalogEntries({ activeOnly, categoryId, categoryName }));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

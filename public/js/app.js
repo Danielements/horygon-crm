@@ -1309,16 +1309,24 @@ async function salvaAnagrafica() {
 // PRODOTTI
 // �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 async function loadProdotti() {
+  if ((document.getElementById('filter-prod-categoria')?.options?.length || 0) <= 1) {
+    await loadCategorie();
+  }
   const q = document.getElementById('search-prod')?.value || '';
-  const rows = await api('GET', `/prodotti?q=${encodeURIComponent(q)}`);
+  const categoriaId = document.getElementById('filter-prod-categoria')?.value || '';
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (categoriaId) params.set('categoria_id', categoriaId);
+  const rows = await api('GET', `/prodotti${params.toString() ? `?${params.toString()}` : ''}`);
   document.getElementById('prod-body').innerHTML = (rows || []).map(p => {
     const listino = p.listini?.find(l => l.canale === 'mepa') || p.listini?.[0];
     const fornitore = p.fornitori?.[0];
+    const tags = String(p.tags || '').split(',').map(tag => tag.trim()).filter(Boolean);
     const margine = listino?.prezzo && fornitore?.prezzo_acquisto
       ? (((listino.prezzo - fornitore.prezzo_acquisto) / listino.prezzo) * 100).toFixed(1) + '%' : '�';
     return `<tr>
       <td><code>${p.codice_interno}</code></td>
-      <td>${p.nome}<div style="font-size:11px;color:var(--text-muted)">${p.fatture_count || 0} fatture | ${p.ddt_count || 0} DDT</div></td>
+      <td>${p.nome}<div style="font-size:11px;color:var(--text-muted)">${p.fatture_count || 0} fatture | ${p.ddt_count || 0} DDT</div>${tags.length ? `<div class="product-tag-list">${tags.map(tag => `<span class="product-tag-chip">${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</td>
       <td>${p.categoria_nome || '�'}<div style="font-size:11px;color:var(--text-muted)">${p.cpv_mepa ? escapeHtml(formatCpvDisplay(p.cpv_mepa)) : 'CPV non assegnato'}</div></td>
       <td><strong style="color:${(p.giacenza||0) > 0 ? 'var(--success)' : 'var(--danger)'}">${p.giacenza || 0}</strong></td>
       <td>${listino ? '�� ' + listino.prezzo.toFixed(2) : '�'}</td>
@@ -1339,6 +1347,7 @@ async function editProdotto(id) {
   document.getElementById('prod-barcode').value = p.barcode || '';
   document.getElementById('prod-nome').value = p.nome;
   document.getElementById('prod-desc').value = p.descrizione || '';
+  document.getElementById('prod-tags').value = p.tags || '';
   document.getElementById('prod-um').value = p.unita_misura || 'pz';
   document.getElementById('prod-peso').value = p.peso_kg || '';
   document.getElementById('prod-cpv-mepa').value = p.cpv_mepa || '';
@@ -1448,6 +1457,7 @@ async function salvaProdotto() {
     nome: document.getElementById('prod-nome').value,
     descrizione: document.getElementById('prod-desc').value,
     categoria_id: document.getElementById('prod-categoria').value || null,
+    tags: document.getElementById('prod-tags').value || null,
     cpv_mepa: document.getElementById('prod-cpv-mepa').value || null,
     unita_misura: document.getElementById('prod-um').value,
     peso_kg: parseFloat(document.getElementById('prod-peso').value) || null,
@@ -1483,6 +1493,8 @@ function nuovoProdotto() {
   document.getElementById('prod-barcode').value = '';
   document.getElementById('prod-nome').value = '';
   document.getElementById('prod-desc').value = '';
+  document.getElementById('prod-tags').value = '';
+  document.getElementById('prod-categoria').value = '';
   document.getElementById('prod-um').value = 'pz';
   document.getElementById('prod-peso').value = '';
   document.getElementById('prod-cpv-mepa').value = '';
@@ -1508,22 +1520,140 @@ async function eliminaProdotto(id, nome) {
 }
 
 async function loadCategorie() {
+  const cats = await api('GET', '/prodotti/categorie');
   const sel = document.getElementById('prod-categoria');
-  if (sel.options.length > 1) return;
-  const cats = [{id:1,nome:'Pulizia'},{id:2,nome:'Cancelleria'},{id:3,nome:'Elettrico'},{id:4,nome:'Ufficio'},{id:5,nome:'Altro'}];
-  sel.innerHTML = '<option value="">Seleziona...</option>' + cats.map(c => `<option value="${c.id}">${c.nome}</option>`).join('');
+  const filter = document.getElementById('filter-prod-categoria');
+  if (sel) {
+    const current = sel.value;
+    sel.innerHTML = '<option value="">Seleziona...</option>' + (cats || []).map(c => `<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join('');
+    sel.value = current || '';
+  }
+  if (filter) {
+    const current = filter.value;
+    filter.innerHTML = '<option value="">Tutte le categorie</option>' + (cats || []).map(c => `<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join('');
+    filter.value = current || '';
+  }
+  const body = document.getElementById('categorie-body');
+  if (body) {
+    body.innerHTML = (cats || []).map(c => `
+      <tr>
+        <td>${escapeHtml(c.nome || '')}</td>
+        <td>${escapeHtml(c.descrizione || '')}</td>
+        <td>${c.prodotti_count || 0}</td>
+        <td>
+          <button class="btn btn-outline btn-sm" onclick="editCategoriaProdotto(${c.id}, '${escapeAttr(c.nome || '')}', '${escapeAttr(c.descrizione || '')}')">Modifica</button>
+          <button class="btn btn-danger btn-sm" onclick="eliminaCategoriaProdotto(${c.id}, '${escapeAttr(c.nome || '')}')">Elimina</button>
+        </td>
+      </tr>
+    `).join('') || '<tr><td colspan="4" style="color:var(--text-muted)">Nessuna categoria presente.</td></tr>';
+  }
 }
 
 async function getQR(id) {
-  const data = await api('GET', `/etichetta/${id}/qr`);
+  const data = await api('GET', `/prodotti/${id}/qr`);
   if (!data) return;
   const win = window.open('', '_blank', 'width=400,height=450');
   win.document.write(`<html><body style="background:#f4f6f9;font-family:Inter,sans-serif;padding:30px;text-align:center">
     <h3>${data.codice}</h3><img src="${data.qr}" style="width:200px"><br>
     <p>${data.nome}</p>
-    <p><a href="${data.url}" target="_blank" rel="noopener">Apri scheda pubblica prodotto</a></p>
+    <p><a href="${data.url}" target="_blank" rel="noopener">Apri pagina prodotto</a></p>
+    <p style="font-size:12px;color:#475569;word-break:break-all">${data.url}</p>
     <p><a href="/api/etichetta/${id}/pdf">PDF etichetta</a></p>
   </body></html>`);
+}
+
+function openCategorieModal() {
+  resetCategoriaForm();
+  loadCategorie();
+  openModal('modal-categorie');
+}
+
+function resetCategoriaForm() {
+  const id = document.getElementById('categoria-id');
+  const nome = document.getElementById('categoria-nome');
+  const descrizione = document.getElementById('categoria-descrizione');
+  if (id) id.value = '';
+  if (nome) nome.value = '';
+  if (descrizione) descrizione.value = '';
+}
+
+function editCategoriaProdotto(id, nome, descrizione) {
+  document.getElementById('categoria-id').value = id;
+  document.getElementById('categoria-nome').value = nome || '';
+  document.getElementById('categoria-descrizione').value = descrizione || '';
+}
+
+async function importaCategorieDaMepa() {
+  try {
+    const rows = await api('GET', '/mepa/categorie-abilitate?attiva=1');
+    const categories = (rows || []).filter(row => String(row.nome || '').trim());
+    if (!categories.length) {
+      toast('Nessuna categoria MEPA attiva da importare', 'error');
+      return;
+    }
+    for (const category of categories) {
+      await api('POST', '/prodotti/categorie', {
+        nome: category.nome,
+        descrizione: category.descrizione || `Importata da MEPA${category.fonte ? ` - ${category.fonte}` : ''}`
+      });
+    }
+    await loadCategorie();
+    toast(`Importate o aggiornate ${categories.length} categorie da MEPA`, 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+function getMepaCpvPickerOptions() {
+  const selected = document.getElementById('prod-categoria');
+  const option = selected?.options?.[selected.selectedIndex];
+  const categoryName = String(option?.text || '').trim();
+  const params = new URLSearchParams({ attivo: '1' });
+  if (categoryName) {
+    params.set('categoria_nome', categoryName);
+  }
+  const apiPath = `/mepa/cpv-catalog?${params.toString()}`;
+  return {
+    targetId: 'prod-cpv-mepa',
+    labelId: 'prod-cpv-mepa-label',
+    apiPath,
+    emptyMessage: categoryName
+      ? `Nessun CPV attivo trovato per la categoria "${categoryName}".`
+      : 'Seleziona prima una categoria prodotto per filtrare i CPV, oppure cerca nel catalogo completo.',
+  };
+}
+
+async function salvaCategoriaProdotto() {
+  const id = document.getElementById('categoria-id')?.value;
+  const body = {
+    nome: document.getElementById('categoria-nome')?.value || '',
+    descrizione: document.getElementById('categoria-descrizione')?.value || null
+  };
+  if (!body.nome.trim()) {
+    toast('Inserisci il nome categoria', 'error');
+    return;
+  }
+  try {
+    if (id) await api('PUT', `/prodotti/categorie/${id}`, body);
+    else await api('POST', '/prodotti/categorie', body);
+    resetCategoriaForm();
+    await loadCategorie();
+    toast('Categoria salvata', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function eliminaCategoriaProdotto(id, nome) {
+  if (!confirm(`Eliminare la categoria "${nome}"?`)) return;
+  try {
+    await api('DELETE', `/prodotti/categorie/${id}`);
+    await loadCategorie();
+    resetCategoriaForm();
+    toast('Categoria eliminata', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
 }
 
 // �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
@@ -1563,7 +1693,7 @@ async function openRecordPicker(entity, options = {}) {
   const rows = entity === 'prodotti'
     ? await api('GET', '/prodotti')
     : entity === 'mepa-cpv'
-      ? await api('GET', '/mepa/cpv-catalog?attivo=1')
+      ? await api('GET', options.apiPath || '/mepa/cpv-catalog?attivo=1')
       : await api('GET', `/anagrafiche${options.filterTipo ? `?tipo=${encodeURIComponent(options.filterTipo)}` : ''}`);
   recordPickerState = { entity, rows: rows || [], options };
   const head = document.getElementById('record-picker-head');
@@ -1610,7 +1740,7 @@ function renderRecordPickerRows(rows = []) {
         <td>${escapeHtml(row.piva || '-')}</td>
         <td><button type="button" class="btn btn-outline btn-sm" onclick="selectRecordPicker(${row.id})">Seleziona</button></td>
       </tr>`
-  ).join('') || '<tr><td colspan="4" style="color:var(--text-muted)">Nessun record trovato.</td></tr>';
+  ).join('') || `<tr><td colspan="4" style="color:var(--text-muted)">${escapeHtml(recordPickerState.options?.emptyMessage || 'Nessun record trovato.')}</td></tr>`;
 }
 
 function selectRecordPicker(id) {

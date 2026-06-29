@@ -198,7 +198,7 @@ function getCpvMatchKey(value = '') {
   return digits.substring(0, 6);
 }
 
-function getCpvCatalogEntries({ activeOnly = false, categoryId = null } = {}) {
+function getCpvCatalogEntries({ activeOnly = false, categoryId = null, categoryName = '' } = {}) {
   try {
     const where = [];
     const params = [];
@@ -206,6 +206,10 @@ function getCpvCatalogEntries({ activeOnly = false, categoryId = null } = {}) {
     if (categoryId) {
       where.push('categoria_id = ?');
       params.push(Number(categoryId));
+    }
+    if (categoryName) {
+      where.push('LOWER(TRIM(categoria)) = LOWER(TRIM(?))');
+      params.push(String(categoryName).trim());
     }
     return db.prepare(`
       SELECT codice_cpv, descrizione as desc, categoria, priorita, attivo, note, categoria_id
