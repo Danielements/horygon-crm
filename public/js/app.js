@@ -569,6 +569,7 @@ function organizeNavigationLayout() {
         : section === 'contatti' ? getItem('contatti', 'Contatti', '&#128199;')
         : section === 'mappa' ? getItem('mappa', 'Mappa CRM', '&#128506;')
         : section === 'prodotti' ? getItem('prodotti', 'Prodotti', '&#128230;')
+        : section === 'kit' ? getItem('kit', 'Kit', 'KIT')
         : section === 'magazzino' ? getItem('magazzino', 'Magazzino', '&#127970;')
         : section === 'preventivi' ? getItem('preventivi', 'Preventivi', '&#129518;')
         : section === 'ordini' ? getItem('ordini', 'Ordini', '&#128203;')
@@ -1812,6 +1813,8 @@ async function loadCategorie() {
 
 function buildKitComponenteHtml(data = {}) {
   const selectedProduct = (kitProdottiCache || []).find(p => String(p.id) === String(data.prodotto_id || ''));
+  const listino = selectedProduct?.listini?.find((row) => row.canale === 'diretto' || row.canale === 'entrambi') || selectedProduct?.listini?.[0];
+  const prezzo = Number(listino?.prezzo || 0);
   return `
     <div class="kit-componente dynamic-line-card">
       <div class="form-row">
@@ -1823,11 +1826,12 @@ function buildKitComponenteHtml(data = {}) {
             <button type="button" class="btn btn-outline btn-sm" onclick="openProductPickerForKitRow(this)">Scegli</button>
           </div>
         </div>
-        <div class="form-group"><label>Quantita nel kit</label><input type="number" min="0" step="0.01" class="kit-componente-quantita" value="${escapeAttr(data.quantita ?? 1)}"></div>
+        <div class="form-group"><label>Quantita nel kit</label><input type="number" min="0" step="0.01" class="kit-componente-quantita" value="${escapeAttr(data.quantita ?? 1)}" oninput="ricalcolaPrezzoKit()"></div>
+        <div class="form-group"><label>Prezzo unitario</label><input type="number" class="kit-componente-prezzo" value="${escapeAttr(prezzo.toFixed(2))}" readonly></div>
         <div class="form-group"><label>Note</label><input type="text" class="kit-componente-note" value="${escapeAttr(data.note || '')}"></div>
       </div>
       <div style="display:flex;justify-content:flex-end">
-        <button type="button" class="btn btn-danger btn-sm" onclick="this.closest('.kit-componente').remove()">Rimuovi</button>
+        <button type="button" class="btn btn-danger btn-sm" onclick="this.closest('.kit-componente').remove(); ricalcolaPrezzoKit()">Rimuovi</button>
       </div>
     </div>
   `;
@@ -1854,6 +1858,10 @@ function openProductPickerForKitRow(button) {
     onSelect: (product) => {
       hidden.value = product.id;
       label.value = getRecordLabel('prodotti', product);
+      const prezzoInput = row.querySelector('.kit-componente-prezzo');
+      const listino = product.listini?.find((item) => item.canale === 'diretto' || item.canale === 'entrambi') || product.listini?.[0];
+      if (prezzoInput) prezzoInput.value = Number(listino?.prezzo || 0).toFixed(2);
+      ricalcolaPrezzoKit();
     }
   });
 }
@@ -1867,6 +1875,18 @@ function collectKitComponenti() {
     ordine: index,
     note: row.querySelector('.kit-componente-note')?.value || null
   })).filter((riga) => riga.prodotto_id && riga.quantita > 0);
+}
+
+function ricalcolaPrezzoKit() {
+  const wrap = document.getElementById('kit-componenti');
+  const target = document.getElementById('kit-prezzo');
+  if (!wrap || !target) return;
+  const totale = [...wrap.querySelectorAll('.kit-componente')].reduce((sum, row) => {
+    const quantita = parseFloat(row.querySelector('.kit-componente-quantita')?.value || 0) || 0;
+    const prezzo = parseFloat(row.querySelector('.kit-componente-prezzo')?.value || 0) || 0;
+    return sum + (quantita * prezzo);
+  }, 0);
+  target.value = totale.toFixed(2);
 }
 
 async function loadKitPage() {
@@ -1920,6 +1940,7 @@ async function nuovoKit() {
   const deleteBtn = document.getElementById('btn-del-kit');
   if (deleteBtn) deleteBtn.style.display = 'none';
   aggiungiComponenteKit();
+  ricalcolaPrezzoKit();
   openModal('modal-kit');
 }
 
@@ -1937,6 +1958,7 @@ async function editKit(id) {
   document.getElementById('kit-note').value = kit.note || '';
   document.getElementById('kit-componenti').innerHTML = '';
   (kit.componenti?.length ? kit.componenti : [{}]).forEach(aggiungiComponenteKit);
+  ricalcolaPrezzoKit();
   const deleteBtn = document.getElementById('btn-del-kit');
   if (deleteBtn) deleteBtn.style.display = 'inline-flex';
   openModal('modal-kit');
@@ -2114,13 +2136,16 @@ function escapeAttr(value) {
 function getRecordLabel(entity, row) {
   if (entity === 'prodotti') return [row.codice_interno, row.nome].filter(Boolean).join(' - ');
   if (entity === 'kits') return [row.codice_kit, row.nome].filter(Boolean).join(' - ');
+  if (entity === 'preventivo-items') return [row.codice || row.codice_interno || row.codice_kit, row.nome].filter(Boolean).join(' - ');
   if (entity === 'anagrafiche') return row.ragione_sociale || row.nome || row.email || '';
   if (entity === 'mepa-cpv') return [formatCpvDisplay(row.codice_cpv || ''), row.desc || row.descrizione, row.categoria].filter(Boolean).join(' - ');
   return row.nome || row.ragione_sociale || row.codice_interno || row.id;
 }
 
 async function openRecordPicker(entity, options = {}) {
-  const rows = entity === 'prodotti'
+  const rows = Array.isArray(options.rows)
+    ? options.rows
+    : entity === 'prodotti'
     ? await api('GET', '/prodotti')
     : entity === 'kits'
       ? await api('GET', '/kits')
@@ -2134,6 +2159,8 @@ async function openRecordPicker(entity, options = {}) {
   if (head) {
     head.innerHTML = entity === 'prodotti'
       ? '<th>Codice</th><th>Nome</th><th>Categoria</th><th></th>'
+      : entity === 'preventivo-items'
+        ? '<th>Codice</th><th>Nome</th><th>Tipo</th><th></th>'
       : entity === 'kits'
         ? '<th>Codice</th><th>Nome</th><th>Componenti</th><th></th>'
       : entity === 'mepa-cpv'
@@ -2161,6 +2188,13 @@ function renderRecordPickerRows(rows = []) {
         <td>${escapeHtml(row.categoria || row.categoria_nome || '-')}</td>
         <td><button type="button" class="btn btn-outline btn-sm" onclick="selectRecordPicker(${row.id})">Seleziona</button></td>
       </tr>`
+    : recordPickerState.entity === 'preventivo-items'
+      ? `<tr>
+          <td>${escapeHtml(row.codice || row.codice_interno || row.codice_kit || '-')}</td>
+          <td>${escapeHtml(row.nome || '-')}</td>
+          <td>${escapeHtml(row.record_type === 'kit' ? 'Kit' : 'Articolo')}</td>
+          <td><button type="button" class="btn btn-outline btn-sm" onclick="selectRecordPicker('${escapeAttr(String(row.id))}')">Seleziona</button></td>
+        </tr>`
     : recordPickerState.entity === 'kits'
       ? `<tr>
           <td>${escapeHtml(row.codice_kit || '-')}</td>
@@ -2230,8 +2264,13 @@ function buildDocumentoRigaHtml(prefix, cache, data = {}) {
   const selectedProduct = (cache || []).find(p => String(p.id) === String(data.prodotto_id || ''));
   const publicUrl = selectedProduct ? getPublicProductUrl(selectedProduct.id) : '';
   const cardClass = prefix === 'prev' ? 'dynamic-line-card preventivo-line-card' : 'dynamic-line-card';
+  const kitGroup = data.kit_group ? ` data-kit-group="${escapeAttr(data.kit_group)}"` : '';
+  const kitMeta = data.kit_group
+    ? `<div style="font-size:12px;color:var(--accent);font-weight:700;margin-bottom:8px">Kit: ${escapeHtml(data.kit_label || data.descrizione || 'Kit')}</div>`
+    : '';
   return `
-    <div class="${prefix}-riga ${cardClass}">
+    <div class="${prefix}-riga ${cardClass}"${kitGroup}>
+      ${kitMeta}
       <div class="form-row">
         <div class="form-group">
           <label>Articolo</label>
@@ -2258,12 +2297,20 @@ function buildDocumentoRigaHtml(prefix, cache, data = {}) {
           <a class="document-line-public-link ${prefix}-public-link" href="${escapeAttr(publicUrl || '#')}" target="_blank" rel="noopener" ${publicUrl ? '' : 'onclick="return false;" style="opacity:.55;pointer-events:none"'}>Apri scheda prodotto via QR</a>
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end">
+          ${data.kit_group ? `<button type="button" class="btn btn-outline btn-sm" onclick="removeKitRows('${escapeAttr(data.kit_group)}','${prefix}')">Rimuovi kit</button>` : ''}
           <button type="button" class="btn btn-outline btn-sm" onclick="aggiungiRigaDocumentoSotto(this,'${prefix}')">+ Aggiungi sotto</button>
           <button type="button" class="btn btn-danger btn-sm" onclick="this.closest('.dynamic-line-card').remove(); ricalcolaRigheDocumento('${prefix}')">Rimuovi</button>
         </div>
       </div>
     </div>
   `;
+}
+
+function removeKitRows(groupId, prefix) {
+  const wrap = document.getElementById(`${prefix}-righe`);
+  if (!wrap) return;
+  wrap.querySelectorAll(`[data-kit-group="${CSS.escape(groupId)}"]`).forEach((row) => row.remove());
+  ricalcolaRigheDocumento(prefix);
 }
 
 function aggiungiRigaDocumentoSotto(button, prefix) {
@@ -2398,12 +2445,28 @@ function aggiungiRigaPreventivo(data = {}) {
   ricalcolaRigheDocumento('prev');
 }
 
+function addProductToPreventivo(productId) {
+  const product = (preventivoProdottiCache || []).find((row) => String(row.id) === String(productId));
+  if (!product) return;
+  const listino = product.listini?.find((row) => row.canale === 'diretto' || row.canale === 'entrambi') || product.listini?.[0];
+  aggiungiRigaPreventivo({
+    prodotto_id: product.id,
+    descrizione: product.nome || product.descrizione || '',
+    quantita: 1,
+    prezzo_unitario: listino?.prezzo ?? 0,
+    sconto: 0,
+    aliquota_iva: 22
+  });
+}
+
 async function insertKitIntoPreventivo(kitId, kitMultiplier = 1) {
   const detail = await api('GET', `/kits/${kitId}`);
   if (!detail?.componenti?.length) {
     toast('Questo kit non ha componenti configurati', 'error');
     return;
   }
+  const groupId = `kit-${detail.id}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const kitLabel = detail.nome || detail.codice_kit || 'Kit';
   detail.componenti.forEach((componente) => {
     const product = (preventivoProdottiCache || []).find((row) => String(row.id) === String(componente.prodotto_id));
     const listino = product?.listini?.find((row) => row.canale === 'diretto' || row.canale === 'entrambi') || product?.listini?.[0];
@@ -2413,10 +2476,48 @@ async function insertKitIntoPreventivo(kitId, kitMultiplier = 1) {
       quantita: (Number(componente.quantita || 0) || 0) * kitMultiplier,
       prezzo_unitario: listino?.prezzo ?? componente.prezzo_predefinito ?? 0,
       sconto: 0,
-      aliquota_iva: 22
+      aliquota_iva: 22,
+      kit_group: groupId,
+      kit_label: kitLabel
     });
   });
   toast(`Kit ${detail.nome || detail.codice_kit} aggiunto al preventivo`, 'success');
+}
+
+async function aggiungiVocePreventivo() {
+  if (!preventivoProdottiCache.length || !preventivoKitCache.length) {
+    const [prodotti, kits] = await Promise.all([api('GET', '/prodotti'), api('GET', '/kits')]);
+    preventivoProdottiCache = prodotti || [];
+    preventivoKitCache = kits || [];
+  }
+  const rows = [
+    ...preventivoProdottiCache.map((row) => ({
+      id: `prod-${row.id}`,
+      source_id: row.id,
+      record_type: 'prodotto',
+      codice: row.codice_interno,
+      nome: row.nome
+    })),
+    ...preventivoKitCache.map((row) => ({
+      id: `kit-${row.id}`,
+      source_id: row.id,
+      record_type: 'kit',
+      codice: row.codice_kit,
+      nome: row.nome
+    }))
+  ];
+  openRecordPicker('preventivo-items', {
+    rows,
+    onSelect: async (row) => {
+      if (row.record_type === 'kit') {
+        const qty = parseFloat(window.prompt(`Quanti kit "${row.nome}" vuoi aggiungere?`, '1') || '1') || 1;
+        if (qty <= 0) return;
+        await insertKitIntoPreventivo(row.source_id, qty);
+        return;
+      }
+      addProductToPreventivo(row.source_id);
+    }
+  });
 }
 
 async function aggiungiKitPreventivo(forcedKitId = null) {

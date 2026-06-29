@@ -72,12 +72,19 @@ function enrichKit(row) {
   const disponibilita = componenti.length
     ? componenti.reduce((min, componente) => Math.min(min, componente.producibili), Number.POSITIVE_INFINITY)
     : 0;
+  const prezzo_calcolato = componenti.reduce((sum, componente) => {
+    const prezzo = Number(componente.prezzo_predefinito || 0);
+    const quantita = Number(componente.quantita || 0);
+    return sum + (prezzo * quantita);
+  }, 0);
   return {
     ...row,
     componenti,
     componenti_count: componenti.length,
     componenti_totale: componenti.reduce((sum, componente) => sum + Number(componente.quantita || 0), 0),
-    disponibilita_kit: Number.isFinite(disponibilita) ? disponibilita : 0
+    disponibilita_kit: Number.isFinite(disponibilita) ? disponibilita : 0,
+    prezzo_vendita: prezzo_calcolato,
+    prezzo_calcolato
   };
 }
 
@@ -130,7 +137,7 @@ router.post('/', requirePermesso('prodotti', 'edit'), (req, res) => {
       s(body.nome),
       s(body.descrizione),
       i(body.categoria_id),
-      n(body.prezzo_vendita),
+      0,
       body.attivo === undefined ? 1 : (i(body.attivo) ?? 1),
       s(body.note)
     );
@@ -169,7 +176,7 @@ router.put('/:id', requirePermesso('prodotti', 'edit'), (req, res) => {
       s(body.nome),
       s(body.descrizione),
       i(body.categoria_id),
-      n(body.prezzo_vendita),
+      0,
       body.attivo === undefined ? 1 : (i(body.attivo) ?? 1),
       s(body.note),
       kitId

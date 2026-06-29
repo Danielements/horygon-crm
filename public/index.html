@@ -1252,8 +1252,7 @@
       </div>
       <div id="prev-righe" class="dynamic-lines"></div>
       <div class="document-lines-actions">
-        <button type="button" class="btn btn-outline btn-sm" onclick="aggiungiRigaPreventivo()">+ Aggiungi articolo</button>
-        <button type="button" class="btn btn-outline btn-sm" onclick="aggiungiKitPreventivo()">+ Aggiungi kit</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="aggiungiVocePreventivo()">+ Aggiungi articolo o kit</button>
       </div>
     </div>
     <div class="form-section-card">
@@ -1285,7 +1284,7 @@
         <div class="form-group"><label>Categoria</label><select id="kit-categoria"><option value="">Seleziona...</option></select></div>
       </div>
       <div class="form-row">
-        <div class="form-group"><label>Prezzo vendita</label><input type="number" step="0.01" id="kit-prezzo"></div>
+        <div class="form-group"><label>Prezzo kit calcolato</label><input type="number" step="0.01" id="kit-prezzo" readonly></div>
         <div class="form-group"><label>Attivo</label><select id="kit-attivo"><option value="1">Si</option><option value="0">No</option></select></div>
       </div>
       <div class="form-group"><label>Descrizione</label><input type="text" id="kit-descrizione"></div>
