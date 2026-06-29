@@ -1322,11 +1322,14 @@ async function loadProdotti() {
     const listino = p.listini?.find(l => l.canale === 'mepa') || p.listini?.[0];
     const fornitore = p.fornitori?.[0];
     const tags = String(p.tags || '').split(',').map(tag => tag.trim()).filter(Boolean);
+    const preview = p.immagine
+      ? `<img src="${escapeAttr(p.immagine)}" alt="${escapeAttr(p.nome || 'Prodotto')}" class="product-thumb">`
+      : '<div class="product-thumb product-thumb-placeholder">IMG</div>';
     const margine = listino?.prezzo && fornitore?.prezzo_acquisto
       ? (((listino.prezzo - fornitore.prezzo_acquisto) / listino.prezzo) * 100).toFixed(1) + '%' : '�';
     return `<tr>
       <td><code>${p.codice_interno}</code></td>
-      <td>${p.nome}<div style="font-size:11px;color:var(--text-muted)">${p.fatture_count || 0} fatture | ${p.ddt_count || 0} DDT</div>${tags.length ? `<div class="product-tag-list">${tags.map(tag => `<span class="product-tag-chip">${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</td>
+      <td><div class="product-name-cell">${preview}<div><div>${p.nome}</div><div style="font-size:11px;color:var(--text-muted)">${p.fatture_count || 0} fatture | ${p.ddt_count || 0} DDT</div>${tags.length ? `<div class="product-tag-list">${tags.map(tag => `<span class="product-tag-chip">${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</div></div></td>
       <td>${p.categoria_nome || '�'}<div style="font-size:11px;color:var(--text-muted)">${p.cpv_mepa ? escapeHtml(formatCpvDisplay(p.cpv_mepa)) : 'CPV non assegnato'}</div></td>
       <td><strong style="color:${(p.giacenza||0) > 0 ? 'var(--success)' : 'var(--danger)'}">${p.giacenza || 0}</strong></td>
       <td>${listino ? '�� ' + listino.prezzo.toFixed(2) : '�'}</td>

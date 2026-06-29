@@ -1620,6 +1620,32 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
   font-size: 11px;
   font-weight: 600;
 }
+
+.product-name-cell {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.product-thumb {
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+  background: var(--bg-input);
+  flex: 0 0 52px;
+}
+
+.product-thumb-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
 .modal-box-wide {
   width: min(1100px, 92vw);
 }
