@@ -1628,15 +1628,15 @@ code { background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-s
 }
 
 .product-thumb {
-  width: 150px;
-  height: 150px;
-  border-radius: 14px;
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
   border: 1px solid var(--border);
   object-fit: contain;
   object-position: center;
   background: var(--bg-input);
-  flex: 0 0 150px;
-  padding: 8px;
+  flex: 0 0 56px;
+  padding: 4px;
 }
 
 .product-thumb-placeholder {
