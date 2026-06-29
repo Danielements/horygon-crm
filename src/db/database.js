@@ -126,6 +126,30 @@ db.exec(`
     FOREIGN KEY (prodotto_fornitore_id) REFERENCES prodotti_fornitori(id)
   );
 
+  CREATE TABLE IF NOT EXISTS kit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    codice_kit TEXT NOT NULL UNIQUE,
+    nome TEXT NOT NULL,
+    descrizione TEXT,
+    categoria_id INTEGER,
+    prezzo_vendita REAL,
+    attivo INTEGER DEFAULT 1,
+    note TEXT,
+    creato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (categoria_id) REFERENCES categorie(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS kit_componenti (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kit_id INTEGER NOT NULL,
+    prodotto_id INTEGER NOT NULL,
+    quantita REAL NOT NULL,
+    ordine INTEGER DEFAULT 0,
+    note TEXT,
+    FOREIGN KEY (kit_id) REFERENCES kit(id) ON DELETE CASCADE,
+    FOREIGN KEY (prodotto_id) REFERENCES prodotti(id)
+  );
+
   -- FATTURE
   CREATE TABLE IF NOT EXISTS fatture (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -355,6 +379,14 @@ function ensureColumn(table, definition) {
   "cpv_mepa TEXT",
   "tags TEXT"
 ].forEach(col => ensureColumn('prodotti', col));
+
+[
+  "descrizione TEXT",
+  "categoria_id INTEGER",
+  "prezzo_vendita REAL",
+  "attivo INTEGER DEFAULT 1",
+  "note TEXT"
+].forEach(col => ensureColumn('kit', col));
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS fatture_iva_riepilogo (

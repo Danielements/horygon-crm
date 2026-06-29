@@ -50,6 +50,7 @@ app.use('/api/auth',        require('./routes/auth'));
 app.use('/api/utenti',      require('./routes/utenti'));
 app.use('/api/anagrafiche', require('./routes/anagrafiche'));
 app.use('/api/prodotti',    require('./routes/prodotti'));
+app.use('/api/kits',        require('./routes/kits'));
 app.use('/api/ordini',      require('./routes/ordini'));
 app.use('/api/preventivi',  require('./routes/preventivi'));
 app.use('/api/fatture',     require('./routes/fatture'));
