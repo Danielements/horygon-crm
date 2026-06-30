@@ -381,6 +381,11 @@ function ensureColumn(table, definition) {
 ].forEach(col => ensureColumn('prodotti', col));
 
 [
+  "linked_product_id INTEGER",
+  "linked_preventivo_id INTEGER"
+].forEach(col => ensureColumn('parts_requests', col));
+
+[
   "descrizione TEXT",
   "categoria_id INTEGER",
   "prezzo_vendita REAL",

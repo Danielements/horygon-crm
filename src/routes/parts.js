@@ -4,6 +4,7 @@ const https = require('https');
 const crypto = require('crypto');
 const db = require('../db/database');
 const { authMiddleware, requirePermesso } = require('../middleware/auth');
+const { createPreventivoPdfBuffer } = require('../services/document-pdf');
 
 const router = express.Router();
 
@@ -35,6 +36,23 @@ function nowSql() {
 function makeUuid() {
   if (crypto.randomUUID) return crypto.randomUUID();
   return `parts-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function makeCompactDate() {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${yyyy}${mm}${dd}`;
+}
+
+function slugToken(value, fallback = 'ITEM') {
+  const clean = String(value || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32);
+  return clean || fallback;
 }
 
 function normalizePlate(value) {
@@ -140,6 +158,233 @@ function logPartEvent(partsRequestId, eventType, eventMessage, eventSource = 'cr
     INSERT INTO parts_request_events (parts_request_id, event_type, event_message, event_source, payload_json)
     VALUES (?, ?, ?, ?, ?)
   `).run(partsRequestId, eventType, s(eventMessage), s(eventSource), payload ? JSON.stringify(payload) : null);
+}
+
+function findOrCreateCategoryId(categoryName = 'Ricambi') {
+  const normalizedName = s(categoryName) || 'Ricambi';
+  let row = db.prepare('SELECT id FROM categorie WHERE nome = ? LIMIT 1').get(normalizedName);
+  if (row?.id) return row.id;
+  const insert = db.prepare('INSERT INTO categorie (nome, descrizione) VALUES (?, ?)').run(normalizedName, 'Categoria automatica ricambi');
+  return Number(insert.lastInsertRowid);
+}
+
+function createUniqueProductCode(baseToken) {
+  const base = `RIC-${slugToken(baseToken, 'RTWS')}`;
+  let candidate = base;
+  let index = 1;
+  while (db.prepare('SELECT id FROM prodotti WHERE codice_interno = ? LIMIT 1').get(candidate)) {
+    index += 1;
+    candidate = `${base}-${index}`;
+  }
+  return candidate;
+}
+
+function createUniquePreventivoCode() {
+  const base = `PRE-RIC-${makeCompactDate()}`;
+  let candidate = base;
+  let index = 1;
+  while (db.prepare('SELECT id FROM preventivi WHERE codice_preventivo = ? LIMIT 1').get(candidate)) {
+    index += 1;
+    candidate = `${base}-${index}`;
+  }
+  return candidate;
+}
+
+function pickQuotedItem(request) {
+  if (request?.intake_state?.slots?.selected_glass_option) return request.intake_state.slots.selected_glass_option;
+  if (Array.isArray(request?.oe_results) && request.oe_results.length) {
+    const raw = json(request.oe_results[0].raw_payload_json, null);
+    return raw || {
+      oe_code: request.oe_results[0].oe_code,
+      description: request.oe_results[0].description,
+      price: request.oe_results[0].list_price
+    };
+  }
+  if (request?.oe_code || request?.normalized_part_name) {
+    return {
+      oe_code: request.oe_code,
+      description: request.normalized_part_name || request.requested_part_text || 'Ricambio ricambi',
+      price: null
+    };
+  }
+  return null;
+}
+
+function ensureQuoteProductForRequest(request, item) {
+  const oeCode = s(item?.oe_code) || s(request?.oe_code) || null;
+  const eurocode = s(item?.eurocode) || null;
+  const description = s(item?.description) || s(request?.normalized_part_name) || s(request?.requested_part_text) || 'Ricambio ricambi';
+  const price = item?.price !== undefined && item?.price !== null
+    ? Number(String(item.price).replace(',', '.'))
+    : (request?.oe_results?.[0]?.list_price || null);
+  const categoryId = findOrCreateCategoryId('Ricambi');
+  const searchCode = oeCode ? `RIC-${slugToken(oeCode, 'RTWS')}` : null;
+
+  let product = null;
+  if (request?.linked_product_id) {
+    product = db.prepare('SELECT * FROM prodotti WHERE id = ? LIMIT 1').get(request.linked_product_id);
+  }
+  if (!product && searchCode) {
+    product = db.prepare('SELECT * FROM prodotti WHERE codice_interno = ? LIMIT 1').get(searchCode);
+  }
+  if (!product && oeCode) {
+    product = db.prepare('SELECT * FROM prodotti WHERE barcode = ? LIMIT 1').get(oeCode);
+  }
+
+  const tags = ['ricambi', 'rtws', request?.normalized_part_category || 'ricambio_generico', oeCode].filter(Boolean).join(', ');
+
+  if (!product) {
+    const code = searchCode || createUniqueProductCode(oeCode || eurocode || description);
+    const insert = db.prepare(`
+      INSERT INTO prodotti (codice_interno, barcode, nome, descrizione, categoria_id, unita_misura, tags, attivo)
+      VALUES (?, ?, ?, ?, ?, 'pz', ?, 1)
+    `).run(code, oeCode, description, [description, eurocode ? `Eurocode: ${eurocode}` : null, 'Creato automaticamente da richiesta ricambi'].filter(Boolean).join('\n'), categoryId, tags);
+    product = db.prepare('SELECT * FROM prodotti WHERE id = ?').get(Number(insert.lastInsertRowid));
+  } else {
+    db.prepare(`
+      UPDATE prodotti
+      SET barcode = COALESCE(?, barcode),
+          nome = COALESCE(NULLIF(?, ''), nome),
+          descrizione = COALESCE(NULLIF(?, ''), descrizione),
+          categoria_id = COALESCE(?, categoria_id),
+          tags = COALESCE(NULLIF(?, ''), tags),
+          attivo = 1
+      WHERE id = ?
+    `).run(oeCode, description, [description, eurocode ? `Eurocode: ${eurocode}` : null, 'Aggiornato automaticamente da richiesta ricambi'].filter(Boolean).join('\n'), categoryId, tags, product.id);
+    product = db.prepare('SELECT * FROM prodotti WHERE id = ?').get(product.id);
+  }
+
+  if (price !== null && Number.isFinite(price)) {
+    const latestListino = db.prepare(`
+      SELECT *
+      FROM prodotti_listini
+      WHERE prodotto_id = ? AND canale = 'diretto'
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(product.id);
+    if (!latestListino || Number(latestListino.prezzo) !== Number(price)) {
+      db.prepare(`
+        INSERT INTO prodotti_listini (prodotto_id, canale, prezzo, cpv, valido_dal)
+        VALUES (?, 'diretto', ?, ?, date('now'))
+      `).run(product.id, price, eurocode || null);
+    }
+  }
+
+  return {
+    product,
+    price: price !== null && Number.isFinite(price) ? price : 0,
+    eurocode,
+    oeCode,
+    description
+  };
+}
+
+function createDraftQuoteFromRequest(request, quotedProduct) {
+  const qty = 1;
+  const imponibile = Number(quotedProduct.price || 0) * qty;
+  const aliquotaIva = 22;
+  const importoIva = Number((imponibile * aliquotaIva / 100).toFixed(2));
+  const totale = Number((imponibile + importoIva).toFixed(2));
+  const codicePreventivo = createUniquePreventivoCode();
+  const note = [
+    'Preventivo generato automaticamente da richiesta ricambi.',
+    request?.request_uuid ? `Richiesta: ${request.request_uuid}` : null,
+    request?.plate ? `Targa: ${request.plate}` : null
+  ].filter(Boolean).join('\n');
+
+  const insert = db.prepare(`
+    INSERT INTO preventivi (
+      codice_preventivo, anagrafica_id, stato, data_preventivo, imponibile, iva, totale, valuta, note
+    )
+    VALUES (?, ?, 'bozza', date('now'), ?, ?, ?, 'EUR', ?)
+  `).run(codicePreventivo, i(request?.customer_id), imponibile, importoIva, totale, note);
+  const preventivoId = Number(insert.lastInsertRowid);
+
+  db.prepare(`
+    INSERT INTO preventivi_righe (
+      preventivo_id, prodotto_id, descrizione, quantita, prezzo_unitario, sconto,
+      imponibile, aliquota_iva, importo_iva, totale_riga
+    )
+    VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+  `).run(
+    preventivoId,
+    quotedProduct.product.id,
+    quotedProduct.description,
+    qty,
+    quotedProduct.price,
+    imponibile,
+    aliquotaIva,
+    importoIva,
+    totale
+  );
+
+  return {
+    preventivoId,
+    codicePreventivo,
+    qty,
+    imponibile,
+    importoIva,
+    totale
+  };
+}
+
+function buildQuotePdfQuestionText(selectedItem) {
+  const lines = [
+    'Perfetto, ho identificato il ricambio selezionato.',
+    selectedItem?.description ? `Descrizione: ${selectedItem.description}` : null,
+    selectedItem?.oe_code ? `Codice OE: ${selectedItem.oe_code}` : null,
+    selectedItem?.eurocode ? `Eurocode: ${selectedItem.eurocode}` : null,
+    selectedItem?.price ? `Prezzo indicativo: EUR ${selectedItem.price}` : null,
+    '',
+    'Vuoi che ti prepari subito un preventivo PDF? Rispondi SI oppure NO.'
+  ].filter(Boolean);
+  return lines.join('\n');
+}
+
+function buildQuotePdfCaption(quote) {
+  return `Preventivo ${quote?.codicePreventivo || ''}`.trim();
+}
+
+async function createQuoteArtifactsFromRequestId(requestId) {
+  const current = serializeRequestDetails(requestId);
+  if (!current) throw new Error('Richiesta non trovata');
+
+  const quotedItem = pickQuotedItem(current);
+  if (!quotedItem) {
+    throw new Error('Nessun ricambio selezionato o risultato tecnico disponibile per creare il preventivo');
+  }
+
+  const quotedProduct = ensureQuoteProductForRequest(current, quotedItem);
+  const quote = createDraftQuoteFromRequest(current, quotedProduct);
+
+  db.prepare(`
+    UPDATE parts_requests
+    SET linked_product_id = ?,
+        linked_preventivo_id = ?,
+        status = 'preventivo_pronto',
+        updated_at = datetime('now')
+    WHERE id = ?
+  `).run(quotedProduct.product.id, quote.preventivoId, requestId);
+
+  logPartEvent(requestId, 'prodotto_creato', 'Articolo creato/aggiornato per preventivo', 'crm', {
+    productId: quotedProduct.product.id,
+    codice_interno: quotedProduct.product.codice_interno,
+    oe_code: quotedProduct.oeCode,
+    eurocode: quotedProduct.eurocode
+  });
+  logPartEvent(requestId, 'preventivo_creato', 'Preventivo bozza creato automaticamente dalla richiesta ricambi', 'crm', {
+    preventivoId: quote.preventivoId,
+    codice_preventivo: quote.codicePreventivo,
+    total: quote.totale,
+    qty: quote.qty
+  });
+
+  const pdf = await createPreventivoPdfBuffer(quote.preventivoId);
+  return {
+    quotedProduct,
+    quote,
+    pdf
+  };
 }
 
 function upsertConversationState(conversationId) {
@@ -614,6 +859,69 @@ function sendWhatsAppText(to, bodyText) {
   });
 }
 
+async function sendWhatsAppDocumentBuffer(to, buffer, filename, caption = '') {
+  if (!isWhatsappConfigured()) return { skipped: true, reason: 'whatsapp_non_configurato' };
+  const version = process.env.WHATSAPP_API_VERSION || 'v20.0';
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const authHeaders = { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` };
+
+  const uploadEndpoint = `https://graph.facebook.com/${version}/${phoneNumberId}/media`;
+  const form = new FormData();
+  form.append('messaging_product', 'whatsapp');
+  form.append('file', new Blob([buffer], { type: 'application/pdf' }), filename);
+
+  const uploadResponse = await fetch(uploadEndpoint, {
+    method: 'POST',
+    headers: authHeaders,
+    body: form
+  });
+  const uploadRaw = await uploadResponse.text();
+  const uploadBody = parseWhatsappResponseBody(uploadRaw);
+  if (!uploadResponse.ok || !uploadBody?.id) {
+    return {
+      skipped: false,
+      stage: 'upload',
+      statusCode: uploadResponse.status,
+      raw: uploadRaw,
+      body: uploadBody,
+      error: uploadBody?.error?.message || uploadRaw || `WhatsApp media upload HTTP ${uploadResponse.status}`
+    };
+  }
+
+  const messageEndpoint = `https://graph.facebook.com/${version}/${phoneNumberId}/messages`;
+  const payload = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: String(to || ''),
+    type: 'document',
+    document: {
+      id: uploadBody.id,
+      filename: String(filename || 'preventivo.pdf')
+    }
+  };
+  if (caption) payload.document.caption = String(caption);
+
+  const sendResponse = await fetch(messageEndpoint, {
+    method: 'POST',
+    headers: {
+      ...authHeaders,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+  const sendRaw = await sendResponse.text();
+  const sendBody = parseWhatsappResponseBody(sendRaw);
+  return {
+    skipped: false,
+    stage: 'message',
+    statusCode: sendResponse.status,
+    raw: sendRaw,
+    body: sendBody,
+    mediaId: uploadBody.id,
+    error: sendResponse.ok ? null : (sendBody?.error?.message || sendRaw || `WhatsApp document send HTTP ${sendResponse.status}`)
+  };
+}
+
 async function triangulateWithOpenAI(messageText) {
   const apiKey = process.env.OPENAI_API_KEY;
   const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
@@ -768,12 +1076,10 @@ function buildGlassOptions(items = [], requestedPartText = '') {
     .filter((entry) => scopedItems.includes(entry.item))
     .sort((a, b) => b.score - a.score);
 
-  const bestScore = ranked[0]?.score ?? 0;
-  const candidates = ranked.filter((entry) => entry.score === bestScore || entry.score > 0);
   const seen = new Set();
   const options = [];
 
-  for (const entry of candidates.length ? candidates : ranked) {
+  for (const entry of ranked) {
     const label = (entry.item.description || entry.item.oe_code || entry.item.eurocode || 'Ricambio cristalli').trim();
     const key = label.toLowerCase();
     if (seen.has(key)) continue;
@@ -864,14 +1170,16 @@ async function resolvePartsMessage({ message, channel = 'whatsapp', context = nu
   let glassCatalog = { status: 'SKIPPED', message: 'Nessun servizio tecnico eseguito', items: [] };
   let whatsappText = s(ai.operator_reply_text) || '';
   let status = s(ai.status) || 'nuova';
+  let options = [];
+  let selectedItem = null;
 
   if (glassEligible) {
     glassCatalog = await rtwsCheckEurocodeDaTargaOE2({ plate: parsed.plate, oeCode: parsed.oeCode });
-    const selectedItem = chooseBestGlassItem(glassCatalog.items, parsed.requestedPartText);
-    const options = buildGlassOptions(glassCatalog.items, parsed.requestedPartText);
+    selectedItem = chooseBestGlassItem(glassCatalog.items, parsed.requestedPartText);
+    options = buildGlassOptions(glassCatalog.items, parsed.requestedPartText);
     if (selectedItem && options.length <= 1) {
       parsed.oeCode = selectedItem.oe_code || parsed.oeCode;
-      whatsappText = buildGlassReplyText(selectedItem, glassCatalog.items.length);
+      whatsappText = buildQuotePdfQuestionText(selectedItem);
       status = 'oe_trovato';
     } else if (options.length > 1) {
       whatsappText = buildGlassOptionsReplyText(options, glassCatalog.items.length);
@@ -941,11 +1249,223 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
 
   const previousContext = context || {};
   const previousIntakeState = intakeState || { slots: {} };
+  const normalizedAnswer = text.toLowerCase();
+  const yesAnswer = /^(si|sì|yes|ok|va bene|procedi|confermo)$/i.test(normalizedAnswer);
+  const noAnswer = /^(no|no grazie|annulla|non ora)$/i.test(normalizedAnswer);
   const variantsRequest = /^(mostra( tutte)?( le)? varianti|varianti|altre varianti)$/i.test(text);
   const numericSelection = text.match(/^\s*(\d{1,2})\s*$/);
   const previousOptions = Array.isArray(previousIntakeState.slots?.proposed_glass_options)
     ? previousIntakeState.slots.proposed_glass_options
     : [];
+  if (previousIntakeState.pendingSlot === 'quote_pdf_confirmation') {
+    if (variantsRequest && previousOptions.length) {
+      const parsed = {
+        originalText: text,
+        plate: s(previousIntakeState.slots?.plate) || s(previousContext.plate) || '',
+        vin: s(previousIntakeState.slots?.vin) || s(previousContext.vin) || '',
+        oeCode: s(previousIntakeState.slots?.oe_code) || s(previousContext.oe_code) || '',
+        requestedPartText: s(previousIntakeState.slots?.part_name) || s(previousContext.normalized_part_name) || 'Ricambio cristalli',
+        confidence: 1
+      };
+      const normalizedPart = {
+        name: s(previousIntakeState.slots?.part_name) || 'Ricambio cristalli',
+        category: 'cristalli'
+      };
+      return {
+        status: 'OK',
+        parsed,
+        vehicle: null,
+        normalizedPart,
+        dbrtResult: {},
+        glassCatalog: { status: 'READY', message: 'Varianti cristalli riproposte al cliente durante conferma preventivo', items: previousOptions },
+        oeCatalog: {},
+        oeResults: previousOptions,
+        equivalents: {},
+        missingData: ['quote_pdf_confirmation'],
+        whatsappText: `${buildGlassOptionsReplyText(previousOptions, previousOptions.length)}\n\nVuoi che ti prepari subito un preventivo PDF? Rispondi SI oppure NO.`,
+        aiRequest: {
+          intent: 'glass_options_recap_during_quote_confirmation',
+          request_is_valid: true,
+          suggested_service: 'WAITING_DATA',
+          instruction: 'Riproposta varianti RTWS mentre si attende la conferma del preventivo PDF.',
+          availableSources: ['CONVERSATION_CONTEXT', 'RTWS_LISTINI'],
+          parsed,
+          normalizedPart,
+          openai: { skipped: true, error: null, model: process.env.OPENAI_MODEL || 'gpt-4o-mini', statusCode: null, raw: null, parsed: null }
+        },
+        aiSummary: null,
+        resolvedStatus: 'oe_trovato',
+        intakeState: previousIntakeState
+      };
+    }
+    if (numericSelection && previousOptions.length) {
+      const selectedIndex = Number(numericSelection[1]) - 1;
+      const selectedItem = previousOptions[selectedIndex];
+      if (selectedItem) {
+        const parsed = {
+          originalText: text,
+          plate: s(previousIntakeState.slots?.plate) || s(previousContext.plate) || '',
+          vin: s(previousIntakeState.slots?.vin) || s(previousContext.vin) || '',
+          oeCode: s(selectedItem.oe_code) || '',
+          requestedPartText: s(previousIntakeState.slots?.part_name) || s(previousContext.normalized_part_name) || 'Ricambio cristalli',
+          confidence: 1
+        };
+        const normalizedPart = {
+          name: s(previousIntakeState.slots?.part_name) || 'Ricambio cristalli',
+          category: 'cristalli'
+        };
+        return {
+          status: 'OK',
+          parsed,
+          vehicle: null,
+          normalizedPart,
+          dbrtResult: {},
+          glassCatalog: { status: 'READY', message: 'Variante cristalli aggiornata durante conferma preventivo', items: previousOptions },
+          oeCatalog: {},
+          oeResults: [selectedItem],
+          equivalents: {},
+          missingData: ['quote_pdf_confirmation'],
+          whatsappText: buildQuotePdfQuestionText(selectedItem),
+          aiRequest: {
+            intent: 'glass_option_reselection',
+            request_is_valid: true,
+            suggested_service: 'WAITING_DATA',
+            instruction: 'Il cliente ha cambiato la variante selezionata prima della conferma preventivo PDF.',
+            availableSources: ['CONVERSATION_CONTEXT', 'RTWS_LISTINI'],
+            parsed,
+            normalizedPart,
+            selectedOptionIndex: selectedIndex + 1,
+            openai: { skipped: true, error: null, model: process.env.OPENAI_MODEL || 'gpt-4o-mini', statusCode: null, raw: null, parsed: null }
+          },
+          aiSummary: null,
+          resolvedStatus: 'oe_trovato',
+          intakeState: {
+            stage: 'waiting_quote_pdf_confirmation',
+            pendingSlot: 'quote_pdf_confirmation',
+            pendingQuestion: 'Vuoi che ti prepari subito un preventivo PDF? Rispondi SI oppure NO.',
+            slots: {
+              ...previousIntakeState.slots,
+              oe_code: s(selectedItem.oe_code) || s(previousIntakeState.slots?.oe_code) || '',
+              selected_glass_option: selectedItem,
+              proposed_glass_options: previousOptions
+            }
+          }
+        };
+      }
+    }
+    const selectedItem = previousIntakeState.slots?.selected_glass_option || null;
+    const parsed = {
+      originalText: text,
+      plate: s(previousIntakeState.slots?.plate) || s(previousContext.plate) || '',
+      vin: s(previousIntakeState.slots?.vin) || s(previousContext.vin) || '',
+      oeCode: s(selectedItem?.oe_code) || s(previousIntakeState.slots?.oe_code) || '',
+      requestedPartText: s(previousIntakeState.slots?.part_name) || s(previousContext.normalized_part_name) || 'Ricambio cristalli',
+      confidence: 1
+    };
+    const normalizedPart = {
+      name: s(previousIntakeState.slots?.part_name) || 'Ricambio cristalli',
+      category: 'cristalli'
+    };
+    if (yesAnswer) {
+      return {
+        status: 'OK',
+        parsed,
+        vehicle: null,
+        normalizedPart,
+        dbrtResult: {},
+        glassCatalog: { status: 'READY', message: 'Conferma creazione preventivo PDF ricevuta', items: previousOptions },
+        oeCatalog: {},
+        oeResults: selectedItem ? [selectedItem] : [],
+        equivalents: {},
+        missingData: [],
+        whatsappText: 'Perfetto, preparo subito il preventivo PDF e te lo invio qui su WhatsApp.',
+        quoteDecision: 'create_pdf',
+        aiRequest: {
+          intent: 'quote_pdf_confirmation_yes',
+          request_is_valid: true,
+          suggested_service: 'CREATE_PREVENTIVO_PDF',
+          instruction: 'Conferma positiva del cliente alla generazione preventivo PDF.',
+          availableSources: ['CONVERSATION_CONTEXT', 'CRM_PREVENTIVI'],
+          parsed,
+          normalizedPart,
+          openai: { skipped: true, error: null, model: process.env.OPENAI_MODEL || 'gpt-4o-mini', statusCode: null, raw: null, parsed: null }
+        },
+        aiSummary: null,
+        resolvedStatus: 'preventivo_pronto',
+        intakeState: {
+          stage: 'quote_pdf_confirmed',
+          pendingSlot: null,
+          pendingQuestion: null,
+          slots: {
+            ...previousIntakeState.slots,
+            quote_pdf_requested: true
+          }
+        }
+      };
+    }
+    if (noAnswer) {
+      return {
+        status: 'OK',
+        parsed,
+        vehicle: null,
+        normalizedPart,
+        dbrtResult: {},
+        glassCatalog: { status: 'READY', message: 'Preventivo PDF rifiutato dal cliente', items: previousOptions },
+        oeCatalog: {},
+        oeResults: selectedItem ? [selectedItem] : [],
+        equivalents: {},
+        missingData: [],
+        whatsappText: 'Va bene, non genero il PDF per ora. La richiesta resta salvata e possiamo procedere quando vuoi.',
+        aiRequest: {
+          intent: 'quote_pdf_confirmation_no',
+          request_is_valid: true,
+          suggested_service: 'WAITING_DATA',
+          instruction: 'Il cliente non desidera il preventivo PDF in questo momento.',
+          availableSources: ['CONVERSATION_CONTEXT'],
+          parsed,
+          normalizedPart,
+          openai: { skipped: true, error: null, model: process.env.OPENAI_MODEL || 'gpt-4o-mini', statusCode: null, raw: null, parsed: null }
+        },
+        aiSummary: null,
+        resolvedStatus: 'oe_trovato',
+        intakeState: {
+          stage: 'selection_completed',
+          pendingSlot: null,
+          pendingQuestion: null,
+          slots: {
+            ...previousIntakeState.slots,
+            quote_pdf_requested: false
+          }
+        }
+      };
+    }
+    return {
+      status: 'OK',
+      parsed,
+      vehicle: null,
+      normalizedPart,
+      dbrtResult: {},
+      glassCatalog: { status: 'READY', message: 'In attesa di conferma preventivo PDF', items: previousOptions },
+      oeCatalog: {},
+      oeResults: selectedItem ? [selectedItem] : [],
+      equivalents: {},
+      missingData: ['quote_pdf_confirmation'],
+      whatsappText: 'Dimmi solo SI oppure NO se vuoi che ti prepari subito il preventivo PDF.',
+      aiRequest: {
+        intent: 'quote_pdf_confirmation_repeat',
+        request_is_valid: true,
+        suggested_service: 'WAITING_DATA',
+        instruction: 'Ripetizione richiesta SI/NO per generazione preventivo PDF.',
+        availableSources: ['CONVERSATION_CONTEXT'],
+        parsed,
+        normalizedPart,
+        openai: { skipped: true, error: null, model: process.env.OPENAI_MODEL || 'gpt-4o-mini', statusCode: null, raw: null, parsed: null }
+      },
+      aiSummary: null,
+      resolvedStatus: 'oe_trovato',
+      intakeState: previousIntakeState
+    };
+  }
   if (variantsRequest && previousOptions.length) {
     const parsed = {
       originalText: text,
@@ -1025,7 +1545,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
         oeResults: [selectedItem],
         equivalents: {},
         missingData: [],
-        whatsappText: buildGlassReplyText(selectedItem, previousOptions.length),
+        whatsappText: buildQuotePdfQuestionText(selectedItem),
         aiRequest: {
           intent: 'glass_option_selection',
           request_is_valid: true,
@@ -1047,9 +1567,9 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
         aiSummary: null,
         resolvedStatus: 'oe_trovato',
         intakeState: {
-          stage: 'selection_completed',
-          pendingSlot: null,
-          pendingQuestion: null,
+          stage: 'waiting_quote_pdf_confirmation',
+          pendingSlot: 'quote_pdf_confirmation',
+          pendingQuestion: 'Vuoi che ti prepari subito un preventivo PDF? Rispondi SI oppure NO.',
           slots: {
             ...previousIntakeState.slots,
             oe_code: s(selectedItem.oe_code) || s(previousIntakeState.slots?.oe_code) || '',
@@ -1169,7 +1689,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
 
     if (selectedItem && options.length <= 1) {
       parsed.oeCode = selectedItem.oe_code || parsed.oeCode;
-      whatsappText = buildGlassReplyText(selectedItem, glassCatalog.items.length);
+      whatsappText = buildQuotePdfQuestionText(selectedItem);
       status = 'oe_trovato';
     } else if (options.length > 1) {
       whatsappText = buildGlassOptionsReplyText(options, glassCatalog.items.length);
@@ -1216,11 +1736,13 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
       aiSummary: null,
       resolvedStatus: status,
       intakeState: {
-        stage: 'ready_for_service',
-        pendingSlot: null,
-        pendingQuestion: null,
+        stage: selectedItem && options.length <= 1 ? 'waiting_quote_pdf_confirmation' : 'ready_for_service',
+        pendingSlot: selectedItem && options.length <= 1 ? 'quote_pdf_confirmation' : null,
+        pendingQuestion: selectedItem && options.length <= 1 ? 'Vuoi che ti prepari subito un preventivo PDF? Rispondi SI oppure NO.' : null,
         slots: {
           ...intakeSlots,
+          oe_code: selectedItem?.oe_code || intakeSlots.oe_code || '',
+          selected_glass_option: selectedItem && options.length <= 1 ? selectedItem : (intakeSlots.selected_glass_option || null),
           proposed_glass_options: options
         }
       }
@@ -1330,11 +1852,13 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     aiSummary: s(ai.ai_summary) || null,
     resolvedStatus: status,
     intakeState: {
-      stage: glassEligible ? 'ready_for_service' : 'ready_for_ai',
-      pendingSlot: null,
-      pendingQuestion: null,
+      stage: glassEligible && selectedItem && options.length <= 1 ? 'waiting_quote_pdf_confirmation' : (glassEligible ? 'ready_for_service' : 'ready_for_ai'),
+      pendingSlot: glassEligible && selectedItem && options.length <= 1 ? 'quote_pdf_confirmation' : null,
+      pendingQuestion: glassEligible && selectedItem && options.length <= 1 ? 'Vuoi che ti prepari subito un preventivo PDF? Rispondi SI oppure NO.' : null,
       slots: {
         ...finalSlots,
+        oe_code: selectedItem?.oe_code || finalSlots.oe_code || '',
+        selected_glass_option: glassEligible && selectedItem && options.length <= 1 ? selectedItem : (finalSlots.selected_glass_option || null),
         proposed_glass_options: options || []
       }
     }
@@ -1700,6 +2224,57 @@ router.post('/webhook/whatsapp', async (req, res) => {
                 whatsappSend
               );
             }
+
+            if (resolved.quoteDecision === 'create_pdf') {
+              try {
+                const artifacts = await createQuoteArtifactsFromRequestId(partsRequestId);
+                const documentSend = await sendWhatsAppDocumentBuffer(
+                  phone,
+                  artifacts.pdf.buffer,
+                  artifacts.pdf.filename,
+                  buildQuotePdfCaption(artifacts.quote)
+                );
+                db.prepare(`
+                  INSERT INTO whatsapp_messages (
+                    conversation_id, direction, channel, external_message_id, message_type,
+                    body_text, media_url, media_mime_type, media_metadata_json, delivery_status,
+                    error_message, source_system, raw_payload_json
+                  )
+                  VALUES (?, 'outbound', 'whatsapp', ?, 'document', ?, ?, ?, ?, ?, ?, 'openai_auto_reply', ?)
+                `).run(
+                  conversation.id,
+                  s(documentSend.body?.messages?.[0]?.id),
+                  `Preventivo ${artifacts.quote.codicePreventivo}`,
+                  s(documentSend.mediaId),
+                  'application/pdf',
+                  JSON.stringify({
+                    filename: artifacts.pdf.filename,
+                    preventivoId: artifacts.quote.preventivoId,
+                    codicePreventivo: artifacts.quote.codicePreventivo
+                  }),
+                  documentSend.error ? 'error' : (documentSend.statusCode >= 200 && documentSend.statusCode < 300 ? 'sent' : 'error'),
+                  documentSend.error || s(documentSend.body?.error?.message),
+                  JSON.stringify(documentSend)
+                );
+                upsertConversationState(conversation.id);
+                logPartEvent(
+                  partsRequestId,
+                  documentSend.error ? 'errore_integrazione' : 'preventivo_pdf_inviato',
+                  documentSend.error ? `Invio PDF WhatsApp fallito: ${documentSend.error}` : 'Preventivo PDF inviato automaticamente su WhatsApp',
+                  'whatsapp_meta',
+                  {
+                    ...documentSend,
+                    preventivoId: artifacts.quote.preventivoId,
+                    codicePreventivo: artifacts.quote.codicePreventivo,
+                    productId: artifacts.quotedProduct.product.id
+                  }
+                );
+              } catch (error) {
+                logPartEvent(partsRequestId, 'errore_integrazione', `Creazione/invio preventivo PDF fallito: ${error.message}`, 'crm', {
+                  quoteDecision: resolved.quoteDecision
+                });
+              }
+            }
           }
 
           const backendResult = await forwardToPartsBackend({
@@ -1914,6 +2489,25 @@ router.post('/parts/requests/:id/notes', requirePermesso('ricambi', 'edit'), (re
   `).run(requestId, req.user.id, noteText);
   logPartEvent(requestId, 'nota_aggiunta', 'Nota interna aggiunta', 'crm', { userId: req.user.id });
   res.json({ id: Number(result.lastInsertRowid) });
+});
+
+router.post('/parts/requests/:id/create-quote', requirePermesso('ricambi', 'edit'), async (req, res) => {
+  const requestId = Number(req.params.id);
+  db.exec('BEGIN');
+  try {
+    const { quotedProduct, quote } = await createQuoteArtifactsFromRequestId(requestId);
+    db.exec('COMMIT');
+    res.json({
+      ok: true,
+      product_id: quotedProduct.product.id,
+      preventivo_id: quote.preventivoId,
+      codice_preventivo: quote.codicePreventivo,
+      pdf_url: `/api/preventivi/${quote.preventivoId}/pdf`
+    });
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch {}
+    res.status(400).json({ error: error.message });
+  }
 });
 
 router.get('/parts/conversations', requirePermesso('ricambi', 'read'), (req, res) => {
