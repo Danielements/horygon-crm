@@ -370,8 +370,9 @@ function sendWhatsAppText(to, bodyText) {
 
 async function triangulateWithOpenAI(messageText) {
   const apiKey = process.env.OPENAI_API_KEY;
+  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
   if (!apiKey || !messageText) {
-    return { skipped: true, reason: 'openai_non_configurato' };
+    return { skipped: true, reason: 'openai_non_configurato', meta: { model } };
   }
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -381,7 +382,7 @@ async function triangulateWithOpenAI(messageText) {
       Authorization: `Bearer ${apiKey}`
     },
     body: JSON.stringify({
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      model,
       temperature: 0.2,
       response_format: {
         type: 'json_schema',
@@ -429,14 +430,33 @@ async function triangulateWithOpenAI(messageText) {
   const raw = await response.text();
   const parsed = parseWhatsappResponseBody(raw);
   if (!response.ok) {
-    return { skipped: false, error: parsed?.error?.message || raw || `OpenAI HTTP ${response.status}` };
+    return {
+      skipped: false,
+      error: parsed?.error?.message || raw || `OpenAI HTTP ${response.status}`,
+      meta: { model, statusCode: response.status, raw, parsed }
+    };
   }
   const content = parsed?.choices?.[0]?.message?.content;
-  if (!content) return { skipped: false, error: 'Risposta OpenAI vuota' };
+  if (!content) {
+    return {
+      skipped: false,
+      error: 'Risposta OpenAI vuota',
+      meta: { model, statusCode: response.status, raw, parsed }
+    };
+  }
   try {
-    return { skipped: false, data: JSON.parse(content) };
+    return {
+      skipped: false,
+      data: JSON.parse(content),
+      meta: { model, statusCode: response.status, raw, parsed, content }
+    };
   } catch {
-    return { skipped: false, error: 'JSON OpenAI non valido', raw: content };
+    return {
+      skipped: false,
+      error: 'JSON OpenAI non valido',
+      raw: content,
+      meta: { model, statusCode: response.status, raw, parsed, content }
+    };
   }
 }
 
@@ -550,6 +570,14 @@ async function resolvePartsMessage({ message, channel = 'whatsapp' }) {
         plate_source: ai.plate ? 'openai' : (fallbackPlate ? 'regex' : 'missing'),
         vin_source: ai.vin ? 'openai' : (fallbackVin ? 'regex' : 'missing'),
         oe_source: ai.oe_code ? 'openai' : (fallbackOeCode ? 'regex' : 'missing')
+      },
+      openai: {
+        skipped: !!aiResult.skipped,
+        error: aiResult.error || null,
+        model: aiResult.meta?.model || null,
+        statusCode: aiResult.meta?.statusCode || null,
+        raw: aiResult.meta?.content || aiResult.meta?.raw || aiResult.raw || null,
+        parsed: aiResult.data || aiResult.meta?.parsed || null
       }
     },
     aiSummary: s(ai.ai_summary) || null,
