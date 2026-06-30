@@ -41,6 +41,53 @@ function normalizePlate(value) {
   return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
+function extractPlateFromText(value) {
+  const compact = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, ' ');
+  const patterns = [
+    /\b([A-Z]{2}\s?\d{3}\s?[A-Z]{2})\b/g,
+    /\b([A-Z]{2}\s?\d{4}\s?[A-Z])\b/g,
+    /\b([A-Z]{1}\s?\d{5}\s?[A-Z]{1})\b/g
+  ];
+
+  for (const pattern of patterns) {
+    pattern.lastIndex = 0;
+    const match = pattern.exec(compact);
+    if (match?.[1]) return normalizePlate(match[1]);
+  }
+
+  return '';
+}
+
+function extractVinFromText(value) {
+  const compact = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, ' ');
+  const match = compact.match(/\b([A-HJ-NPR-Z0-9]{17})\b/);
+  return match?.[1] || '';
+}
+
+function extractOeCodeFromText(value) {
+  const compact = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, ' ');
+  const candidates = [...compact.matchAll(/\b([A-Z0-9]{6,18})\b/g)]
+    .map((match) => match[1])
+    .filter((token) => /\d/.test(token) && /[A-Z]/.test(token));
+  return candidates[0] || '';
+}
+
+function deriveRequestedPartText(value, plate = '', vin = '', oeCode = '') {
+  let text = String(value || '');
+
+  [plate, vin, oeCode].filter(Boolean).forEach((token) => {
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    text = text.replace(new RegExp(escaped, 'ig'), ' ');
+  });
+
+  text = text
+    .replace(/\b(targa|plate|vin|oe|oem|codice|cod\.?|richiesta|ricambio|pezzo|mi serve|serve|cerco|per auto|auto)\b/ig, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return text || String(value || '').trim();
+}
+
 function xmlEscape(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -432,11 +479,20 @@ async function resolvePartsMessage({ message, channel = 'whatsapp' }) {
 
   const aiResult = await triangulateWithOpenAI(text);
   const ai = aiResult.data || {};
+  const fallbackPlate = extractPlateFromText(text);
+  const fallbackVin = extractVinFromText(text);
+  const fallbackOeCode = extractOeCodeFromText(text);
+  const resolvedPlate = normalizePlate(ai.plate || fallbackPlate || '');
+  const resolvedVin = s(ai.vin) || fallbackVin;
+  const resolvedOeCode = s(ai.oe_code) || fallbackOeCode;
+  const resolvedRequestedPartText = s(ai.requested_part_text)
+    || deriveRequestedPartText(text, resolvedPlate, resolvedVin, resolvedOeCode);
   const parsed = {
     originalText: text,
-    plate: normalizePlate(ai.plate || ''),
-    oeCode: s(ai.oe_code) || '',
-    requestedPartText: s(ai.requested_part_text) || text,
+    plate: resolvedPlate,
+    vin: resolvedVin,
+    oeCode: resolvedOeCode,
+    requestedPartText: resolvedRequestedPartText,
     confidence: ai.confidence ?? 0
   };
   const normalizedPart = {
@@ -489,7 +545,12 @@ async function resolvePartsMessage({ message, channel = 'whatsapp' }) {
       instruction: 'Triage AI e scelta del servizio RTWS più utile con minimizzazione dei falsi positivi.',
       availableSources: ['OPENAI', 'RTWS_LISTINI', 'RTWS_BDRT'],
       parsed,
-      normalizedPart
+      normalizedPart,
+      extraction: {
+        plate_source: ai.plate ? 'openai' : (fallbackPlate ? 'regex' : 'missing'),
+        vin_source: ai.vin ? 'openai' : (fallbackVin ? 'regex' : 'missing'),
+        oe_source: ai.oe_code ? 'openai' : (fallbackOeCode ? 'regex' : 'missing')
+      }
     },
     aiSummary: s(ai.ai_summary) || null,
     resolvedStatus: status
@@ -830,7 +891,21 @@ router.post('/webhook/whatsapp', async (req, res) => {
             originalMessage: bodyText,
             phone,
             externalMessageId,
-            requestUuid: db.prepare('SELECT request_uuid FROM parts_requests WHERE id = ?').get(partsRequestId)?.request_uuid || null
+            channel: 'whatsapp',
+            requestUuid: db.prepare('SELECT request_uuid FROM parts_requests WHERE id = ?').get(partsRequestId)?.request_uuid || null,
+            parsed: resolved?.parsed || null,
+            normalizedPart: resolved?.normalizedPart || null,
+            missingData: resolved?.missingData || [],
+            aiSummary: resolved?.aiSummary || null,
+            resolvedStatus: resolved?.resolvedStatus || null,
+            whatsappReplyText: resolved?.whatsappText || null,
+            suggestedService: resolved?.aiRequest?.suggested_service || null,
+            rtws: {
+              status: resolved?.glassCatalog?.status || null,
+              message: resolved?.glassCatalog?.message || null,
+              stateCode: resolved?.glassCatalog?.stateCode || null,
+              results: Array.isArray(resolved?.oeResults) ? resolved.oeResults.slice(0, 20) : []
+            }
           });
           if (!backendResult.skipped && !backendResult.error && backendResult.statusCode >= 200 && backendResult.statusCode < 300) {
             logPartEvent(partsRequestId, 'backend_sync', 'Richiesta inoltrata al backend ricambi', 'parts_backend', backendResult.body || { statusCode: backendResult.statusCode });
