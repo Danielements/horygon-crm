@@ -247,10 +247,15 @@ function pickQuotedItem(request) {
 function ensureQuoteProductForRequest(request, item) {
   const oeCode = s(item?.oe_code) || s(request?.oe_code) || null;
   const eurocode = s(item?.eurocode) || null;
-  const description = s(item?.description) || s(request?.normalized_part_name) || s(request?.requested_part_text) || 'Ricambio ricambi';
+  const baseDescription = s(item?.description) || s(request?.normalized_part_name) || s(request?.requested_part_text) || 'Ricambio ricambi';
   const price = item?.price !== undefined && item?.price !== null
     ? Number(String(item.price).replace(',', '.'))
     : (request?.oe_results?.[0]?.list_price || null);
+  const description = [
+    baseDescription,
+    oeCode ? `OE ${oeCode}` : null,
+    price !== null && Number.isFinite(price) ? `EUR ${Number(price).toFixed(2)}` : null
+  ].filter(Boolean).join(' - ');
   const categoryId = findOrCreateCategoryId('Ricambi');
   const searchCode = oeCode ? `RIC-${slugToken(oeCode, 'RTWS')}` : null;
 
@@ -1898,12 +1903,16 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   let glassCatalog = { status: 'SKIPPED', message: 'Nessun servizio tecnico eseguito', items: [] };
   let whatsappText = s(ai.operator_reply_text) || '';
   let status = s(ai.status) || 'nuova';
+  let options = [];
+  let selectedItem = null;
+  let confidentSelection = false;
 
   if (glassEligible) {
     glassCatalog = await rtwsCheckEurocodeDaTargaOE2({ plate: parsed.plate, oeCode: parsed.oeCode });
-    const selectedItem = chooseBestGlassItem(glassCatalog.items, parsed.requestedPartText);
-    const options = buildGlassOptions(glassCatalog.items, parsed.requestedPartText);
-    if (selectedItem && options.length <= 1) {
+    selectedItem = chooseBestGlassItem(glassCatalog.items, parsed.requestedPartText);
+    options = buildGlassOptions(glassCatalog.items, parsed.requestedPartText);
+    confidentSelection = isConfidentGlassSelection(selectedItem, parsed.requestedPartText, options);
+    if (selectedItem && options.length <= 1 && confidentSelection) {
       parsed.oeCode = selectedItem.oe_code || parsed.oeCode;
       whatsappText = buildGlassReplyText(selectedItem, glassCatalog.items.length);
       status = 'oe_trovato';
