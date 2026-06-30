@@ -8,12 +8,21 @@ const { createPreventivoPdfBuffer } = require('../services/document-pdf');
 
 const router = express.Router();
 
-const PARTS_OPEN_STATUSES = ['nuova', 'in_lavorazione', 'in_attesa_dati_cliente', 'in_attesa_verifica_tecnica', 'oe_trovato', 'preventivo_pronto'];
+const PARTS_OPEN_STATUSES = ['nuova', 'in_lavorazione', 'in_attesa_dati_cliente', 'in_attesa_verifica_tecnica', 'oe_trovato'];
 const rtwsSessions = new Map();
 let partsInboundProcessingQueue = Promise.resolve();
 
 function s(value) {
   return value === undefined || value === null || value === '' ? null : String(value).trim();
+}
+
+function buildInboundMessagePlaceholder(messageType = 'text', mediaUrl = null) {
+  const normalizedType = String(messageType || '').toLowerCase();
+  if (normalizedType === 'image' || normalizedType === 'photo') return '[foto ricevuta]';
+  if (normalizedType === 'document') return '[documento ricevuto]';
+  if (normalizedType === 'audio' || normalizedType === 'voice') return '[audio ricevuto]';
+  if (mediaUrl) return '[allegato ricevuto]';
+  return '[messaggio senza testo]';
 }
 
 function i(value) {
@@ -505,6 +514,7 @@ function getLatestConversationContext(phone, currentPartsRequestId = null) {
     FROM parts_requests
     WHERE user_phone = ?
       AND (? IS NULL OR id <> ?)
+      AND status IN (${PARTS_OPEN_STATUSES.map(() => '?').join(', ')})
       AND (
         COALESCE(plate, '') <> ''
         OR COALESCE(vin, '') <> ''
@@ -514,7 +524,7 @@ function getLatestConversationContext(phone, currentPartsRequestId = null) {
       )
     ORDER BY id DESC
     LIMIT 1
-  `).get(phone, currentPartsRequestId, currentPartsRequestId);
+  `).get(phone, currentPartsRequestId, currentPartsRequestId, ...PARTS_OPEN_STATUSES);
 }
 
 function getActivePartsRequestForPhone(phone) {
@@ -524,11 +534,11 @@ function getActivePartsRequestForPhone(phone) {
     SELECT *
     FROM parts_requests
     WHERE user_phone = ?
-      AND status IN ('nuova', 'in_lavorazione', 'in_attesa_dati_cliente', 'in_attesa_verifica_tecnica', 'oe_trovato', 'preventivo_pronto')
+      AND status IN (${PARTS_OPEN_STATUSES.map(() => '?').join(', ')})
       AND COALESCE(last_message_at, updated_at, created_at) >= datetime('now', ?)
     ORDER BY last_message_at DESC, id DESC
     LIMIT 1
-  `).get(phone, `-${windowMinutes} minutes`);
+  `).get(phone, ...PARTS_OPEN_STATUSES, `-${windowMinutes} minutes`);
 }
 
 function getIntakeState(partsRequestId) {
@@ -1806,7 +1816,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
           openai: { skipped: true, error: null, model: process.env.OPENAI_MODEL || 'gpt-4o-mini', statusCode: null, raw: null, parsed: null }
         },
         aiSummary: null,
-        resolvedStatus: 'preventivo_pronto',
+        resolvedStatus: 'completata',
         intakeState: {
           stage: 'quote_pdf_confirmed',
           pendingSlot: null,
@@ -1842,7 +1852,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
           openai: { skipped: true, error: null, model: process.env.OPENAI_MODEL || 'gpt-4o-mini', statusCode: null, raw: null, parsed: null }
         },
         aiSummary: null,
-        resolvedStatus: 'oe_trovato',
+        resolvedStatus: 'completata',
         intakeState: {
           stage: 'selection_completed',
           pendingSlot: null,
@@ -2387,7 +2397,7 @@ function buildDashboard() {
     SELECT
       SUM(CASE WHEN date(created_at) = date('now') THEN 1 ELSE 0 END) AS requests_today,
       SUM(CASE WHEN created_at >= datetime('now', '-7 days') THEN 1 ELSE 0 END) AS requests_last_7_days,
-      SUM(CASE WHEN status IN ('nuova','in_lavorazione','in_attesa_dati_cliente','in_attesa_verifica_tecnica','oe_trovato','preventivo_pronto') THEN 1 ELSE 0 END) AS requests_open,
+      SUM(CASE WHEN status IN ('nuova','in_lavorazione','in_attesa_dati_cliente','in_attesa_verifica_tecnica','oe_trovato') THEN 1 ELSE 0 END) AS requests_open,
       SUM(CASE WHEN status = 'in_attesa_dati_cliente' THEN 1 ELSE 0 END) AS waiting_customer,
       SUM(CASE WHEN status = 'in_attesa_verifica_tecnica' THEN 1 ELSE 0 END) AS waiting_technical,
       SUM(CASE WHEN status = 'completata' THEN 1 ELSE 0 END) AS completed,
@@ -2562,6 +2572,7 @@ async function processInboundPartsMessage({
   sendDocument
 }) {
   let partsRequestId = null;
+  const inboundPreviewText = s(bodyText) || buildInboundMessagePlaceholder(messageType, mediaUrl);
   try {
     closeStalePartsRequestsForPhone(userKey);
     const activeRequest = getActivePartsRequestForPhone(userKey);
@@ -2586,8 +2597,8 @@ async function processInboundPartsMessage({
         channel,
         externalMessageId,
         userKey,
-        bodyText || '[messaggio senza testo]',
-        bodyText || null,
+        inboundPreviewText,
+        inboundPreviewText,
         `${channel}_webhook`
       );
       partsRequestId = Number(requestInsert.lastInsertRowid);
@@ -2607,7 +2618,7 @@ async function processInboundPartsMessage({
       channel,
       externalMessageId,
       messageType,
-      bodyText,
+      inboundPreviewText,
       mediaUrl,
       mediaMimeType,
       mediaMetadata ? JSON.stringify(mediaMetadata) : null,
