@@ -1,5 +1,6 @@
 const express = require('express');
 const db = require('../db/database');
+const { createPreventivoPdfBuffer } = require('../services/document-pdf');
 
 const router = express.Router();
 
@@ -39,6 +40,23 @@ function renderDocumentLabel(tipo) {
   if (tipo === 'immagine') return 'Foto';
   return tipo || 'Allegato';
 }
+
+router.get('/api/public/preventivi/:token/pdf', async (req, res) => {
+  const token = String(req.params.token || '').trim();
+  if (!token) return res.status(404).json({ error: 'Preventivo non trovato' });
+
+  const preventivo = db.prepare('SELECT id FROM preventivi WHERE public_token = ? LIMIT 1').get(token);
+  if (!preventivo?.id) return res.status(404).json({ error: 'Preventivo non trovato' });
+
+  try {
+    const pdf = await createPreventivoPdfBuffer(preventivo.id);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename=${pdf.filename}`);
+    res.send(pdf.buffer);
+  } catch (error) {
+    res.status(404).json({ error: error.message });
+  }
+});
 
 router.get('/api/public/prodotti/:id', (req, res) => {
   const product = getPublicProduct(Number(req.params.id));

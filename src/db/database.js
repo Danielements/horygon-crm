@@ -358,7 +358,8 @@ function ensureColumn(table, definition) {
 [
   "imponibile REAL DEFAULT 0",
   "iva REAL DEFAULT 0",
-  "valuta TEXT DEFAULT 'EUR'"
+  "valuta TEXT DEFAULT 'EUR'",
+  "public_token TEXT"
 ].forEach(col => ensureColumn('preventivi', col));
 
 [

@@ -33,6 +33,11 @@ function nowSql() {
   return db.prepare(`SELECT datetime('now') AS value`).get().value;
 }
 
+function getActiveRequestWindowMinutes() {
+  const parsed = parseInt(process.env.PARTS_ACTIVE_REQUEST_WINDOW_MINUTES || '3', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
+}
+
 function makeUuid() {
   if (crypto.randomUUID) return crypto.randomUUID();
   return `parts-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -158,6 +163,34 @@ function logPartEvent(partsRequestId, eventType, eventMessage, eventSource = 'cr
     INSERT INTO parts_request_events (parts_request_id, event_type, event_message, event_source, payload_json)
     VALUES (?, ?, ?, ?, ?)
   `).run(partsRequestId, eventType, s(eventMessage), s(eventSource), payload ? JSON.stringify(payload) : null);
+}
+
+function closeStalePartsRequestsForPhone(phone) {
+  if (!phone) return [];
+  const windowMinutes = getActiveRequestWindowMinutes();
+  const staleRows = db.prepare(`
+    SELECT id, request_uuid, status, last_message_at, updated_at, created_at
+    FROM parts_requests
+    WHERE user_phone = ?
+      AND status IN (${PARTS_OPEN_STATUSES.map(() => '?').join(', ')})
+      AND COALESCE(last_message_at, updated_at, created_at) < datetime('now', ?)
+    ORDER BY id ASC
+  `).all(phone, ...PARTS_OPEN_STATUSES, `-${windowMinutes} minutes`);
+
+  for (const row of staleRows) {
+    db.prepare(`
+      UPDATE parts_requests
+      SET status = 'completata',
+          updated_at = datetime('now')
+      WHERE id = ?
+    `).run(row.id);
+    logPartEvent(row.id, 'ricerca_chiusa_timeout', `Ricerca chiusa automaticamente dopo ${windowMinutes} minuti di inattivita`, 'crm', {
+      previousStatus: row.status,
+      inactivityWindowMinutes: windowMinutes
+    });
+  }
+
+  return staleRows;
 }
 
 function findOrCreateCategoryId(categoryName = 'Ricambi') {
@@ -345,6 +378,23 @@ function buildQuotePdfCaption(quote) {
   return `Preventivo ${quote?.codicePreventivo || ''}`.trim();
 }
 
+function makePublicPreventivoToken() {
+  return crypto.randomUUID ? crypto.randomUUID() : `preventivo-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function ensurePublicPreventivoToken(preventivoId) {
+  const current = db.prepare('SELECT public_token FROM preventivi WHERE id = ? LIMIT 1').get(preventivoId);
+  if (current?.public_token) return current.public_token;
+  const token = makePublicPreventivoToken();
+  db.prepare('UPDATE preventivi SET public_token = ? WHERE id = ?').run(token, preventivoId);
+  return token;
+}
+
+function buildPublicPreventivoPdfUrl(preventivoId, token = '') {
+  const baseUrl = String(process.env.BASE_URL || 'http://localhost:3001').replace(/\/+$/, '');
+  return `${baseUrl}/api/public/preventivi/${encodeURIComponent(token || ensurePublicPreventivoToken(preventivoId))}/pdf`;
+}
+
 async function createQuoteArtifactsFromRequestId(requestId) {
   const current = serializeRequestDetails(requestId);
   if (!current) throw new Error('Richiesta non trovata');
@@ -379,11 +429,13 @@ async function createQuoteArtifactsFromRequestId(requestId) {
     qty: quote.qty
   });
 
+  const publicToken = ensurePublicPreventivoToken(quote.preventivoId);
   const pdf = await createPreventivoPdfBuffer(quote.preventivoId);
   return {
     quotedProduct,
     quote,
-    pdf
+    pdf,
+    publicPdfUrl: buildPublicPreventivoPdfUrl(quote.preventivoId, publicToken)
   };
 }
 
@@ -461,14 +513,16 @@ function getLatestConversationContext(phone, currentPartsRequestId = null) {
 
 function getActivePartsRequestForPhone(phone) {
   if (!phone) return null;
+  const windowMinutes = getActiveRequestWindowMinutes();
   return db.prepare(`
     SELECT *
     FROM parts_requests
     WHERE user_phone = ?
       AND status IN ('nuova', 'in_lavorazione', 'in_attesa_dati_cliente', 'in_attesa_verifica_tecnica', 'oe_trovato', 'preventivo_pronto')
+      AND COALESCE(last_message_at, updated_at, created_at) >= datetime('now', ?)
     ORDER BY last_message_at DESC, id DESC
     LIMIT 1
-  `).get(phone);
+  `).get(phone, `-${windowMinutes} minutes`);
 }
 
 function getIntakeState(partsRequestId) {
@@ -2160,6 +2214,13 @@ function extractDocumentMediaRef(channel, sendResult) {
   return s(sendResult?.mediaId);
 }
 
+function buildPublicPdfLinkMessage(quote, publicPdfUrl) {
+  return [
+    `Preventivo ${quote?.codicePreventivo || ''}`.trim(),
+    publicPdfUrl ? `Link PDF: ${publicPdfUrl}` : null
+  ].filter(Boolean).join('\n');
+}
+
 async function processInboundPartsMessage({
   channel,
   userKey,
@@ -2176,6 +2237,7 @@ async function processInboundPartsMessage({
 }) {
   db.exec('BEGIN');
   try {
+    closeStalePartsRequestsForPhone(userKey);
     const activeRequest = getActivePartsRequestForPhone(userKey);
     let partsRequestId = null;
     if (activeRequest) {
@@ -2339,6 +2401,37 @@ async function processInboundPartsMessage({
               productId: artifacts.quotedProduct.product.id
             }
           );
+
+          const publicLinkText = buildPublicPdfLinkMessage(artifacts.quote, artifacts.publicPdfUrl);
+          const linkSend = await sendText(outboundTarget, publicLinkText);
+          db.prepare(`
+            INSERT INTO whatsapp_messages (
+              conversation_id, direction, channel, external_message_id, message_type,
+              body_text, delivery_status, error_message, source_system, raw_payload_json
+            )
+            VALUES (?, 'outbound', ?, ?, 'text', ?, ?, ?, 'openai_auto_reply', ?)
+          `).run(
+            conversation.id,
+            channel,
+            extractOutboundMessageId(channel, linkSend),
+            publicLinkText,
+            linkSend.error ? 'error' : (linkSend.statusCode >= 200 && linkSend.statusCode < 300 ? 'sent' : 'error'),
+            linkSend.error || s(linkSend.body?.error?.message) || s(linkSend.body?.description),
+            JSON.stringify(linkSend)
+          );
+          upsertConversationState(conversation.id);
+          logPartEvent(
+            partsRequestId,
+            linkSend.error ? 'errore_integrazione' : 'link_preventivo_inviato',
+            linkSend.error ? `Invio link preventivo ${channel} fallito: ${linkSend.error}` : `Link pubblico preventivo inviato su ${channel}`,
+            channel,
+            {
+              ...linkSend,
+              publicPdfUrl: artifacts.publicPdfUrl,
+              preventivoId: artifacts.quote.preventivoId,
+              codicePreventivo: artifacts.quote.codicePreventivo
+            }
+          );
         } catch (error) {
           logPartEvent(partsRequestId, 'errore_integrazione', `Creazione/invio preventivo PDF fallito: ${error.message}`, 'crm', {
             quoteDecision: resolved.quoteDecision,
@@ -2397,6 +2490,7 @@ router.get('/webhook/whatsapp', (req, res) => {
 
 router.post('/webhook/whatsapp', async (req, res) => {
   const entries = Array.isArray(req.body?.entry) ? req.body.entry : [];
+  res.json({ ok: true });
 
   for (const entry of entries) {
     const changes = Array.isArray(entry?.changes) ? entry.changes : [];
@@ -2407,7 +2501,7 @@ router.post('/webhook/whatsapp', async (req, res) => {
         const phone = s(message?.from) || s(value?.contacts?.[0]?.wa_id) || 'sconosciuto';
         const bodyText = s(message?.text?.body) || s(message?.button?.text) || s(message?.interactive?.button_reply?.title) || '';
         const externalMessageId = s(message?.id);
-        await processInboundPartsMessage({
+        processInboundPartsMessage({
           channel: 'whatsapp',
           userKey: buildConversationUserKey('whatsapp', phone),
           outboundTarget: phone,
@@ -2420,12 +2514,12 @@ router.post('/webhook/whatsapp', async (req, res) => {
           rawPayload: { entry, change, value, message },
           sendText: sendWhatsAppText,
           sendDocument: sendWhatsAppDocumentBuffer
+        }).catch((error) => {
+          console.error('parts whatsapp async processing error', error);
         });
       }
     }
   }
-
-  res.json({ ok: true });
 });
 
 router.post('/webhook/telegram', async (req, res) => {
@@ -2443,8 +2537,9 @@ router.post('/webhook/telegram', async (req, res) => {
   const externalMessageId = s(message?.message_id) || s(update.update_id) || s(update.callback_query?.id);
 
   if (!chatId) return res.json({ ok: true, skipped: 'chat_missing' });
+  res.json({ ok: true });
 
-  await processInboundPartsMessage({
+  processInboundPartsMessage({
     channel: 'telegram',
     userKey: buildConversationUserKey('telegram', chatId),
     outboundTarget: chatId,
@@ -2457,9 +2552,9 @@ router.post('/webhook/telegram', async (req, res) => {
     rawPayload: update,
     sendText: sendTelegramText,
     sendDocument: sendTelegramDocumentBuffer
+  }).catch((error) => {
+    console.error('parts telegram async processing error', error);
   });
-
-  res.json({ ok: true });
 });
 
 router.use(authMiddleware);
