@@ -94,6 +94,128 @@ function parseBackendUrl() {
   }
 }
 
+function parseWhatsappResponseBody(raw) {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function isWhatsappConfigured() {
+  return !!(process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID);
+}
+
+function sendWhatsAppText(to, bodyText) {
+  return new Promise((resolve) => {
+    if (!isWhatsappConfigured()) return resolve({ skipped: true, reason: 'whatsapp_non_configurato' });
+    const version = process.env.WHATSAPP_API_VERSION || 'v20.0';
+    const endpoint = new URL(`https://graph.facebook.com/${version}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`);
+    const payload = JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: String(to || ''),
+      type: 'text',
+      text: { preview_url: false, body: String(bodyText || '') }
+    });
+    const req = https.request({
+      protocol: endpoint.protocol,
+      hostname: endpoint.hostname,
+      port: 443,
+      path: endpoint.pathname,
+      method: 'POST',
+      timeout: Number(process.env.RTWS_TIMEOUT_MS || 12000),
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+        Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`
+      }
+    }, (res) => {
+      let raw = '';
+      res.on('data', (chunk) => { raw += chunk; });
+      res.on('end', () => resolve({
+        skipped: false,
+        statusCode: res.statusCode || 0,
+        raw,
+        body: parseWhatsappResponseBody(raw)
+      }));
+    });
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', (error) => resolve({ skipped: false, error: error.message }));
+    req.write(payload);
+    req.end();
+  });
+}
+
+async function triangulateWithOpenAI(messageText) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey || !messageText) {
+    return { skipped: true, reason: 'openai_non_configurato' };
+  }
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      temperature: 0.2,
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'parts_whatsapp_triage',
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              ai_summary: { type: 'string' },
+              requested_part_text: { type: 'string' },
+              normalized_part_name: { type: 'string' },
+              normalized_part_category: { type: 'string' },
+              plate: { type: 'string' },
+              vin: { type: 'string' },
+              oe_code: { type: 'string' },
+              missing_data: {
+                type: 'array',
+                items: { type: 'string' }
+              },
+              status: { type: 'string' },
+              operator_reply_text: { type: 'string' }
+            },
+            required: ['ai_summary', 'requested_part_text', 'normalized_part_name', 'normalized_part_category', 'plate', 'vin', 'oe_code', 'missing_data', 'status', 'operator_reply_text']
+          }
+        }
+      },
+      messages: [
+        {
+          role: 'system',
+          content: 'Sei un assistente per triage richieste ricambi automotive WhatsApp. Estrai targa, VIN, OE e tipo ricambio se presenti. Se mancano dati, prepara una risposta breve in italiano che chieda solo le informazioni necessarie. Usa stati tra: nuova, in_attesa_dati_cliente, in_attesa_verifica_tecnica, oe_trovato.'
+        },
+        {
+          role: 'user',
+          content: messageText
+        }
+      ]
+    })
+  });
+
+  const raw = await response.text();
+  const parsed = parseWhatsappResponseBody(raw);
+  if (!response.ok) {
+    return { skipped: false, error: parsed?.error?.message || raw || `OpenAI HTTP ${response.status}` };
+  }
+  const content = parsed?.choices?.[0]?.message?.content;
+  if (!content) return { skipped: false, error: 'Risposta OpenAI vuota' };
+  try {
+    return { skipped: false, data: JSON.parse(content) };
+  } catch {
+    return { skipped: false, error: 'JSON OpenAI non valido', raw: content };
+  }
+}
+
 function forwardToPartsBackend(payload) {
   return new Promise((resolve) => {
     const parsed = parseBackendUrl();
@@ -271,6 +393,9 @@ router.get('/webhook/whatsapp', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
+  if (!verifyToken) {
+    return res.status(500).send('WHATSAPP_VERIFY_TOKEN non configurato');
+  }
   if (mode === 'subscribe' && verifyToken && token === verifyToken) {
     return res.status(200).send(challenge);
   }
@@ -366,6 +491,69 @@ router.post('/webhook/whatsapp', async (req, res) => {
           } else if (backendResult.error) {
             db.prepare(`UPDATE parts_requests SET status = 'errore_integrazione', updated_at = datetime('now') WHERE id = ?`).run(partsRequestId);
             logPartEvent(partsRequestId, 'errore_integrazione', backendResult.error, 'parts_backend', backendResult);
+          }
+
+          const aiResult = await triangulateWithOpenAI(bodyText);
+          if (!aiResult.skipped && !aiResult.error && aiResult.data) {
+            const ai = aiResult.data;
+            db.prepare(`
+              UPDATE parts_requests
+              SET plate = COALESCE(NULLIF(?, ''), plate),
+                  vin = COALESCE(NULLIF(?, ''), vin),
+                  oe_code = COALESCE(NULLIF(?, ''), oe_code),
+                  requested_part_text = COALESCE(NULLIF(?, ''), requested_part_text),
+                  normalized_part_name = COALESCE(NULLIF(?, ''), normalized_part_name),
+                  normalized_part_category = COALESCE(NULLIF(?, ''), normalized_part_category),
+                  ai_summary = COALESCE(NULLIF(?, ''), ai_summary),
+                  status = COALESCE(NULLIF(?, ''), status),
+                  updated_at = datetime('now')
+              WHERE id = ?
+            `).run(
+              s(ai.plate),
+              s(ai.vin),
+              s(ai.oe_code),
+              s(ai.requested_part_text),
+              s(ai.normalized_part_name),
+              s(ai.normalized_part_category),
+              s(ai.ai_summary),
+              s(ai.status),
+              partsRequestId
+            );
+            logPartEvent(partsRequestId, 'ai_triage', 'Triage AI completato', 'openai', ai);
+
+            const outboundText = s(ai.operator_reply_text);
+            if (outboundText) {
+              const whatsappSend = await sendWhatsAppText(phone, outboundText);
+              db.prepare(`
+                INSERT INTO whatsapp_messages (
+                  conversation_id, direction, channel, external_message_id, message_type,
+                  body_text, delivery_status, error_message, source_system, raw_payload_json
+                )
+                VALUES (?, 'outbound', 'whatsapp', ?, 'text', ?, ?, ?, 'openai_auto_reply', ?)
+              `).run(
+                conversation.id,
+                s(whatsappSend.body?.messages?.[0]?.id),
+                outboundText,
+                whatsappSend.error ? 'error' : (whatsappSend.statusCode >= 200 && whatsappSend.statusCode < 300 ? 'sent' : 'error'),
+                whatsappSend.error || s(whatsappSend.body?.error?.message),
+                JSON.stringify(whatsappSend)
+              );
+              upsertConversationState(conversation.id);
+              db.prepare(`
+                UPDATE parts_requests
+                SET whatsapp_reply_text = ?, last_message_at = datetime('now'), updated_at = datetime('now')
+                WHERE id = ?
+              `).run(outboundText, partsRequestId);
+              logPartEvent(
+                partsRequestId,
+                whatsappSend.error ? 'errore_integrazione' : 'messaggio_whatsapp_inviato',
+                whatsappSend.error ? `Invio WhatsApp fallito: ${whatsappSend.error}` : 'Risposta automatica WhatsApp inviata',
+                'whatsapp_meta',
+                whatsappSend
+              );
+            }
+          } else if (aiResult.error) {
+            logPartEvent(partsRequestId, 'errore_integrazione', `Triage OpenAI fallito: ${aiResult.error}`, 'openai', aiResult);
           }
 
           db.exec('COMMIT');
@@ -582,7 +770,7 @@ router.get('/parts/conversations/:id/messages', requirePermesso('ricambi', 'read
   res.json({ conversation, messages });
 });
 
-router.post('/parts/conversations/:id/messages', requirePermesso('ricambi', 'edit'), (req, res) => {
+router.post('/parts/conversations/:id/messages', requirePermesso('ricambi', 'edit'), async (req, res) => {
   const conversation = db.prepare('SELECT * FROM whatsapp_conversations WHERE id = ?').get(Number(req.params.id));
   if (!conversation) return res.status(404).json({ error: 'Conversazione non trovata' });
 
@@ -590,16 +778,21 @@ router.post('/parts/conversations/:id/messages', requirePermesso('ricambi', 'edi
   const internalNote = req.body?.internal_note ? 1 : 0;
   if (!bodyText) return res.status(400).json({ error: 'Testo messaggio obbligatorio' });
 
+  const outboundResult = internalNote ? { skipped: true } : await sendWhatsAppText(conversation.user_phone, bodyText);
   const result = db.prepare(`
     INSERT INTO whatsapp_messages (
-      conversation_id, direction, channel, message_type, body_text, delivery_status, source_system, internal_note
+      conversation_id, direction, channel, external_message_id, message_type, body_text,
+      delivery_status, error_message, source_system, raw_payload_json, internal_note
     )
-    VALUES (?, ?, 'whatsapp', 'text', ?, ?, 'crm_operator', ?)
+    VALUES (?, ?, 'whatsapp', ?, 'text', ?, ?, ?, 'crm_operator', ?, ?)
   `).run(
     conversation.id,
     internalNote ? 'internal' : 'outbound',
+    internalNote ? null : s(outboundResult.body?.messages?.[0]?.id),
     bodyText,
-    internalNote ? 'saved' : 'queued',
+    internalNote ? 'saved' : (outboundResult.error ? 'error' : (outboundResult.statusCode >= 200 && outboundResult.statusCode < 300 ? 'sent' : 'error')),
+    internalNote ? null : (outboundResult.error || s(outboundResult.body?.error?.message)),
+    internalNote ? null : JSON.stringify(outboundResult),
     internalNote
   );
 
@@ -614,13 +807,13 @@ router.post('/parts/conversations/:id/messages', requirePermesso('ricambi', 'edi
     logPartEvent(
       conversation.parts_request_id,
       internalNote ? 'nota_chat_interna' : 'messaggio_whatsapp_inviato',
-      internalNote ? 'Nota interna salvata in conversazione' : 'Messaggio outbound salvato da CRM',
+      internalNote ? 'Nota interna salvata in conversazione' : (outboundResult.error ? `Invio WhatsApp fallito: ${outboundResult.error}` : 'Messaggio outbound inviato via WhatsApp Meta'),
       'crm',
       { userId: req.user.id, conversationId: conversation.id }
     );
   }
 
-  res.json({ id: Number(result.lastInsertRowid) });
+  res.json({ id: Number(result.lastInsertRowid), sent: !internalNote && !outboundResult.error, error: outboundResult.error || null });
 });
 
 router.get('/parts/stats', requirePermesso('ricambi', 'read'), (req, res) => {
