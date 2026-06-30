@@ -718,6 +718,38 @@ function chooseBestGlassItem(items = [], requestedPartText = '') {
   return ranked[0]?.item || items[0];
 }
 
+function buildGlassOptions(items = [], requestedPartText = '') {
+  if (!items.length) return [];
+  const tokens = String(requestedPartText || '')
+    .toLowerCase()
+    .split(/[^a-z0-9àèéìòù]+/i)
+    .filter((token) => token.length >= 3);
+
+  const ranked = items
+    .map((item) => {
+      const haystack = `${item.description} ${item.oe_code} ${item.eurocode}`.toLowerCase();
+      const score = tokens.reduce((sum, token) => sum + (haystack.includes(token) ? 1 : 0), 0);
+      return { item, score };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  const bestScore = ranked[0]?.score ?? 0;
+  const candidates = ranked.filter((entry) => entry.score === bestScore || entry.score > 0);
+  const seen = new Set();
+  const options = [];
+
+  for (const entry of candidates.length ? candidates : ranked) {
+    const label = (entry.item.description || entry.item.oe_code || entry.item.eurocode || 'Ricambio cristalli').trim();
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    options.push(entry.item);
+    if (options.length >= 5) break;
+  }
+
+  return options;
+}
+
 function buildGlassReplyText(selectedItem, itemsCount) {
   if (!selectedItem) {
     return 'Richiesta cristalli acquisita ma non sono emersi risultati puntuali dalla targa. Ti chiediamo una foto del libretto o il dettaglio del cristallo richiesto.';
@@ -732,6 +764,33 @@ function buildGlassReplyText(selectedItem, itemsCount) {
     itemsCount > 1 ? `Sono disponibili anche altre ${itemsCount - 1} varianti collegate al veicolo.` : null
   ].filter(Boolean);
   return parts.join('\n');
+}
+
+function buildGlassOptionsReplyText(options = [], itemsCount = 0) {
+  if (!options.length) {
+    return 'Ho identificato una richiesta cristalli, ma dalla sola targa non emerge un risultato univoco. Indicami meglio quale vetro o allega una foto del ricambio.';
+  }
+
+  const lines = [
+    'Ho trovato piu varianti compatibili dalla targa.',
+    'Ti elenco le opzioni piu vicine trovate in RTWS:'
+  ];
+
+  options.forEach((item, index) => {
+    const parts = [
+      `${index + 1}. ${item.description || 'Ricambio cristalli'}`,
+      item.oe_code ? `OE ${item.oe_code}` : null,
+      item.eurocode ? `Eurocode ${item.eurocode}` : null
+    ].filter(Boolean);
+    lines.push(parts.join(' - '));
+  });
+
+  if (itemsCount > options.length) {
+    lines.push(`Ci sono anche altre ${itemsCount - options.length} varianti nel catalogo.`);
+  }
+  lines.push('Rispondi con il numero corretto oppure mandami una foto del libretto/ricambio.');
+
+  return lines.join('\n');
 }
 
 async function resolvePartsMessage({ message, channel = 'whatsapp', context = null }) {
@@ -775,10 +834,14 @@ async function resolvePartsMessage({ message, channel = 'whatsapp', context = nu
   if (glassEligible) {
     glassCatalog = await rtwsCheckEurocodeDaTargaOE2({ plate: parsed.plate, oeCode: parsed.oeCode });
     const selectedItem = chooseBestGlassItem(glassCatalog.items, parsed.requestedPartText);
-    if (selectedItem) {
+    const options = buildGlassOptions(glassCatalog.items, parsed.requestedPartText);
+    if (selectedItem && options.length <= 1) {
       parsed.oeCode = selectedItem.oe_code || parsed.oeCode;
       whatsappText = buildGlassReplyText(selectedItem, glassCatalog.items.length);
       status = 'oe_trovato';
+    } else if (options.length > 1) {
+      whatsappText = buildGlassOptionsReplyText(options, glassCatalog.items.length);
+      status = 'in_attesa_verifica_tecnica';
     } else {
       whatsappText = whatsappText || 'Ho identificato una richiesta cristalli, ma dalla sola targa non emerge un risultato univoco. Indicami meglio quale vetro o allega una foto del ricambio.';
       status = 'in_attesa_verifica_tecnica';
@@ -946,13 +1009,17 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     };
     const glassCatalog = await rtwsCheckEurocodeDaTargaOE2({ plate: parsed.plate, oeCode: parsed.oeCode });
     const selectedItem = chooseBestGlassItem(glassCatalog.items, parsed.requestedPartText);
+    const options = buildGlassOptions(glassCatalog.items, parsed.requestedPartText);
     let whatsappText = '';
     let status = 'in_attesa_verifica_tecnica';
 
-    if (selectedItem) {
+    if (selectedItem && options.length <= 1) {
       parsed.oeCode = selectedItem.oe_code || parsed.oeCode;
       whatsappText = buildGlassReplyText(selectedItem, glassCatalog.items.length);
       status = 'oe_trovato';
+    } else if (options.length > 1) {
+      whatsappText = buildGlassOptionsReplyText(options, glassCatalog.items.length);
+      status = 'in_attesa_verifica_tecnica';
     } else if (glassCatalog.status === 'ERROR') {
       whatsappText = 'Ho ricevuto la richiesta del cristallo e sto verificando i dati tecnici. Ti aggiorno appena completo il controllo.';
       status = 'errore_integrazione';
@@ -1039,10 +1106,14 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   if (glassEligible) {
     glassCatalog = await rtwsCheckEurocodeDaTargaOE2({ plate: parsed.plate, oeCode: parsed.oeCode });
     const selectedItem = chooseBestGlassItem(glassCatalog.items, parsed.requestedPartText);
-    if (selectedItem) {
+    const options = buildGlassOptions(glassCatalog.items, parsed.requestedPartText);
+    if (selectedItem && options.length <= 1) {
       parsed.oeCode = selectedItem.oe_code || parsed.oeCode;
       whatsappText = buildGlassReplyText(selectedItem, glassCatalog.items.length);
       status = 'oe_trovato';
+    } else if (options.length > 1) {
+      whatsappText = buildGlassOptionsReplyText(options, glassCatalog.items.length);
+      status = 'in_attesa_verifica_tecnica';
     } else {
       whatsappText = whatsappText || 'Ho identificato una richiesta cristalli, ma dalla sola targa non emerge un risultato univoco. Indicami meglio quale vetro o allega una foto del ricambio.';
       status = 'in_attesa_verifica_tecnica';
