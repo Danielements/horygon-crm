@@ -931,6 +931,78 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     };
   }
 
+  if (intakeDecision.stage === 'ready_for_service' && intakeSlots.part_category === 'cristalli') {
+    const parsed = {
+      originalText: text,
+      plate: intakeSlots.plate || '',
+      vin: intakeSlots.vin || '',
+      oeCode: intakeSlots.oe_code || '',
+      requestedPartText: intakeSlots.part_name || preliminaryParsed.requestedPartText,
+      confidence: 1
+    };
+    const normalizedPart = {
+      name: intakeSlots.part_name || parsed.requestedPartText,
+      category: 'cristalli'
+    };
+    const glassCatalog = await rtwsCheckEurocodeDaTargaOE2({ plate: parsed.plate, oeCode: parsed.oeCode });
+    const selectedItem = chooseBestGlassItem(glassCatalog.items, parsed.requestedPartText);
+    let whatsappText = '';
+    let status = 'in_attesa_verifica_tecnica';
+
+    if (selectedItem) {
+      parsed.oeCode = selectedItem.oe_code || parsed.oeCode;
+      whatsappText = buildGlassReplyText(selectedItem, glassCatalog.items.length);
+      status = 'oe_trovato';
+    } else if (glassCatalog.status === 'ERROR') {
+      whatsappText = 'Ho ricevuto la richiesta del cristallo e sto verificando i dati tecnici. Ti aggiorno appena completo il controllo.';
+      status = 'errore_integrazione';
+    } else {
+      whatsappText = 'Ho identificato una richiesta cristalli, ma dalla sola targa non emerge un risultato univoco. Indicami meglio quale vetro o allega una foto del ricambio.';
+      status = 'in_attesa_verifica_tecnica';
+    }
+
+    return {
+      status: glassCatalog.status === 'ERROR' ? 'ERROR' : 'OK',
+      parsed,
+      vehicle: null,
+      normalizedPart,
+      dbrtResult: {},
+      glassCatalog,
+      oeCatalog: {},
+      oeResults: glassCatalog.items || [],
+      equivalents: {},
+      missingData: [],
+      whatsappText,
+      aiRequest: {
+        intent: 'deterministic_glass_resolution',
+        request_is_valid: true,
+        suggested_service: 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2',
+        instruction: 'Risoluzione cristalli deterministica con dati minimi completi, senza passare prima da AI.',
+        availableSources: ['RULES', 'RTWS_LISTINI'],
+        parsed,
+        normalizedPart,
+        intakeSlots,
+        intakeDecision,
+        openai: {
+          skipped: true,
+          error: null,
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          statusCode: null,
+          raw: null,
+          parsed: null
+        }
+      },
+      aiSummary: null,
+      resolvedStatus: status,
+      intakeState: {
+        stage: 'ready_for_service',
+        pendingSlot: null,
+        pendingQuestion: null,
+        slots: intakeSlots
+      }
+    };
+  }
+
   const aiPrompt = [
     `Messaggio cliente: ${text}`,
     `Contesto raccolto: ${JSON.stringify(intakeSlots)}`
