@@ -8,6 +8,7 @@ const { authMiddleware, requirePermesso } = require('../middleware/auth');
 const router = express.Router();
 
 const PARTS_OPEN_STATUSES = ['nuova', 'in_lavorazione', 'in_attesa_dati_cliente', 'in_attesa_verifica_tecnica', 'oe_trovato', 'preventivo_pronto'];
+const rtwsSessions = new Map();
 
 function s(value) {
   return value === undefined || value === null || value === '' ? null : String(value).trim();
@@ -34,6 +35,50 @@ function nowSql() {
 function makeUuid() {
   if (crypto.randomUUID) return crypto.randomUUID();
   return `parts-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function normalizePlate(value) {
+  return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function xmlEscape(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function xmlDecode(value) {
+  return String(value || '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+function getXmlTagValue(xml, tag) {
+  const match = String(xml || '').match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i'));
+  return match ? xmlDecode(match[1]).trim() : '';
+}
+
+function getXmlTagBlock(xml, tag) {
+  const match = String(xml || '').match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i'));
+  return match ? match[1] : '';
+}
+
+function collectXmlBlocks(xml, tag) {
+  return [...String(xml || '').matchAll(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'ig'))].map((match) => match[1]);
+}
+
+function guessPartCategory(text) {
+  const lower = String(text || '').toLowerCase();
+  if (/(parabrezza|lunotto|cristall|vetro|scendente|raschiavetro|alzacristall|fisso porta)/.test(lower)) return 'cristalli';
+  if (/(specchietto|retrovisore)/.test(lower)) return 'retrovisori';
+  if (/(fanale|faro|stop)/.test(lower)) return 'illuminazione';
+  return 'ricambio_generico';
 }
 
 function logPartEvent(partsRequestId, eventType, eventMessage, eventSource = 'crm', payload = null) {
@@ -92,6 +137,134 @@ function parseBackendUrl() {
   } catch {
     return null;
   }
+}
+
+function getRtwsServiceUrl() {
+  const base = process.env.RTWS_WSDL_URL;
+  if (!base) return '';
+  return String(base).replace(/\?wsdl$/i, '').replace(/\?WSDL$/i, '');
+}
+
+function isRtwsConfigured() {
+  return !!(
+    getRtwsServiceUrl() &&
+    process.env.RTWS_AZIENDA_NAME &&
+    process.env.RTWS_PASSWORD &&
+    process.env.RTWS_PRODUCT_LISTINI
+  );
+}
+
+function buildSoap12Envelope(methodName, innerXml) {
+  return `<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+  xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+  <soap:Body>
+    <${methodName} xmlns="http://tempuri.org/">
+      ${innerXml}
+    </${methodName}>
+  </soap:Body>
+</soap:Envelope>`;
+}
+
+function callRtwsSoap(methodName, innerXml) {
+  return new Promise((resolve) => {
+    const serviceUrl = getRtwsServiceUrl();
+    if (!serviceUrl) return resolve({ ok: false, error: 'RTWS_WSDL_URL non configurato' });
+    const endpoint = new URL(serviceUrl);
+    const xml = buildSoap12Envelope(methodName, innerXml);
+    const req = https.request({
+      protocol: endpoint.protocol,
+      hostname: endpoint.hostname,
+      port: endpoint.port || 443,
+      path: endpoint.pathname,
+      method: 'POST',
+      timeout: Number(process.env.RTWS_TIMEOUT_MS || 12000),
+      headers: {
+        'Content-Type': `application/soap+xml; charset=utf-8; action="http://tempuri.org/${methodName}"`,
+        'Content-Length': Buffer.byteLength(xml)
+      }
+    }, (res) => {
+      let raw = '';
+      res.on('data', (chunk) => { raw += chunk; });
+      res.on('end', () => {
+        if ((res.statusCode || 0) >= 200 && (res.statusCode || 0) < 300) {
+          resolve({ ok: true, rawXml: raw, statusCode: res.statusCode || 0 });
+          return;
+        }
+        resolve({ ok: false, rawXml: raw, statusCode: res.statusCode || 0, error: getXmlTagValue(raw, 'faultstring') || `RTWS HTTP ${res.statusCode}` });
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', (error) => resolve({ ok: false, error: error.message }));
+    req.write(xml);
+    req.end();
+  });
+}
+
+async function getRtwsSession(productName) {
+  const cacheKey = String(productName || '');
+  const cached = rtwsSessions.get(cacheKey);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now + 30000) return cached.sessionId;
+
+  const loginXml = `
+    <aziendaName>${xmlEscape(process.env.RTWS_AZIENDA_NAME || '')}</aziendaName>
+    <clientName>${xmlEscape(process.env.RTWS_CLIENT_NAME || '')}</clientName>
+    <password>${xmlEscape(process.env.RTWS_PASSWORD || '')}</password>
+    <productName>${xmlEscape(productName || '')}</productName>
+  `;
+  const result = await callRtwsSoap('Login', loginXml);
+  if (!result.ok) throw new Error(result.error || 'Login RTWS fallito');
+  const loginState = getXmlTagValue(result.rawXml, 'LoginState');
+  const sessionId = getXmlTagValue(result.rawXml, 'SessionId');
+  const errorMsg = getXmlTagValue(result.rawXml, 'ErrorMsg');
+  if (loginState !== 'SUCCESS' || !sessionId) {
+    throw new Error(errorMsg || `Login RTWS non riuscito (${loginState || 'UNKNOWN'})`);
+  }
+  const ttlSeconds = Number(process.env.RTWS_SESSION_TTL_SECONDS || 600);
+  rtwsSessions.set(cacheKey, { sessionId, expiresAt: now + Math.max(ttlSeconds - 30, 60) * 1000 });
+  return sessionId;
+}
+
+function parseRtwsGlassItems(rawXml) {
+  return collectXmlBlocks(getXmlTagBlock(rawXml, 'Items'), 'Item').map((block) => ({
+    eurocode: getXmlTagValue(block, 'Eurocode') || '',
+    oe_code: getXmlTagValue(block, 'Oe') || '',
+    price: getXmlTagValue(block, 'Prezzo') || '',
+    id_marca: getXmlTagValue(block, 'IdMar') || '',
+    description: getXmlTagValue(block, 'Dspar') || ''
+  })).filter((item) => item.oe_code || item.eurocode || item.description);
+}
+
+async function rtwsCheckEurocodeDaTargaOE2({ plate, oeCode = '', eurocode = '', ricercaVin = 0 }) {
+  if (!isRtwsConfigured()) {
+    return { status: 'NOT_CONFIGURED', message: 'RTWS non configurato', items: [] };
+  }
+  const sessionId = await getRtwsSession(process.env.RTWS_PRODUCT_LISTINI);
+  const body = `
+    <sessionId>${xmlEscape(sessionId)}</sessionId>
+    <context>
+      <Targa>${xmlEscape(normalizePlate(plate))}</Targa>
+      <Oe>${xmlEscape(oeCode || '')}</Oe>
+      <Eurocode>${xmlEscape(eurocode || '')}</Eurocode>
+      <RicercaVin>${ricercaVin ? 1 : 0}</RicercaVin>
+    </context>
+  `;
+  const result = await callRtwsSoap('CheckEurocodeDaTargaOE2', body);
+  if (!result.ok) {
+    return { status: 'ERROR', message: result.error || 'Chiamata RTWS fallita', items: [], rawXml: result.rawXml || '' };
+  }
+  const stateCode = getXmlTagValue(result.rawXml, 'Code');
+  const stateDescription = getXmlTagValue(result.rawXml, 'Description');
+  const items = parseRtwsGlassItems(result.rawXml);
+  return {
+    status: String(stateCode || '') === '0' ? (items.length ? 'READY' : 'EMPTY') : 'ERROR',
+    message: stateDescription || (items.length ? 'Risultati cristalli recuperati da RTWS_LISTINI tramite targa.' : 'Nessun cristallo trovato per la targa indicata.'),
+    items,
+    rawXml: result.rawXml,
+    stateCode: stateCode || ''
+  };
 }
 
 function parseWhatsappResponseBody(raw) {
@@ -171,6 +344,10 @@ async function triangulateWithOpenAI(messageText) {
             type: 'object',
             additionalProperties: false,
             properties: {
+              intent: { type: 'string' },
+              request_is_valid: { type: 'boolean' },
+              suggested_service: { type: 'string' },
+              confidence: { type: 'number' },
               ai_summary: { type: 'string' },
               requested_part_text: { type: 'string' },
               normalized_part_name: { type: 'string' },
@@ -185,14 +362,14 @@ async function triangulateWithOpenAI(messageText) {
               status: { type: 'string' },
               operator_reply_text: { type: 'string' }
             },
-            required: ['ai_summary', 'requested_part_text', 'normalized_part_name', 'normalized_part_category', 'plate', 'vin', 'oe_code', 'missing_data', 'status', 'operator_reply_text']
+            required: ['intent', 'request_is_valid', 'suggested_service', 'confidence', 'ai_summary', 'requested_part_text', 'normalized_part_name', 'normalized_part_category', 'plate', 'vin', 'oe_code', 'missing_data', 'status', 'operator_reply_text']
           }
         }
       },
       messages: [
         {
           role: 'system',
-          content: 'Sei un assistente per triage richieste ricambi automotive WhatsApp. Estrai targa, VIN, OE e tipo ricambio se presenti. Se mancano dati, prepara una risposta breve in italiano che chieda solo le informazioni necessarie. Usa stati tra: nuova, in_attesa_dati_cliente, in_attesa_verifica_tecnica, oe_trovato.'
+          content: 'Sei un assistente di triage per richieste ricambi automotive WhatsApp. Estrai targa, VIN, OE e tipo ricambio se presenti. Valuta se la richiesta è interpretabile con alta affidabilità. Oggi il servizio tecnico disponibile via targa è RTWS_LISTINI CheckEurocodeDaTargaOE2 ed è utile solo per cristalli/vetri/alzacristalli/raschiavetro e ricambi collegati ai cristalli. suggested_service deve essere uno tra RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2, MANUAL_REVIEW, WAITING_DATA. Usa stati tra nuova, in_attesa_dati_cliente, in_attesa_verifica_tecnica, oe_trovato. Se la richiesta non è chiaramente legata ai cristalli, evita falsi positivi e chiedi i dati mancanti o segnala revisione manuale.'
         },
         {
           role: 'user',
@@ -214,6 +391,157 @@ async function triangulateWithOpenAI(messageText) {
   } catch {
     return { skipped: false, error: 'JSON OpenAI non valido', raw: content };
   }
+}
+
+function chooseBestGlassItem(items = [], requestedPartText = '') {
+  if (!items.length) return null;
+  const tokens = String(requestedPartText || '')
+    .toLowerCase()
+    .split(/[^a-z0-9àèéìòù]+/i)
+    .filter((token) => token.length >= 4);
+  if (!tokens.length) return items[0];
+  const ranked = items
+    .map((item) => {
+      const haystack = `${item.description} ${item.oe_code} ${item.eurocode}`.toLowerCase();
+      const score = tokens.reduce((sum, token) => sum + (haystack.includes(token) ? 1 : 0), 0);
+      return { item, score };
+    })
+    .sort((a, b) => b.score - a.score);
+  return ranked[0]?.item || items[0];
+}
+
+function buildGlassReplyText(selectedItem, itemsCount) {
+  if (!selectedItem) {
+    return 'Richiesta cristalli acquisita ma non sono emersi risultati puntuali dalla targa. Ti chiediamo una foto del libretto o il dettaglio del cristallo richiesto.';
+  }
+  const parts = [
+    'Richiesta cristalli acquisita e verificata tramite targa.',
+    '',
+    `Descrizione: ${selectedItem.description || 'Ricambio cristalli'}`,
+    `Codice OE: ${selectedItem.oe_code || '-'}`,
+    selectedItem.eurocode ? `Eurocode: ${selectedItem.eurocode}` : null,
+    selectedItem.price ? `Prezzo listino indicativo: EUR ${selectedItem.price}` : null,
+    itemsCount > 1 ? `Sono disponibili anche altre ${itemsCount - 1} varianti collegate al veicolo.` : null
+  ].filter(Boolean);
+  return parts.join('\n');
+}
+
+async function resolvePartsMessage({ message, channel = 'whatsapp' }) {
+  const text = String(message || '').trim();
+  if (!text) return { status: 'ERROR', error: 'message obbligatorio' };
+
+  const aiResult = await triangulateWithOpenAI(text);
+  const ai = aiResult.data || {};
+  const parsed = {
+    originalText: text,
+    plate: normalizePlate(ai.plate || ''),
+    oeCode: s(ai.oe_code) || '',
+    requestedPartText: s(ai.requested_part_text) || text,
+    confidence: ai.confidence ?? 0
+  };
+  const normalizedPart = {
+    name: s(ai.normalized_part_name) || parsed.requestedPartText,
+    category: s(ai.normalized_part_category) || guessPartCategory(parsed.requestedPartText)
+  };
+  const glassEligible = ai.request_is_valid !== false
+    && parsed.plate
+    && (String(ai.suggested_service || '') === 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2' || normalizedPart.category === 'cristalli');
+
+  let glassCatalog = { status: 'SKIPPED', message: 'Nessun servizio tecnico eseguito', items: [] };
+  let whatsappText = s(ai.operator_reply_text) || '';
+  let status = s(ai.status) || 'nuova';
+
+  if (glassEligible) {
+    glassCatalog = await rtwsCheckEurocodeDaTargaOE2({ plate: parsed.plate, oeCode: parsed.oeCode });
+    const selectedItem = chooseBestGlassItem(glassCatalog.items, parsed.requestedPartText);
+    if (selectedItem) {
+      parsed.oeCode = selectedItem.oe_code || parsed.oeCode;
+      whatsappText = buildGlassReplyText(selectedItem, glassCatalog.items.length);
+      status = 'oe_trovato';
+    } else {
+      whatsappText = whatsappText || 'Ho identificato una richiesta cristalli, ma dalla sola targa non emerge un risultato univoco. Indicami meglio quale vetro o allega una foto del ricambio.';
+      status = 'in_attesa_verifica_tecnica';
+    }
+  } else if (!parsed.plate) {
+    whatsappText = whatsappText || 'Per usare i servizi attivi oggi ho bisogno almeno della targa. Inviami targa e tipo di cristallo/ricambio richiesto.';
+    status = 'in_attesa_dati_cliente';
+  } else if (normalizedPart.category !== 'cristalli') {
+    whatsappText = whatsappText || 'Al momento con i servizi RTWS attivi posso lavorare in automatico soprattutto sui cristalli da targa. Ho preso in carico la richiesta e la faccio verificare manualmente.';
+    status = 'in_attesa_verifica_tecnica';
+  }
+
+  return {
+    status: glassCatalog.status === 'ERROR' ? 'ERROR' : 'OK',
+    parsed,
+    vehicle: null,
+    normalizedPart,
+    dbrtResult: {},
+    glassCatalog,
+    oeCatalog: {},
+    oeResults: glassCatalog.items || [],
+    equivalents: {},
+    missingData: ai.missing_data || [],
+    whatsappText,
+    aiRequest: {
+      intent: ai.intent || 'automotive_parts_resolution',
+      request_is_valid: ai.request_is_valid !== false,
+      suggested_service: ai.suggested_service || (glassEligible ? 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2' : 'MANUAL_REVIEW'),
+      instruction: 'Triage AI e scelta del servizio RTWS più utile con minimizzazione dei falsi positivi.',
+      availableSources: ['OPENAI', 'RTWS_LISTINI', 'RTWS_BDRT'],
+      parsed,
+      normalizedPart
+    },
+    aiSummary: s(ai.ai_summary) || null,
+    resolvedStatus: status
+  };
+}
+
+function persistResolvedPayload(partsRequestId, resolved) {
+  const parsed = resolved?.parsed || {};
+  const normalizedPart = resolved?.normalizedPart || {};
+  const items = Array.isArray(resolved?.oeResults) ? resolved.oeResults : [];
+
+  db.prepare(`
+    UPDATE parts_requests
+    SET plate = COALESCE(NULLIF(?, ''), plate),
+        vin = COALESCE(NULLIF(?, ''), vin),
+        oe_code = COALESCE(NULLIF(?, ''), oe_code),
+        requested_part_text = COALESCE(NULLIF(?, ''), requested_part_text),
+        normalized_part_name = COALESCE(NULLIF(?, ''), normalized_part_name),
+        normalized_part_category = COALESCE(NULLIF(?, ''), normalized_part_category),
+        ai_summary = COALESCE(NULLIF(?, ''), ai_summary),
+        whatsapp_reply_text = COALESCE(NULLIF(?, ''), whatsapp_reply_text),
+        status = COALESCE(NULLIF(?, ''), status),
+        updated_at = datetime('now')
+    WHERE id = ?
+  `).run(
+    s(parsed.plate),
+    s(parsed.vin),
+    s(parsed.oeCode),
+    s(parsed.requestedPartText),
+    s(normalizedPart.name),
+    s(normalizedPart.category),
+    s(resolved.aiSummary),
+    s(resolved.whatsappText),
+    s(resolved.resolvedStatus),
+    partsRequestId
+  );
+
+  db.prepare('DELETE FROM parts_request_oe_results WHERE parts_request_id = ?').run(partsRequestId);
+  const insertOe = db.prepare(`
+    INSERT INTO parts_request_oe_results (parts_request_id, oe_code, description, list_price, source, raw_payload_json)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  items.forEach((item) => {
+    insertOe.run(
+      partsRequestId,
+      s(item.oe_code),
+      s(item.description || item.eurocode || 'Ricambio cristalli'),
+      item.price ? Number(String(item.price).replace(',', '.')) : null,
+      'RTWS_LISTINI',
+      JSON.stringify(item)
+    );
+  });
 }
 
 function forwardToPartsBackend(payload) {
@@ -455,75 +783,24 @@ router.post('/webhook/whatsapp', async (req, res) => {
           upsertConversationState(conversation.id);
           logPartEvent(partsRequestId, 'richiesta_ricevuta', 'Richiesta ricevuta da webhook WhatsApp', 'whatsapp_webhook', { phone, externalMessageId });
 
-          const backendResult = await forwardToPartsBackend({
-            originalMessage: bodyText,
-            phone,
-            externalMessageId,
-            requestUuid: db.prepare('SELECT request_uuid FROM parts_requests WHERE id = ?').get(partsRequestId)?.request_uuid || null
-          });
-
-          if (!backendResult.skipped && !backendResult.error && backendResult.statusCode >= 200 && backendResult.statusCode < 300) {
-            const body = backendResult.body || {};
-            db.prepare(`
-              UPDATE parts_requests
-              SET plate = COALESCE(?, plate),
-                  oe_code = COALESCE(?, oe_code),
-                  requested_part_text = COALESCE(?, requested_part_text),
-                  normalized_part_name = COALESCE(?, normalized_part_name),
-                  normalized_part_category = COALESCE(?, normalized_part_category),
-                  ai_summary = COALESCE(?, ai_summary),
-                  whatsapp_reply_text = COALESCE(?, whatsapp_reply_text),
-                  status = COALESCE(?, status),
-                  updated_at = datetime('now')
-              WHERE id = ?
-            `).run(
-              s(body.plate),
-              s(body.oeCode),
-              s(body.requestedPartText),
-              s(body.normalizedPart?.name || body.normalizedPartName),
-              s(body.normalizedPart?.category || body.normalizedPartCategory),
-              s(body.aiSummary || body.originalMessage),
-              s(body.whatsappText),
-              s(body.status),
-              partsRequestId
-            );
-            logPartEvent(partsRequestId, 'backend_sync', 'Richiesta inoltrata al backend ricambi', 'parts_backend', backendResult.body || { statusCode: backendResult.statusCode });
-          } else if (backendResult.error) {
+          const resolved = await resolvePartsMessage({ message: bodyText, channel: 'whatsapp' });
+          if (resolved.status === 'ERROR') {
             db.prepare(`UPDATE parts_requests SET status = 'errore_integrazione', updated_at = datetime('now') WHERE id = ?`).run(partsRequestId);
-            logPartEvent(partsRequestId, 'errore_integrazione', backendResult.error, 'parts_backend', backendResult);
-          }
+            logPartEvent(partsRequestId, 'errore_integrazione', resolved.error || 'Resolve ricambi fallito', 'parts_resolver', resolved);
+          } else {
+            persistResolvedPayload(partsRequestId, resolved);
+            logPartEvent(partsRequestId, 'ai_triage', 'Triage AI completato', 'openai', resolved.aiRequest || {});
+            if (resolved.glassCatalog?.status === 'READY') {
+              logPartEvent(partsRequestId, 'rtws_listini', resolved.glassCatalog.message || 'RTWS_LISTINI eseguito', 'rtws_listini', {
+                items: resolved.glassCatalog.items?.slice(0, 20) || [],
+                stateCode: resolved.glassCatalog.stateCode || ''
+              });
+            } else if (resolved.glassCatalog?.status === 'ERROR') {
+              logPartEvent(partsRequestId, 'errore_integrazione', resolved.glassCatalog.message || 'Errore RTWS_LISTINI', 'rtws_listini', resolved.glassCatalog);
+            }
 
-          const aiResult = await triangulateWithOpenAI(bodyText);
-          if (!aiResult.skipped && !aiResult.error && aiResult.data) {
-            const ai = aiResult.data;
-            db.prepare(`
-              UPDATE parts_requests
-              SET plate = COALESCE(NULLIF(?, ''), plate),
-                  vin = COALESCE(NULLIF(?, ''), vin),
-                  oe_code = COALESCE(NULLIF(?, ''), oe_code),
-                  requested_part_text = COALESCE(NULLIF(?, ''), requested_part_text),
-                  normalized_part_name = COALESCE(NULLIF(?, ''), normalized_part_name),
-                  normalized_part_category = COALESCE(NULLIF(?, ''), normalized_part_category),
-                  ai_summary = COALESCE(NULLIF(?, ''), ai_summary),
-                  status = COALESCE(NULLIF(?, ''), status),
-                  updated_at = datetime('now')
-              WHERE id = ?
-            `).run(
-              s(ai.plate),
-              s(ai.vin),
-              s(ai.oe_code),
-              s(ai.requested_part_text),
-              s(ai.normalized_part_name),
-              s(ai.normalized_part_category),
-              s(ai.ai_summary),
-              s(ai.status),
-              partsRequestId
-            );
-            logPartEvent(partsRequestId, 'ai_triage', 'Triage AI completato', 'openai', ai);
-
-            const outboundText = s(ai.operator_reply_text);
-            if (outboundText) {
-              const whatsappSend = await sendWhatsAppText(phone, outboundText);
+            if (resolved.whatsappText) {
+              const whatsappSend = await sendWhatsAppText(phone, resolved.whatsappText);
               db.prepare(`
                 INSERT INTO whatsapp_messages (
                   conversation_id, direction, channel, external_message_id, message_type,
@@ -533,17 +810,12 @@ router.post('/webhook/whatsapp', async (req, res) => {
               `).run(
                 conversation.id,
                 s(whatsappSend.body?.messages?.[0]?.id),
-                outboundText,
+                resolved.whatsappText,
                 whatsappSend.error ? 'error' : (whatsappSend.statusCode >= 200 && whatsappSend.statusCode < 300 ? 'sent' : 'error'),
                 whatsappSend.error || s(whatsappSend.body?.error?.message),
                 JSON.stringify(whatsappSend)
               );
               upsertConversationState(conversation.id);
-              db.prepare(`
-                UPDATE parts_requests
-                SET whatsapp_reply_text = ?, last_message_at = datetime('now'), updated_at = datetime('now')
-                WHERE id = ?
-              `).run(outboundText, partsRequestId);
               logPartEvent(
                 partsRequestId,
                 whatsappSend.error ? 'errore_integrazione' : 'messaggio_whatsapp_inviato',
@@ -552,8 +824,18 @@ router.post('/webhook/whatsapp', async (req, res) => {
                 whatsappSend
               );
             }
-          } else if (aiResult.error) {
-            logPartEvent(partsRequestId, 'errore_integrazione', `Triage OpenAI fallito: ${aiResult.error}`, 'openai', aiResult);
+          }
+
+          const backendResult = await forwardToPartsBackend({
+            originalMessage: bodyText,
+            phone,
+            externalMessageId,
+            requestUuid: db.prepare('SELECT request_uuid FROM parts_requests WHERE id = ?').get(partsRequestId)?.request_uuid || null
+          });
+          if (!backendResult.skipped && !backendResult.error && backendResult.statusCode >= 200 && backendResult.statusCode < 300) {
+            logPartEvent(partsRequestId, 'backend_sync', 'Richiesta inoltrata al backend ricambi', 'parts_backend', backendResult.body || { statusCode: backendResult.statusCode });
+          } else if (backendResult.error) {
+            logPartEvent(partsRequestId, 'errore_integrazione', backendResult.error, 'parts_backend', backendResult);
           }
 
           db.exec('COMMIT');
@@ -569,6 +851,17 @@ router.post('/webhook/whatsapp', async (req, res) => {
 });
 
 router.use(authMiddleware);
+
+router.post('/parts/resolve', requirePermesso('ricambi', 'read'), async (req, res) => {
+  const resolved = await resolvePartsMessage({
+    message: req.body?.message,
+    channel: req.body?.channel || 'crm'
+  });
+  if (resolved.status === 'ERROR') {
+    return res.status(400).json(resolved);
+  }
+  res.json(resolved);
+});
 
 router.get('/parts/dashboard', requirePermesso('ricambi', 'read'), (req, res) => {
   res.json(buildDashboard());

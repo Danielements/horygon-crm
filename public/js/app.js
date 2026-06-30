@@ -1122,7 +1122,7 @@ async function loadPartsRequestDetail(id) {
       </div>
       <div class="ricambi-detail-card">
         <h4>OE / equivalenti</h4>
-        ${data.oe_results?.length ? `<ul>${data.oe_results.map(row => `<li><strong>${escapeHtml(row.oe_code)}</strong> ${escapeHtml(row.description || '')}</li>`).join('')}</ul>` : `<div>Nessun risultato OE salvato.</div>`}
+        ${data.oe_results?.length ? `<ul>${data.oe_results.map(row => `<li><strong>${escapeHtml(row.oe_code)}</strong> ${escapeHtml(row.description || '')}${row.list_price !== null && row.list_price !== undefined ? ` <span style="color:var(--text-muted)">· ${escapeHtml(formatCurrencyIt(row.list_price))}</span>` : ''}</li>`).join('')}</ul>` : `<div>Nessun risultato OE salvato.</div>`}
         ${data.equivalents?.length ? `<ul style="margin-top:10px">${data.equivalents.map(row => `<li>${escapeHtml(row.brand || '')} <strong>${escapeHtml(row.code || '')}</strong> ${escapeHtml(row.description || '')}</li>`).join('')}</ul>` : ``}
       </div>
       <div class="ricambi-detail-card">
