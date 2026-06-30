@@ -704,6 +704,9 @@ nav { flex: 1; padding: 10px 8px; overflow-y: auto; }
 .data-table tr:last-child td { border-bottom: none; }
 .data-table tr:hover td { background: var(--bg-hover); }
 .table-wrapper { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: auto; }
+.data-table tr.row-selected td {
+  background: rgba(var(--accent-rgb), 0.08);
+}
 
 .table-tools-bar {
   display: flex;
@@ -737,6 +740,297 @@ nav { flex: 1; padding: 10px 8px; overflow-y: auto; }
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.ricambi-hero-card,
+.ricambi-chat-meta,
+.ricambi-tabbar,
+.ricambi-chat-actions,
+.ricambi-chat-composer,
+.ricambi-grid-2,
+.ricambi-grid-3,
+.ricambi-chat-layout,
+.ricambi-chat-bubble-meta,
+.ricambi-chat-bubble-head {
+  display: flex;
+}
+
+.ricambi-hero-card,
+.ricambi-chat-meta,
+.ricambi-chat-actions,
+.ricambi-chat-composer {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ricambi-hero-card {
+  margin-bottom: 18px;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.ricambi-hero-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.ricambi-hero-copy span {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.ricambi-hero-actions,
+.ricambi-tabbar {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ricambi-tabbar {
+  margin-bottom: 18px;
+}
+
+.ricambi-tab {
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ricambi-tab.active {
+  background: rgba(var(--accent-rgb), 0.14);
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb), 0.32);
+}
+
+.ricambi-pane { display: none; }
+.ricambi-pane.active { display: block; }
+
+.ricambi-grid-2,
+.ricambi-grid-3,
+.ricambi-chat-layout {
+  gap: 18px;
+}
+
+.ricambi-grid-2 > *,
+.ricambi-chat-layout > * {
+  flex: 1 1 0;
+}
+
+.ricambi-grid-3 > * {
+  flex: 1 1 0;
+}
+
+.ricambi-grid-2,
+.ricambi-grid-3 {
+  align-items: stretch;
+}
+
+.ricambi-grid-3 {
+  flex-wrap: wrap;
+}
+
+.ricambi-detail-layout {
+  align-items: flex-start;
+}
+
+.ricambi-mini-list,
+.ricambi-conversation-list,
+.ricambi-chat-messages {
+  display: grid;
+  gap: 10px;
+}
+
+.ricambi-mini-item,
+.ricambi-conversation-item {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-input) 100%);
+}
+
+.ricambi-mini-item strong,
+.ricambi-conversation-item strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.ricambi-mini-item span,
+.ricambi-conversation-item span,
+.ricambi-mini-item small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.ricambi-conversation-item {
+  cursor: pointer;
+}
+
+.ricambi-conversation-item.active {
+  border-color: rgba(var(--accent-rgb), 0.32);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.18) inset;
+}
+
+.ricambi-chat-layout {
+  align-items: stretch;
+}
+
+.ricambi-chat-layout > .dash-card:first-child {
+  max-width: 340px;
+}
+
+.ricambi-chat-layout > .dash-card:last-child {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-height: 620px;
+}
+
+.ricambi-chat-meta {
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.ricambi-chat-messages {
+  padding: 14px 0;
+  overflow: auto;
+  max-height: 460px;
+}
+
+.ricambi-chat-bubble {
+  max-width: 78%;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+}
+
+.ricambi-chat-bubble.inbound {
+  justify-self: start;
+}
+
+.ricambi-chat-bubble.outbound {
+  justify-self: end;
+  background: rgba(var(--accent-rgb), 0.14);
+  border-color: rgba(var(--accent-rgb), 0.28);
+}
+
+.ricambi-chat-bubble.internal {
+  justify-self: center;
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.2);
+}
+
+.ricambi-chat-bubble-head {
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.ricambi-chat-bubble p {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.ricambi-chat-composer {
+  gap: 12px;
+  align-items: flex-end;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.ricambi-chat-composer textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 84px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 12px;
+  font-family: inherit;
+}
+
+.ricambi-chat-actions {
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ricambi-inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.ricambi-detail-empty {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.ricambi-detail-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.ricambi-detail-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+  background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-input) 100%);
+}
+
+.ricambi-detail-card h4 {
+  margin: 0 0 10px 0;
+  font-size: 13px;
+}
+
+.ricambi-detail-card div,
+.ricambi-detail-card li {
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.ricambi-detail-card ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.badge-parts-open { background: rgba(var(--accent-rgb),0.12); color: var(--accent); }
+.badge-parts-waiting { background: rgba(245,158,11,0.12); color: var(--warning); }
+.badge-parts-success { background: rgba(22,163,74,0.12); color: var(--success); }
+.badge-parts-danger { background: rgba(220,38,38,0.12); color: var(--danger); }
+
+@media (max-width: 1100px) {
+  .ricambi-grid-2,
+  .ricambi-chat-layout {
+    flex-direction: column;
+  }
+
+  .ricambi-chat-layout > .dash-card:first-child {
+    max-width: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .ricambi-chat-composer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ricambi-chat-bubble {
+    max-width: 100%;
+  }
 }
 
 .table-filter-row th {

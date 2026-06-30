@@ -581,6 +581,149 @@ db.exec(`
     aggiornato_il TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (utente_id) REFERENCES utenti(id) ON DELETE CASCADE
   );
+
+  CREATE TABLE IF NOT EXISTS parts_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_uuid TEXT NOT NULL UNIQUE,
+    channel TEXT DEFAULT 'whatsapp',
+    external_message_id TEXT,
+    user_phone TEXT NOT NULL,
+    customer_id INTEGER,
+    original_message TEXT NOT NULL,
+    plate TEXT,
+    vin TEXT,
+    requested_part_text TEXT,
+    normalized_part_name TEXT,
+    normalized_part_category TEXT,
+    oe_code TEXT,
+    status TEXT DEFAULT 'nuova',
+    source_system TEXT,
+    ai_summary TEXT,
+    whatsapp_reply_text TEXT,
+    assigned_to_user_id INTEGER,
+    priority TEXT DEFAULT 'media',
+    tags_json TEXT,
+    last_message_at TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (customer_id) REFERENCES anagrafiche(id),
+    FOREIGN KEY (assigned_to_user_id) REFERENCES utenti(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS parts_request_vehicle_data (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parts_request_id INTEGER NOT NULL UNIQUE,
+    make TEXT,
+    model TEXT,
+    version TEXT,
+    engine_code TEXT,
+    ktype TEXT,
+    infocar_code TEXT,
+    vehicle_source TEXT,
+    raw_payload_json TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (parts_request_id) REFERENCES parts_requests(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS parts_request_oe_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parts_request_id INTEGER NOT NULL,
+    oe_code TEXT NOT NULL,
+    description TEXT,
+    list_price REAL,
+    source TEXT,
+    raw_payload_json TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (parts_request_id) REFERENCES parts_requests(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS parts_request_equivalents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parts_request_id INTEGER NOT NULL,
+    oe_result_id INTEGER,
+    brand TEXT NOT NULL,
+    code TEXT NOT NULL,
+    description TEXT,
+    source TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (parts_request_id) REFERENCES parts_requests(id) ON DELETE CASCADE,
+    FOREIGN KEY (oe_result_id) REFERENCES parts_request_oe_results(id) ON DELETE SET NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS parts_request_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parts_request_id INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    event_message TEXT,
+    event_source TEXT,
+    payload_json TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (parts_request_id) REFERENCES parts_requests(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS parts_request_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parts_request_id INTEGER NOT NULL,
+    author_user_id INTEGER,
+    note_text TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (parts_request_id) REFERENCES parts_requests(id) ON DELETE CASCADE,
+    FOREIGN KEY (author_user_id) REFERENCES utenti(id) ON DELETE SET NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS whatsapp_conversations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_uuid TEXT NOT NULL UNIQUE,
+    customer_id INTEGER,
+    user_phone TEXT NOT NULL,
+    parts_request_id INTEGER,
+    status TEXT DEFAULT 'aperta',
+    assigned_to_user_id INTEGER,
+    last_message_at TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (customer_id) REFERENCES anagrafiche(id),
+    FOREIGN KEY (parts_request_id) REFERENCES parts_requests(id) ON DELETE SET NULL,
+    FOREIGN KEY (assigned_to_user_id) REFERENCES utenti(id) ON DELETE SET NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS whatsapp_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id INTEGER NOT NULL,
+    direction TEXT NOT NULL,
+    channel TEXT DEFAULT 'whatsapp',
+    external_message_id TEXT,
+    message_type TEXT DEFAULT 'text',
+    body_text TEXT,
+    media_url TEXT,
+    media_mime_type TEXT,
+    media_metadata_json TEXT,
+    delivery_status TEXT,
+    error_message TEXT,
+    source_system TEXT,
+    raw_payload_json TEXT,
+    internal_note INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (conversation_id) REFERENCES whatsapp_conversations(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS parts_request_metrics_daily (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    metric_date TEXT NOT NULL UNIQUE,
+    total_requests INTEGER DEFAULT 0,
+    total_open INTEGER DEFAULT 0,
+    total_completed INTEGER DEFAULT 0,
+    total_oe_found INTEGER DEFAULT 0,
+    total_waiting_customer INTEGER DEFAULT 0,
+    total_errors INTEGER DEFAULT 0,
+    total_inbound_messages INTEGER DEFAULT 0,
+    total_outbound_messages INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
 `);
 
 const ROLE_DEFS = [
@@ -596,7 +739,7 @@ const ROLE_DEFS = [
 const APP_SECTIONS = [
   'clienti', 'fornitori', 'contatti', 'prodotti', 'magazzino', 'preventivi',
   'ordini', 'ddt', 'container', 'fatture', 'proforme', 'spedizioni',
-  'attivita', 'documenti', 'mepa', 'cig', 'analytics', 'statistics',
+  'attivita', 'documenti', 'mepa', 'cig', 'analytics', 'statistics', 'ricambi',
   'settings', 'mappa', 'utenti', 'ai', 'system_log'
 ];
 
@@ -623,19 +766,19 @@ APP_SECTIONS.forEach(section => {
   const readonlyRead = section === 'utenti' || section === 'settings' ? 0 : 1;
   upsertPerm.run(1, section, readonlyRead, 0, 0, 0);
 
-  const commercialeEditable = ['clienti', 'fornitori', 'contatti', 'preventivi', 'ordini', 'attivita', 'documenti', 'mappa'].includes(section);
+  const commercialeEditable = ['clienti', 'fornitori', 'contatti', 'preventivi', 'ordini', 'attivita', 'documenti', 'mappa', 'ricambi'].includes(section);
   const commercialeReadable = readonlyRead;
   upsertPerm.run(2, section, commercialeReadable, commercialeEditable ? 1 : 0, 0, 0);
 
   upsertPerm.run(3, section, 1, 1, section === 'settings' ? 0 : 1, section === 'utenti' || section === 'settings' ? 1 : 0);
   upsertPerm.run(4, section, 1, 1, 1, 1);
 
-  const amministrazioneReadable = ['clienti', 'fornitori', 'contatti', 'fatture', 'ordini', 'preventivi', 'documenti', 'analytics', 'statistics', 'mappa'].includes(section);
-  const amministrazioneEditable = ['fatture', 'documenti', 'analytics', 'statistics'].includes(section);
+  const amministrazioneReadable = ['clienti', 'fornitori', 'contatti', 'fatture', 'ordini', 'preventivi', 'documenti', 'analytics', 'statistics', 'mappa', 'ricambi'].includes(section);
+  const amministrazioneEditable = ['fatture', 'documenti', 'analytics', 'statistics', 'ricambi'].includes(section);
   upsertPerm.run(5, section, amministrazioneReadable ? 1 : 0, amministrazioneEditable ? 1 : 0, 0, 0);
 
-  const logisticaReadable = ['clienti', 'fornitori', 'contatti', 'prodotti', 'magazzino', 'ordini', 'ddt', 'container', 'proforme', 'spedizioni', 'documenti', 'mappa', 'analytics'].includes(section);
-  const logisticaEditable = ['magazzino', 'ordini', 'ddt', 'container', 'proforme', 'spedizioni', 'documenti'].includes(section);
+  const logisticaReadable = ['clienti', 'fornitori', 'contatti', 'prodotti', 'magazzino', 'ordini', 'ddt', 'container', 'proforme', 'spedizioni', 'documenti', 'mappa', 'analytics', 'ricambi'].includes(section);
+  const logisticaEditable = ['magazzino', 'ordini', 'ddt', 'container', 'proforme', 'spedizioni', 'documenti', 'ricambi'].includes(section);
   upsertPerm.run(6, section, logisticaReadable ? 1 : 0, logisticaEditable ? 1 : 0, 0, 0);
 
   const commercialistaReadable = ['fatture', 'documenti', 'analytics', 'statistics'].includes(section);

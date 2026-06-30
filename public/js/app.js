@@ -39,6 +39,7 @@ let notificationsPollTimer = null;
 let serviceWorkerRegistrationPromise = null;
 let pushSupport = { configured: false, publicKey: '', activeSubscriptions: 0 };
 let openNotificationsOnBoot = new URLSearchParams(window.location.search).get('openNotifications') === '1';
+let partsUiState = { tab: 'dashboard', selectedRequestId: null, selectedConversationId: null, requestSearchTimer: null };
 
 // Redirect da Google OAuth
 const urlToken = new URLSearchParams(window.location.search).get('token');
@@ -330,6 +331,7 @@ const NAV_PERMISSION_MAP = {
   mepa: 'mepa',
   rdo: 'mepa',
   notifiche: 'attivita',
+  ricambi: 'ricambi',
     analytics: 'analytics',
     attivita: 'attivita',
     automazioni: 'settings',
@@ -545,7 +547,7 @@ function organizeNavigationLayout() {
   const getItem = (section, label, icon, id = '') => itemMap[section] || createNavItem(section, label, icon, id);
   const groups = [
     { label: '', sections: ['dashboard'] },
-    { label: 'Operativo', sections: ['attivita', 'notifiche'] },
+    { label: 'Operativo', sections: ['attivita', 'notifiche', 'ricambi'] },
     { label: 'Anagrafiche', sections: ['clienti', 'fornitori', 'contatti', 'mappa'] },
     { label: 'Logistica', sections: ['prodotti', 'kit', 'magazzino', 'preventivi', 'ordini', 'ddt', 'container', 'documenti'] },
     { label: 'Contabilita', sections: ['fatture-attive', 'fatture-passive', 'fatture-fuori-campo'] },
@@ -564,6 +566,7 @@ function organizeNavigationLayout() {
       const item = section === 'dashboard' ? getItem('dashboard', 'Dashboard', '&#9672;')
         : section === 'attivita' ? getItem('attivita', 'Attivita CRM', '&#128197;')
         : section === 'notifiche' ? getItem('notifiche', 'Notifiche', '&#128276;')
+        : section === 'ricambi' ? getItem('ricambi', 'Ricambi', '&#128295;')
         : section === 'clienti' ? getItem('clienti', 'Clienti', '&#128101;')
         : section === 'fornitori' ? getItem('fornitori', 'Fornitori', '&#127981;')
         : section === 'contatti' ? getItem('contatti', 'Contatti', '&#128199;')
@@ -708,6 +711,7 @@ function navigateTo(section) {
     const titleMap = {
       dashboard: 'Home',
       attivita: 'Attivita',
+      ricambi: 'Ricambi',
       clienti: 'Clienti',
       fornitori: 'Fornitori',
       contatti: 'Contatti',
@@ -754,6 +758,7 @@ function navigateTo(section) {
     'system-log': loadSystemLog,
     automazioni: loadAutomationPage,
     mappa: loadMappa, utenti: loadUtenti, mepa: loadMepa, rdo: loadRdoPage, 'opportunita-cpv': loadOpportunityCpv, cig: loadCIG, analytics: loadAnalytics,
+    ricambi: loadRicambiArea,
     notifiche: loadNotificationsPage,
   };
   if (map[section]) map[section]();
@@ -938,6 +943,317 @@ function renderSummaryCards(targetId, items = []) {
       ${item.meta ? `<div class="summary-card-meta">${escapeHtml(item.meta)}</div>` : ''}
     </div>
   `).join('');
+}
+
+function getPartsStatusMeta(status) {
+  const normalized = String(status || 'nuova');
+  const map = {
+    nuova: { label: 'Nuova', tone: 'open' },
+    in_lavorazione: { label: 'In lavorazione', tone: 'open' },
+    in_attesa_dati_cliente: { label: 'Attesa dati cliente', tone: 'waiting' },
+    in_attesa_verifica_tecnica: { label: 'Attesa verifica tecnica', tone: 'waiting' },
+    oe_trovato: { label: 'OE trovato', tone: 'success' },
+    preventivo_pronto: { label: 'Preventivo pronto', tone: 'success' },
+    completata: { label: 'Completata', tone: 'success' },
+    annullata: { label: 'Annullata', tone: 'danger' },
+    errore_integrazione: { label: 'Errore integrazione', tone: 'danger' }
+  };
+  return map[normalized] || { label: normalized.replaceAll('_', ' '), tone: 'open' };
+}
+
+function renderPartsStatusBadge(status) {
+  const meta = getPartsStatusMeta(status);
+  return `<span class="badge badge-parts-${meta.tone}">${escapeHtml(meta.label)}</span>`;
+}
+
+function renderRicambiMiniList(targetId, items = [], renderer, emptyLabel = 'Nessun dato disponibile') {
+  const box = document.getElementById(targetId);
+  if (!box) return;
+  if (!items.length) {
+    box.innerHTML = `<div class="ricambi-detail-empty">${escapeHtml(emptyLabel)}</div>`;
+    return;
+  }
+  box.innerHTML = items.map(renderer).join('');
+}
+
+function setRicambiTab(tab) {
+  partsUiState.tab = tab;
+  document.querySelectorAll('[data-parts-tab]').forEach(btn => btn.classList.toggle('active', btn.dataset.partsTab === tab));
+  document.querySelectorAll('[data-parts-pane]').forEach(pane => pane.classList.toggle('active', pane.dataset.partsPane === tab));
+  if (tab === 'requests') loadPartsRequests(true);
+  if (tab === 'conversations') loadPartsConversations(true);
+  if (tab === 'stats') loadPartsStats();
+  if (tab === 'dashboard') loadPartsDashboard();
+}
+
+function debouncedLoadPartsRequests() {
+  clearTimeout(partsUiState.requestSearchTimer);
+  partsUiState.requestSearchTimer = setTimeout(() => loadPartsRequests(), 220);
+}
+
+async function loadRicambiArea() {
+  await Promise.all([
+    loadPartsDashboard(),
+    loadPartsRequests(true),
+    loadPartsConversations(true),
+    loadPartsStats()
+  ]);
+  setRicambiTab(partsUiState.tab || 'dashboard');
+}
+
+async function loadPartsDashboard() {
+  const data = await api('GET', '/parts/dashboard');
+  renderSummaryCards('ricambi-kpi-grid', [
+    { label: 'Richieste oggi', value: data?.kpis?.requests_today || 0, icon: '&#128295;', tone: 'primary' },
+    { label: 'Ultimi 7 giorni', value: data?.kpis?.requests_last_7_days || 0, icon: '&#128197;' },
+    { label: 'Richieste aperte', value: data?.kpis?.requests_open || 0, icon: '&#9203;', tone: 'warning' },
+    { label: 'Attesa cliente', value: data?.kpis?.waiting_customer || 0, icon: '&#128172;' },
+    { label: 'Attesa tecnica', value: data?.kpis?.waiting_technical || 0, icon: '&#128736;' },
+    { label: 'Completate', value: data?.kpis?.completed || 0, icon: '&#9989;', tone: 'success' },
+    { label: 'OE trovato', value: data?.kpis?.oe_found || 0, icon: 'OE', tone: 'cyan' },
+    { label: 'Errori integrazione', value: data?.kpis?.integration_errors || 0, icon: '&#9888;', tone: 'danger' },
+    { label: 'Msg inbound oggi', value: data?.kpis?.inbound_today || 0, icon: '&#128229;' },
+    { label: 'Msg outbound oggi', value: data?.kpis?.outbound_today || 0, icon: '&#128228;' }
+  ]);
+
+  renderRicambiMiniList('ricambi-trend-list', data?.trend || [], (item) => `
+    <div class="ricambi-mini-item">
+      <strong>${escapeHtml(formatDateIt(item.day))}</strong>
+      <span>${escapeHtml(String(item.total || 0))} richieste</span>
+    </div>
+  `, 'Nessun trend disponibile');
+
+  renderRicambiMiniList('ricambi-status-list', data?.byStatus || [], (item) => `
+    <div class="ricambi-mini-item">
+      <strong>${renderPartsStatusBadge(item.status)}</strong>
+      <span>${escapeHtml(String(item.total || 0))} richieste</span>
+    </div>
+  `, 'Nessuno stato disponibile');
+
+  renderRicambiMiniList('ricambi-recent-list', data?.recent || [], (item) => `
+    <div class="ricambi-mini-item">
+      <strong>${escapeHtml(item.customer_name || item.user_phone || item.request_uuid || `#${item.id}`)}</strong>
+      <span>${escapeHtml(item.normalized_part_name || item.normalized_part_category || 'Richiesta ricambio')}</span>
+      <small>${renderPartsStatusBadge(item.status)} · ${escapeHtml(formatDateTimeIt(item.created_at))}</small>
+    </div>
+  `, 'Nessuna richiesta recente');
+
+  renderRicambiMiniList('ricambi-attention-list', (data?.attention || []).concat(data?.errors || []), (item) => `
+    <div class="ricambi-mini-item">
+      <strong>${escapeHtml(item.request_uuid || `#${item.id}`)}</strong>
+      <span>${escapeHtml(item.event_message || item.original_message || item.user_phone || 'Da verificare')}</span>
+      <small>${escapeHtml(formatDateTimeIt(item.created_at))}</small>
+    </div>
+  `, 'Nessun alert operativo');
+}
+
+async function loadPartsRequests(keepSelection = false) {
+  const q = document.getElementById('parts-filter-q')?.value || '';
+  const status = document.getElementById('parts-filter-status')?.value || '';
+  const hasPlate = document.getElementById('parts-filter-has-plate')?.checked ? '1' : '';
+  const hasOe = document.getElementById('parts-filter-has-oe')?.checked ? '1' : '';
+  const errorsOnly = document.getElementById('parts-filter-errors')?.checked ? '1' : '';
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (status) params.set('status', status);
+  if (hasPlate) params.set('has_plate', hasPlate);
+  if (hasOe) params.set('has_oe', hasOe);
+  if (errorsOnly) params.set('errors_only', errorsOnly);
+  const rows = await api('GET', `/parts/requests${params.toString() ? `?${params.toString()}` : ''}`) || [];
+  const body = document.getElementById('parts-requests-body');
+  if (!body) return;
+  body.innerHTML = rows.length ? rows.map(row => `
+    <tr onclick="loadPartsRequestDetail(${row.id})" style="cursor:pointer" class="${partsUiState.selectedRequestId === row.id ? 'row-selected' : ''}">
+      <td>#${escapeHtml(String(row.id))}</td>
+      <td>${escapeHtml(formatDateTimeIt(row.created_at))}</td>
+      <td>${escapeHtml(row.user_phone || '-')}</td>
+      <td>${escapeHtml(row.customer_name || '-')}</td>
+      <td>${escapeHtml(row.normalized_part_name || row.requested_part_text || '-')}</td>
+      <td>${escapeHtml(row.plate || '-')}</td>
+      <td>${escapeHtml(row.oe_code || '-')}</td>
+      <td>${renderPartsStatusBadge(row.status)}</td>
+    </tr>
+  `).join('') : `<tr><td colspan="8" style="color:var(--text-muted)">Nessuna richiesta trovata.</td></tr>`;
+
+  const shouldLoad = rows.length && (!keepSelection || !rows.some(row => row.id === partsUiState.selectedRequestId));
+  if (shouldLoad) {
+    partsUiState.selectedRequestId = rows[0].id;
+    await loadPartsRequestDetail(rows[0].id);
+  } else if (partsUiState.selectedRequestId) {
+    await loadPartsRequestDetail(partsUiState.selectedRequestId);
+  } else if (!rows.length) {
+    document.getElementById('parts-request-detail').innerHTML = `<div class="ricambi-detail-empty">Nessuna richiesta da mostrare.</div>`;
+  }
+}
+
+async function loadPartsRequestDetail(id) {
+  partsUiState.selectedRequestId = id;
+  const data = await api('GET', `/parts/requests/${id}`);
+  const target = document.getElementById('parts-request-detail');
+  if (!target || !data) return;
+  const statusOptions = ['nuova','in_lavorazione','in_attesa_dati_cliente','in_attesa_verifica_tecnica','oe_trovato','preventivo_pronto','completata','annullata','errore_integrazione']
+    .map(status => `<option value="${status}" ${data.status === status ? 'selected' : ''}>${escapeHtml(getPartsStatusMeta(status).label)}</option>`).join('');
+  target.innerHTML = `
+    <div class="ricambi-detail-grid">
+      <div class="ricambi-detail-card">
+        <h4>Richiesta</h4>
+        <div><strong>UUID:</strong> ${escapeHtml(data.request_uuid || '-')}</div>
+        <div><strong>Telefono:</strong> ${escapeHtml(data.user_phone || '-')}</div>
+        <div><strong>Cliente:</strong> ${escapeHtml(data.customer_name || '-')}</div>
+        <div><strong>Messaggio:</strong> ${escapeHtml(data.original_message || '-')}</div>
+        <div><strong>Ricambio:</strong> ${escapeHtml(data.normalized_part_name || data.requested_part_text || '-')}</div>
+        <div><strong>Categoria:</strong> ${escapeHtml(data.normalized_part_category || '-')}</div>
+        <div><strong>Targa / VIN:</strong> ${escapeHtml(data.plate || '-')} / ${escapeHtml(data.vin || '-')}</div>
+        <div><strong>OE:</strong> ${escapeHtml(data.oe_code || '-')}</div>
+        <div><strong>Operatore:</strong> ${escapeHtml(data.assigned_user_name || '-')}</div>
+      </div>
+      <div class="ricambi-detail-card">
+        <h4>Veicolo e lavorazione</h4>
+        <div><strong>Marca / modello:</strong> ${escapeHtml(data.vehicle?.make || '-')} ${escapeHtml(data.vehicle?.model || '')}</div>
+        <div><strong>Versione:</strong> ${escapeHtml(data.vehicle?.version || '-')}</div>
+        <div><strong>Motore:</strong> ${escapeHtml(data.vehicle?.engine_code || '-')}</div>
+        <div><strong>Sorgente veicolo:</strong> ${escapeHtml(data.vehicle?.vehicle_source || '-')}</div>
+        <div><strong>AI summary:</strong> ${escapeHtml(data.ai_summary || '-')}</div>
+        <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+          <select id="parts-detail-status">${statusOptions}</select>
+          <button class="btn btn-accent btn-sm" onclick="savePartsRequestStatus(${data.id})">Salva stato</button>
+          <button class="btn btn-outline btn-sm" onclick="setRicambiTab('conversations')">Vai alle chat</button>
+        </div>
+      </div>
+      <div class="ricambi-detail-card">
+        <h4>OE / equivalenti</h4>
+        ${data.oe_results?.length ? `<ul>${data.oe_results.map(row => `<li><strong>${escapeHtml(row.oe_code)}</strong> ${escapeHtml(row.description || '')}</li>`).join('')}</ul>` : `<div>Nessun risultato OE salvato.</div>`}
+        ${data.equivalents?.length ? `<ul style="margin-top:10px">${data.equivalents.map(row => `<li>${escapeHtml(row.brand || '')} <strong>${escapeHtml(row.code || '')}</strong> ${escapeHtml(row.description || '')}</li>`).join('')}</ul>` : ``}
+      </div>
+      <div class="ricambi-detail-card">
+        <h4>Note interne</h4>
+        ${data.notes?.length ? `<ul>${data.notes.map(note => `<li><strong>${escapeHtml(note.author_name || 'Operatore')}</strong> · ${escapeHtml(formatDateTimeIt(note.created_at))}<br>${escapeHtml(note.note_text || '')}</li>`).join('')}</ul>` : `<div>Nessuna nota interna.</div>`}
+        <textarea id="parts-request-note-text" rows="3" style="width:100%;margin-top:10px;background:var(--bg-input);border:1px solid var(--border);color:var(--text);padding:10px;border-radius:10px;font-family:inherit" placeholder="Aggiungi nota operatore..."></textarea>
+        <div style="margin-top:10px"><button class="btn btn-outline btn-sm" onclick="addPartsRequestNote(${data.id})">Salva nota</button></div>
+      </div>
+      <div class="ricambi-detail-card">
+        <h4>Timeline eventi</h4>
+        ${data.events?.length ? `<ul>${data.events.map(event => `<li><strong>${escapeHtml(event.event_type || '-')}</strong> · ${escapeHtml(formatDateTimeIt(event.created_at))}<br>${escapeHtml(event.event_message || '-')}</li>`).join('')}</ul>` : `<div>Nessun evento registrato.</div>`}
+      </div>
+    </div>
+  `;
+}
+
+async function savePartsRequestStatus(id) {
+  const status = document.getElementById('parts-detail-status')?.value;
+  if (!status) return;
+  await api('PATCH', `/parts/requests/${id}/status`, { status });
+  toast('Stato richiesta aggiornato', 'success');
+  await Promise.all([loadPartsRequests(true), loadPartsDashboard(), loadPartsStats(), loadPartsConversations(true)]);
+}
+
+async function addPartsRequestNote(id) {
+  const noteText = document.getElementById('parts-request-note-text')?.value?.trim();
+  if (!noteText) return toast('Scrivi una nota prima di salvare', 'error');
+  await api('POST', `/parts/requests/${id}/notes`, { note_text: noteText });
+  toast('Nota salvata', 'success');
+  await loadPartsRequestDetail(id);
+}
+
+async function loadPartsConversations(keepSelection = false) {
+  const rows = await api('GET', '/parts/conversations') || [];
+  const target = document.getElementById('parts-conversations-list');
+  if (!target) return;
+  target.innerHTML = rows.length ? rows.map(row => `
+    <div class="ricambi-conversation-item ${partsUiState.selectedConversationId === row.id ? 'active' : ''}" onclick="openPartsConversation(${row.id})">
+      <strong>${escapeHtml(row.customer_name || row.user_phone || `Conversazione #${row.id}`)}</strong>
+      <span>${escapeHtml(row.normalized_part_name || row.request_uuid || 'Thread WhatsApp')}</span>
+      <small>${renderPartsStatusBadge(row.request_status || row.status)} · ${escapeHtml(formatDateTimeIt(row.last_message_at || row.updated_at || row.created_at))}</small>
+    </div>
+  `).join('') : `<div class="ricambi-detail-empty">Nessuna conversazione disponibile.</div>`;
+
+  const shouldLoad = rows.length && (!keepSelection || !rows.some(row => row.id === partsUiState.selectedConversationId));
+  if (shouldLoad) {
+    partsUiState.selectedConversationId = rows[0].id;
+    await openPartsConversation(rows[0].id);
+  } else if (partsUiState.selectedConversationId) {
+    await openPartsConversation(partsUiState.selectedConversationId);
+  }
+}
+
+async function openPartsConversation(id) {
+  partsUiState.selectedConversationId = id;
+  const data = await api('GET', `/parts/conversations/${id}/messages`);
+  const meta = document.getElementById('parts-conversation-meta');
+  const target = document.getElementById('parts-conversation-messages');
+  if (!data || !meta || !target) return;
+  meta.innerHTML = `
+    <div>
+      <strong>${escapeHtml(data.conversation.user_phone || 'Conversazione')}</strong>
+      <div>${escapeHtml(data.conversation.status || 'aperta')} · ${escapeHtml(formatDateTimeIt(data.conversation.last_message_at || data.conversation.updated_at || data.conversation.created_at))}</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${data.conversation.parts_request_id ? `<button class="btn btn-outline btn-sm" onclick="setRicambiTab('requests'); loadPartsRequestDetail(${data.conversation.parts_request_id})">Apri richiesta #${data.conversation.parts_request_id}</button>` : ''}
+    </div>
+  `;
+  target.innerHTML = (data.messages || []).length ? data.messages.map(message => {
+    const tone = message.internal_note ? 'internal' : message.direction === 'outbound' ? 'outbound' : 'inbound';
+    const title = message.internal_note ? 'Nota interna' : message.direction === 'outbound' ? 'Operatore' : 'Cliente';
+    return `
+      <div class="ricambi-chat-bubble ${tone}">
+        <div class="ricambi-chat-bubble-head">
+          <span>${escapeHtml(title)}</span>
+          <span>${escapeHtml(formatDateTimeIt(message.created_at))}</span>
+        </div>
+        <p>${escapeHtml(message.body_text || '[messaggio senza testo]')}</p>
+      </div>
+    `;
+  }).join('') : `<div class="ricambi-detail-empty">Nessun messaggio in questa conversazione.</div>`;
+}
+
+async function sendPartsMessage() {
+  const conversationId = partsUiState.selectedConversationId;
+  const bodyText = document.getElementById('parts-message-body')?.value?.trim();
+  const internalNote = document.getElementById('parts-message-note')?.checked;
+  if (!conversationId) return toast('Seleziona una conversazione', 'error');
+  if (!bodyText) return toast('Scrivi un messaggio o una nota', 'error');
+  await api('POST', `/parts/conversations/${conversationId}/messages`, { body_text: bodyText, internal_note: internalNote ? 1 : 0 });
+  document.getElementById('parts-message-body').value = '';
+  document.getElementById('parts-message-note').checked = false;
+  toast(internalNote ? 'Nota interna salvata' : 'Messaggio outbound salvato', 'success');
+  await Promise.all([openPartsConversation(conversationId), loadPartsConversations(true), loadPartsDashboard(), loadPartsRequests(true), loadPartsStats()]);
+}
+
+async function loadPartsStats() {
+  const data = await api('GET', '/parts/stats');
+  const funnel = data?.funnel || {};
+  renderSummaryCards('ricambi-stats-summary', [
+    { label: 'Richieste totali', value: funnel.total_requests || 0, icon: '&#128295;', tone: 'primary' },
+    { label: 'Completate', value: funnel.completed_requests || 0, icon: '&#9989;', tone: 'success' },
+    { label: 'Con targa', value: funnel.with_plate || 0, icon: '&#128663;' },
+    { label: 'Con OE', value: funnel.with_oe || 0, icon: 'OE', tone: 'cyan' }
+  ]);
+  renderRicambiMiniList('ricambi-stats-by-day', data?.requestsByDay || [], (item) => `
+    <div class="ricambi-mini-item"><strong>${escapeHtml(formatDateIt(item.day))}</strong><span>${escapeHtml(String(item.total || 0))} richieste</span></div>
+  `, 'Nessun dato giornaliero');
+  renderRicambiMiniList('ricambi-stats-by-category', data?.byCategory || [], (item) => `
+    <div class="ricambi-mini-item"><strong>${escapeHtml(item.label || '-')}</strong><span>${escapeHtml(String(item.total || 0))} richieste</span></div>
+  `, 'Nessuna categoria disponibile');
+  renderRicambiMiniList('ricambi-stats-by-operator', data?.byOperator || [], (item) => `
+    <div class="ricambi-mini-item"><strong>${escapeHtml(item.label || '-')}</strong><span>${escapeHtml(String(item.total || 0))} richieste</span></div>
+  `, 'Nessun operatore disponibile');
+}
+
+async function openRicambiQuickCreate() {
+  const phone = window.prompt('Numero telefono cliente/lead');
+  if (!phone) return;
+  const message = window.prompt('Testo richiesta ricambio');
+  if (!message) return;
+  await api('POST', '/parts/requests', {
+    user_phone: phone,
+    original_message: message,
+    requested_part_text: message,
+    normalized_part_name: message,
+    channel: 'whatsapp'
+  });
+  toast('Richiesta ricambi creata', 'success');
+  await loadRicambiArea();
+  setRicambiTab('requests');
 }
 
 function renderDashboardFocusCards({ ordini = [], clienti = [], container = [], notifications = [] }) {
@@ -4845,7 +5161,7 @@ async function loadMappa() {
 
 const RUOLI_NOMI = {1:'readonly',2:'commerciale',3:'admin',4:'superadmin',5:'amministrazione',6:'logistica',7:'commercialista_esterno'};
 const RUOLI_LABEL = {1:'Read Only',2:'Commerciale',3:'Admin',4:'SuperAdmin',5:'Amministrazione',6:'Logistica',7:'Commercialista esterno'};
-const SEZIONI = ['clienti','fornitori','contatti','prodotti','magazzino','preventivi','ordini','ddt','container','fatture-attive','fatture-passive','fatture-fuori-campo','attivita','documenti','mepa','cig','analytics','statistics','settings','mappa','utenti','system-log'];
+const SEZIONI = ['clienti','fornitori','contatti','prodotti','magazzino','preventivi','ordini','ddt','container','fatture-attive','fatture-passive','fatture-fuori-campo','attivita','documenti','mepa','cig','analytics','statistics','ricambi','settings','mappa','utenti','system-log'];
 const SEZIONI_LABEL = {
   clienti: 'Clienti',
   fornitori: 'Fornitori',
@@ -4865,6 +5181,7 @@ const SEZIONI_LABEL = {
   cig: 'Stagionalita CIG',
   analytics: 'Analisi API MEPA',
   statistics: 'Statistics',
+  ricambi: 'Ricambi',
   settings: 'Impostazioni',
   mappa: 'Mappa CRM',
   utenti: 'Utenti',

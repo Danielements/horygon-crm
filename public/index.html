@@ -72,6 +72,8 @@
 
       <a class="nav-item" data-section="automazioni"><span class="nav-icon">âš¡</span> Automazioni</a>
 
+      <a class="nav-item" data-section="ricambi"><span class="nav-icon">&#128295;</span> Ricambi</a>
+
       <div class="nav-group-label">Gestione</div>
       <a class="nav-item" data-section="clienti"><span class="nav-icon">👥</span> Clienti</a>
       <a class="nav-item" data-section="fornitori"><span class="nav-icon">🏭</span> Fornitori</a>
@@ -525,6 +527,147 @@
       </div>
       <div class="dash-card">
         <div id="notifications-page-list"></div>
+      </div>
+    </section>
+
+    <section id="section-ricambi" class="section">
+      <div class="page-header">
+        <h1>Ricambi</h1>
+        <div class="header-actions">
+          <button class="btn btn-outline btn-sm" onclick="loadRicambiArea()">Aggiorna</button>
+          <button class="btn btn-accent btn-sm" onclick="openRicambiQuickCreate()">+ Nuova richiesta</button>
+        </div>
+      </div>
+      <div class="dash-card ricambi-hero-card">
+        <div class="ricambi-hero-copy">
+          <strong>Centro operativo WhatsApp Ricambi</strong>
+          <span>Dashboard, richieste, conversazioni e KPI in un'unica area collegata al CRM.</span>
+        </div>
+        <div class="ricambi-hero-actions">
+          <button class="btn btn-outline btn-sm" onclick="setRicambiTab('dashboard')">Dashboard</button>
+          <button class="btn btn-outline btn-sm" onclick="setRicambiTab('requests')">Richieste</button>
+          <button class="btn btn-outline btn-sm" onclick="setRicambiTab('conversations')">Conversazioni</button>
+          <button class="btn btn-outline btn-sm" onclick="setRicambiTab('stats')">Statistiche</button>
+        </div>
+      </div>
+
+      <div class="ricambi-tabbar" id="ricambi-tabbar">
+        <button class="ricambi-tab active" data-parts-tab="dashboard" onclick="setRicambiTab('dashboard')">Dashboard</button>
+        <button class="ricambi-tab" data-parts-tab="requests" onclick="setRicambiTab('requests')">Richieste</button>
+        <button class="ricambi-tab" data-parts-tab="conversations" onclick="setRicambiTab('conversations')">Conversazioni</button>
+        <button class="ricambi-tab" data-parts-tab="stats" onclick="setRicambiTab('stats')">Statistiche</button>
+      </div>
+
+      <div class="ricambi-pane active" data-parts-pane="dashboard">
+        <div id="ricambi-kpi-grid" class="app-summary-grid" style="margin-bottom:18px"></div>
+        <div class="ricambi-grid-2" style="margin-bottom:18px">
+          <div class="dash-card">
+            <h3>Trend richieste ultimi 14 giorni</h3>
+            <div id="ricambi-trend-list" class="ricambi-mini-list"></div>
+          </div>
+          <div class="dash-card">
+            <h3>Richieste per stato</h3>
+            <div id="ricambi-status-list" class="ricambi-mini-list"></div>
+          </div>
+        </div>
+        <div class="ricambi-grid-2">
+          <div class="dash-card">
+            <h3>Ultime richieste</h3>
+            <div id="ricambi-recent-list" class="ricambi-mini-list"></div>
+          </div>
+          <div class="dash-card">
+            <h3>Da attenzionare</h3>
+            <div id="ricambi-attention-list" class="ricambi-mini-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="ricambi-pane" data-parts-pane="requests">
+        <div class="table-tools-bar">
+          <div class="table-tools-title">
+            <strong>Richieste ricambi</strong>
+            <span>Ricerca full-text, filtro stato e dettaglio operativo.</span>
+          </div>
+          <div class="table-tools-actions">
+            <input type="text" id="parts-filter-q" placeholder="Telefono, targa, VIN, testo..." oninput="debouncedLoadPartsRequests()">
+            <select id="parts-filter-status" onchange="loadPartsRequests()">
+              <option value="">Tutti gli stati</option>
+              <option value="nuova">Nuova</option>
+              <option value="in_lavorazione">In lavorazione</option>
+              <option value="in_attesa_dati_cliente">Attesa dati cliente</option>
+              <option value="in_attesa_verifica_tecnica">Attesa verifica tecnica</option>
+              <option value="oe_trovato">OE trovato</option>
+              <option value="preventivo_pronto">Preventivo pronto</option>
+              <option value="completata">Completata</option>
+              <option value="annullata">Annullata</option>
+              <option value="errore_integrazione">Errore integrazione</option>
+            </select>
+            <label class="ricambi-inline-check"><input type="checkbox" id="parts-filter-has-plate" onchange="loadPartsRequests()"> Targa</label>
+            <label class="ricambi-inline-check"><input type="checkbox" id="parts-filter-has-oe" onchange="loadPartsRequests()"> OE</label>
+            <label class="ricambi-inline-check"><input type="checkbox" id="parts-filter-errors" onchange="loadPartsRequests()"> Errori</label>
+          </div>
+        </div>
+        <div class="ricambi-grid-2 ricambi-detail-layout">
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Data</th>
+                  <th>Telefono</th>
+                  <th>Cliente</th>
+                  <th>Ricambio</th>
+                  <th>Targa</th>
+                  <th>OE</th>
+                  <th>Stato</th>
+                </tr>
+              </thead>
+              <tbody id="parts-requests-body"></tbody>
+            </table>
+          </div>
+          <div class="dash-card">
+            <h3>Dettaglio richiesta</h3>
+            <div id="parts-request-detail" class="ricambi-detail-empty">Seleziona una richiesta per vedere dati, eventi e note.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="ricambi-pane" data-parts-pane="conversations">
+        <div class="ricambi-chat-layout">
+          <div class="dash-card">
+            <h3>Conversazioni WhatsApp</h3>
+            <div id="parts-conversations-list" class="ricambi-conversation-list"></div>
+          </div>
+          <div class="dash-card">
+            <div id="parts-conversation-meta" class="ricambi-chat-meta">Seleziona una conversazione.</div>
+            <div id="parts-conversation-messages" class="ricambi-chat-messages"></div>
+            <div class="ricambi-chat-composer">
+              <textarea id="parts-message-body" rows="3" placeholder="Scrivi risposta o nota interna..."></textarea>
+              <div class="ricambi-chat-actions">
+                <label class="ricambi-inline-check"><input type="checkbox" id="parts-message-note"> Nota interna</label>
+                <button class="btn btn-accent btn-sm" onclick="sendPartsMessage()">Invia / salva</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="ricambi-pane" data-parts-pane="stats">
+        <div id="ricambi-stats-summary" class="app-summary-grid" style="margin-bottom:18px"></div>
+        <div class="ricambi-grid-3">
+          <div class="dash-card">
+            <h3>Richieste per giorno</h3>
+            <div id="ricambi-stats-by-day" class="ricambi-mini-list"></div>
+          </div>
+          <div class="dash-card">
+            <h3>Categorie ricambio</h3>
+            <div id="ricambi-stats-by-category" class="ricambi-mini-list"></div>
+          </div>
+          <div class="dash-card">
+            <h3>Richieste per operatore</h3>
+            <div id="ricambi-stats-by-operator" class="ricambi-mini-list"></div>
+          </div>
+        </div>
       </div>
     </section>
 

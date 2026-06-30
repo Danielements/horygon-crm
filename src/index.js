@@ -67,6 +67,7 @@ app.use('/api/cig',         require('./routes/cig'));
 app.use('/api/analytics',   require('./routes/analytics'));
 app.use('/api/audit',       require('./routes/audit'));
 app.use('/api/system-log',  require('./routes/system-log'));
+app.use('/api',             require('./routes/parts'));
 app.use('/api',             require('./routes/operativo'));
 
 // Error handler
