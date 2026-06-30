@@ -2245,11 +2245,11 @@ async function processInboundPartsMessage({
   sendText,
   sendDocument
 }) {
-  db.exec('BEGIN');
+  let partsRequestId = null;
   try {
+    db.exec('BEGIN');
     closeStalePartsRequestsForPhone(userKey);
     const activeRequest = getActivePartsRequestForPhone(userKey);
-    let partsRequestId = null;
     if (activeRequest) {
       partsRequestId = activeRequest.id;
       db.prepare(`
@@ -2480,7 +2480,32 @@ async function processInboundPartsMessage({
     db.exec('COMMIT');
   } catch (error) {
     try { db.exec('ROLLBACK'); } catch {}
+    if (partsRequestId) {
+      try {
+        db.prepare(`
+          UPDATE parts_requests
+          SET status = 'errore_integrazione',
+              updated_at = datetime('now')
+          WHERE id = ?
+        `).run(partsRequestId);
+        logPartEvent(
+          partsRequestId,
+          'errore_integrazione',
+          `Eccezione processing webhook ${channel}: ${error.message}`,
+          'parts_webhook',
+          {
+            channel,
+            userKey,
+            externalMessageId,
+            stack: error.stack || null
+          }
+        );
+      } catch (loggingError) {
+        console.error('parts inbound webhook logging error', loggingError);
+      }
+    }
     console.error('parts inbound webhook error', error);
+    throw error;
   }
 }
 
