@@ -853,12 +853,19 @@ async function rtwsCheckEurocodeDaTargaOE2({ plate, oeCode = '', eurocode = '', 
   const stateCode = getXmlTagValue(result.rawXml, 'Code');
   const stateDescription = getXmlTagValue(result.rawXml, 'Description');
   const items = parseRtwsGlassItems(result.rawXml);
+  const normalizedStateCode = String(stateCode || '').trim();
+  const warningCodes = new Set(['-100']);
+  const isWarning = warningCodes.has(normalizedStateCode);
+  const status = normalizedStateCode === '0'
+    ? (items.length ? 'READY' : 'EMPTY')
+    : (isWarning ? (items.length ? 'READY' : 'EMPTY') : 'ERROR');
   return {
-    status: String(stateCode || '') === '0' ? (items.length ? 'READY' : 'EMPTY') : 'ERROR',
+    status,
     message: stateDescription || (items.length ? 'Risultati cristalli recuperati da RTWS_LISTINI tramite targa.' : 'Nessun cristallo trovato per la targa indicata.'),
     items,
     rawXml: result.rawXml,
-    stateCode: stateCode || ''
+    stateCode: stateCode || '',
+    warning: isWarning
   };
 }
 
