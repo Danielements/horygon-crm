@@ -1047,6 +1047,14 @@ function looksLikeImageFilename(filename) {
   return /\.(jpg|jpeg|png|webp|gif|bmp|heic|heif)$/i.test(String(filename || '').trim());
 }
 
+function choosePreferredImageMimeType(downloadedMimeType, declaredMimeType = null) {
+  const downloaded = s(downloadedMimeType);
+  const declared = s(declaredMimeType);
+  if (looksLikeImageMimeType(downloaded)) return downloaded;
+  if (looksLikeImageMimeType(declared)) return declared;
+  return downloaded || declared || null;
+}
+
 function guessFilenameFromMimeType(mimeType, fallbackBase = 'media') {
   const lower = String(mimeType || '').toLowerCase();
   const extMap = {
@@ -1220,7 +1228,7 @@ async function analyzeInboundMediaWithOpenAI({ channel, bodyText, mediaUrl, medi
     };
   }
 
-  const mimeType = s(mediaDownload.mimeType) || s(mediaMimeType) || 'image/jpeg';
+  const mimeType = choosePreferredImageMimeType(mediaDownload.mimeType, mediaMimeType) || 'image/jpeg';
   if (!looksLikeImageMimeType(mimeType)) {
     return { skipped: true, reason: 'mime_non_immagine', meta: { model, mimeType } };
   }
@@ -2647,7 +2655,15 @@ async function processInboundPartsMessage({
       })
       : { skipped: true, reason: 'media_assente' };
 
-    if (!mediaAnalysis?.skipped) {
+    if (mediaAnalysis?.skipped) {
+      logPartEvent(
+        partsRequestId,
+        'media_ai_skipped',
+        `Analisi immagine non eseguita: ${mediaAnalysis.reason || 'motivo_non_specificato'}`,
+        'openai_vision',
+        mediaAnalysis
+      );
+    } else {
       logPartEvent(
         partsRequestId,
         mediaAnalysis.error ? 'errore_integrazione' : 'media_ai_analysis',
