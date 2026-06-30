@@ -414,10 +414,10 @@ function ensureConversationByPhone(phone, partsRequestId = null, customerId = nu
       VALUES (?, ?, ?, ?, 'aperta', datetime('now'))
     `).run(makeUuid(), customerId, normalizedPhone, partsRequestId);
     conversation = db.prepare('SELECT * FROM whatsapp_conversations WHERE id = ?').get(Number(result.lastInsertRowid));
-  } else if ((partsRequestId && !conversation.parts_request_id) || (customerId && !conversation.customer_id)) {
+  } else if ((partsRequestId && conversation.parts_request_id !== partsRequestId) || (customerId && !conversation.customer_id)) {
     db.prepare(`
       UPDATE whatsapp_conversations
-      SET parts_request_id = COALESCE(parts_request_id, ?),
+      SET parts_request_id = COALESCE(?, parts_request_id),
           customer_id = COALESCE(customer_id, ?),
           updated_at = datetime('now')
       WHERE id = ?
@@ -482,6 +482,8 @@ function getIntakeState(partsRequestId) {
   if (!row) return null;
   return {
     ...row,
+    pendingSlot: s(row.pending_slot),
+    pendingQuestion: s(row.pending_question),
     slots: json(row.slots_json, {}) || {}
   };
 }
@@ -922,6 +924,44 @@ async function sendWhatsAppDocumentBuffer(to, buffer, filename, caption = '') {
   };
 }
 
+function isTelegramConfigured() {
+  return !!process.env.TELEGRAM_BOT_TOKEN;
+}
+
+async function callTelegramApi(method, body, isMultipart = false) {
+  if (!isTelegramConfigured()) return { skipped: true, reason: 'telegram_non_configurato' };
+  const endpoint = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/${method}`;
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: isMultipart ? undefined : { 'Content-Type': 'application/json' },
+    body: isMultipart ? body : JSON.stringify(body || {})
+  });
+  const raw = await response.text();
+  const parsed = parseWhatsappResponseBody(raw);
+  return {
+    skipped: false,
+    statusCode: response.status,
+    raw,
+    body: parsed,
+    error: response.ok && parsed?.ok !== false ? null : (parsed?.description || raw || `Telegram ${method} HTTP ${response.status}`)
+  };
+}
+
+async function sendTelegramText(chatId, bodyText) {
+  return callTelegramApi('sendMessage', {
+    chat_id: String(chatId || ''),
+    text: String(bodyText || '')
+  });
+}
+
+async function sendTelegramDocumentBuffer(chatId, buffer, filename, caption = '') {
+  const form = new FormData();
+  form.append('chat_id', String(chatId || ''));
+  form.append('document', new Blob([buffer], { type: 'application/pdf' }), filename || 'preventivo.pdf');
+  if (caption) form.append('caption', String(caption));
+  return callTelegramApi('sendDocument', form, true);
+}
+
 async function triangulateWithOpenAI(messageText) {
   const apiKey = process.env.OPENAI_API_KEY;
   const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
@@ -1042,6 +1082,18 @@ function detectRequestedGlassKind(text) {
 
 function isGlassAccessoryDescription(description = '') {
   return /(sensore|tergi|spazzol|braccio|meccanismo|motorino|ugello|pompa)/i.test(String(description || ''));
+}
+
+function isConfidentGlassSelection(selectedItem, requestedPartText = '', options = []) {
+  if (!selectedItem) return false;
+  const requestedKind = detectRequestedGlassKind(requestedPartText);
+  const description = String(selectedItem.description || '').toLowerCase();
+  if (!requestedKind) return options.length <= 1;
+  if (requestedKind === 'parabrezza') return /\bparabrezza\b/i.test(description) && !isGlassAccessoryDescription(description);
+  if (requestedKind === 'lunotto') return /\blunotto\b/i.test(description);
+  if (requestedKind === 'vetro_laterale') return /(vetro|cristallo|scendente)/i.test(description);
+  if (requestedKind === 'raschiavetro') return /raschiavetro/i.test(description);
+  return options.length <= 1;
 }
 
 function buildGlassOptions(items = [], requestedPartText = '') {
@@ -1172,12 +1224,14 @@ async function resolvePartsMessage({ message, channel = 'whatsapp', context = nu
   let status = s(ai.status) || 'nuova';
   let options = [];
   let selectedItem = null;
+  let confidentSelection = false;
 
   if (glassEligible) {
     glassCatalog = await rtwsCheckEurocodeDaTargaOE2({ plate: parsed.plate, oeCode: parsed.oeCode });
     selectedItem = chooseBestGlassItem(glassCatalog.items, parsed.requestedPartText);
     options = buildGlassOptions(glassCatalog.items, parsed.requestedPartText);
-    if (selectedItem && options.length <= 1) {
+    confidentSelection = isConfidentGlassSelection(selectedItem, parsed.requestedPartText, options);
+    if (selectedItem && options.length <= 1 && confidentSelection) {
       parsed.oeCode = selectedItem.oe_code || parsed.oeCode;
       whatsappText = buildQuotePdfQuestionText(selectedItem);
       status = 'oe_trovato';
@@ -1684,10 +1738,11 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     const glassCatalog = await rtwsCheckEurocodeDaTargaOE2({ plate: parsed.plate, oeCode: parsed.oeCode });
     const selectedItem = chooseBestGlassItem(glassCatalog.items, parsed.requestedPartText);
     const options = buildGlassOptions(glassCatalog.items, parsed.requestedPartText);
+    const confidentSelection = isConfidentGlassSelection(selectedItem, parsed.requestedPartText, options);
     let whatsappText = '';
     let status = 'in_attesa_verifica_tecnica';
 
-    if (selectedItem && options.length <= 1) {
+    if (selectedItem && options.length <= 1 && confidentSelection) {
       parsed.oeCode = selectedItem.oe_code || parsed.oeCode;
       whatsappText = buildQuotePdfQuestionText(selectedItem);
       status = 'oe_trovato';
@@ -1736,13 +1791,13 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
       aiSummary: null,
       resolvedStatus: status,
       intakeState: {
-        stage: selectedItem && options.length <= 1 ? 'waiting_quote_pdf_confirmation' : 'ready_for_service',
-        pendingSlot: selectedItem && options.length <= 1 ? 'quote_pdf_confirmation' : null,
-        pendingQuestion: selectedItem && options.length <= 1 ? 'Vuoi che ti prepari subito un preventivo PDF? Rispondi SI oppure NO.' : null,
+        stage: selectedItem && options.length <= 1 && confidentSelection ? 'waiting_quote_pdf_confirmation' : 'ready_for_service',
+        pendingSlot: selectedItem && options.length <= 1 && confidentSelection ? 'quote_pdf_confirmation' : null,
+        pendingQuestion: selectedItem && options.length <= 1 && confidentSelection ? 'Vuoi che ti prepari subito un preventivo PDF? Rispondi SI oppure NO.' : null,
         slots: {
           ...intakeSlots,
-          oe_code: selectedItem?.oe_code || intakeSlots.oe_code || '',
-          selected_glass_option: selectedItem && options.length <= 1 ? selectedItem : (intakeSlots.selected_glass_option || null),
+          oe_code: selectedItem && confidentSelection ? (selectedItem.oe_code || intakeSlots.oe_code || '') : (intakeSlots.oe_code || ''),
+          selected_glass_option: selectedItem && options.length <= 1 && confidentSelection ? selectedItem : null,
           proposed_glass_options: options
         }
       }
@@ -1852,13 +1907,13 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     aiSummary: s(ai.ai_summary) || null,
     resolvedStatus: status,
     intakeState: {
-      stage: glassEligible && selectedItem && options.length <= 1 ? 'waiting_quote_pdf_confirmation' : (glassEligible ? 'ready_for_service' : 'ready_for_ai'),
-      pendingSlot: glassEligible && selectedItem && options.length <= 1 ? 'quote_pdf_confirmation' : null,
-      pendingQuestion: glassEligible && selectedItem && options.length <= 1 ? 'Vuoi che ti prepari subito un preventivo PDF? Rispondi SI oppure NO.' : null,
+      stage: glassEligible && selectedItem && options.length <= 1 && confidentSelection ? 'waiting_quote_pdf_confirmation' : (glassEligible ? 'ready_for_service' : 'ready_for_ai'),
+      pendingSlot: glassEligible && selectedItem && options.length <= 1 && confidentSelection ? 'quote_pdf_confirmation' : null,
+      pendingQuestion: glassEligible && selectedItem && options.length <= 1 && confidentSelection ? 'Vuoi che ti prepari subito un preventivo PDF? Rispondi SI oppure NO.' : null,
       slots: {
         ...finalSlots,
-        oe_code: selectedItem?.oe_code || finalSlots.oe_code || '',
-        selected_glass_option: glassEligible && selectedItem && options.length <= 1 ? selectedItem : (finalSlots.selected_glass_option || null),
+        oe_code: glassEligible && selectedItem && confidentSelection ? (selectedItem.oe_code || finalSlots.oe_code || '') : (finalSlots.oe_code || ''),
+        selected_glass_option: glassEligible && selectedItem && options.length <= 1 && confidentSelection ? selectedItem : null,
         proposed_glass_options: options || []
       }
     }
@@ -2090,6 +2145,242 @@ function serializeRequestDetails(id) {
   };
 }
 
+function buildConversationUserKey(channel, rawUserId) {
+  if (channel === 'telegram') return `telegram:${rawUserId}`;
+  return String(rawUserId || 'sconosciuto');
+}
+
+function extractOutboundMessageId(channel, sendResult) {
+  if (channel === 'telegram') return s(sendResult?.body?.result?.message_id);
+  return s(sendResult?.body?.messages?.[0]?.id);
+}
+
+function extractDocumentMediaRef(channel, sendResult) {
+  if (channel === 'telegram') return s(sendResult?.body?.result?.document?.file_id);
+  return s(sendResult?.mediaId);
+}
+
+async function processInboundPartsMessage({
+  channel,
+  userKey,
+  outboundTarget,
+  bodyText,
+  externalMessageId,
+  messageType = 'text',
+  mediaUrl = null,
+  mediaMimeType = null,
+  mediaMetadata = null,
+  rawPayload = null,
+  sendText,
+  sendDocument
+}) {
+  db.exec('BEGIN');
+  try {
+    const activeRequest = getActivePartsRequestForPhone(userKey);
+    let partsRequestId = null;
+    if (activeRequest) {
+      partsRequestId = activeRequest.id;
+      db.prepare(`
+        UPDATE parts_requests
+        SET external_message_id = COALESCE(?, external_message_id),
+            updated_at = datetime('now'),
+            last_message_at = datetime('now')
+        WHERE id = ?
+      `).run(externalMessageId, partsRequestId);
+    } else {
+      const requestInsert = db.prepare(`
+        INSERT INTO parts_requests (
+          request_uuid, channel, external_message_id, user_phone, original_message,
+          requested_part_text, status, source_system, last_message_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, 'nuova', ?, datetime('now'))
+      `).run(
+        makeUuid(),
+        channel,
+        externalMessageId,
+        userKey,
+        bodyText || '[messaggio senza testo]',
+        bodyText || null,
+        `${channel}_webhook`
+      );
+      partsRequestId = Number(requestInsert.lastInsertRowid);
+    }
+
+    const conversation = ensureConversationByPhone(userKey, partsRequestId, null);
+
+    db.prepare(`
+      INSERT INTO whatsapp_messages (
+        conversation_id, direction, channel, external_message_id, message_type,
+        body_text, media_url, media_mime_type, media_metadata_json, delivery_status,
+        source_system, raw_payload_json
+      )
+      VALUES (?, 'inbound', ?, ?, ?, ?, ?, ?, ?, 'received', ?, ?)
+    `).run(
+      conversation.id,
+      channel,
+      externalMessageId,
+      messageType,
+      bodyText,
+      mediaUrl,
+      mediaMimeType,
+      mediaMetadata ? JSON.stringify(mediaMetadata) : null,
+      `${channel}_webhook`,
+      rawPayload ? JSON.stringify(rawPayload) : null
+    );
+
+    db.prepare(`
+      UPDATE parts_requests
+      SET updated_at = datetime('now'), last_message_at = datetime('now')
+      WHERE id = ?
+    `).run(partsRequestId);
+
+    upsertConversationState(conversation.id);
+    logPartEvent(partsRequestId, 'richiesta_ricevuta', `Richiesta ricevuta da webhook ${channel}`, `${channel}_webhook`, { userKey, externalMessageId });
+    const conversationContext = getLatestConversationContext(userKey, partsRequestId);
+    const intakeState = getIntakeState(partsRequestId);
+
+    const resolved = await resolvePartsMessageV2({
+      message: bodyText,
+      channel,
+      context: conversationContext,
+      intakeState
+    });
+
+    if (resolved.status === 'ERROR') {
+      db.prepare(`UPDATE parts_requests SET status = 'errore_integrazione', updated_at = datetime('now') WHERE id = ?`).run(partsRequestId);
+      logPartEvent(partsRequestId, 'errore_integrazione', resolved.error || 'Resolve ricambi fallito', 'parts_resolver', resolved);
+    } else {
+      persistResolvedPayload(partsRequestId, resolved);
+      logPartEvent(partsRequestId, 'ai_triage', 'Triage AI completato', 'openai', resolved.aiRequest || {});
+      if (resolved.glassCatalog?.status === 'READY') {
+        logPartEvent(partsRequestId, 'rtws_listini', resolved.glassCatalog.message || 'RTWS_LISTINI eseguito', 'rtws_listini', {
+          items: resolved.glassCatalog.items?.slice(0, 20) || [],
+          stateCode: resolved.glassCatalog.stateCode || ''
+        });
+      } else if (resolved.glassCatalog?.status === 'EMPTY') {
+        logPartEvent(partsRequestId, 'rtws_listini_empty', resolved.glassCatalog.message || 'RTWS_LISTINI senza risultati', 'rtws_listini', {
+          items: resolved.glassCatalog.items?.slice(0, 20) || [],
+          stateCode: resolved.glassCatalog.stateCode || '',
+          rawXml: resolved.glassCatalog.rawXml || ''
+        });
+      } else if (resolved.glassCatalog?.status === 'ERROR') {
+        logPartEvent(partsRequestId, 'errore_integrazione', resolved.glassCatalog.message || 'Errore RTWS_LISTINI', 'rtws_listini', resolved.glassCatalog);
+      }
+
+      if (resolved.whatsappText) {
+        const outboundResult = await sendText(outboundTarget, resolved.whatsappText);
+        db.prepare(`
+          INSERT INTO whatsapp_messages (
+            conversation_id, direction, channel, external_message_id, message_type,
+            body_text, delivery_status, error_message, source_system, raw_payload_json
+          )
+          VALUES (?, 'outbound', ?, ?, 'text', ?, ?, ?, 'openai_auto_reply', ?)
+        `).run(
+          conversation.id,
+          channel,
+          extractOutboundMessageId(channel, outboundResult),
+          resolved.whatsappText,
+          outboundResult.error ? 'error' : (outboundResult.statusCode >= 200 && outboundResult.statusCode < 300 ? 'sent' : 'error'),
+          outboundResult.error || s(outboundResult.body?.error?.message) || s(outboundResult.body?.description),
+          JSON.stringify(outboundResult)
+        );
+        upsertConversationState(conversation.id);
+        logPartEvent(
+          partsRequestId,
+          outboundResult.error ? 'errore_integrazione' : `messaggio_${channel}_inviato`,
+          outboundResult.error ? `Invio ${channel} fallito: ${outboundResult.error}` : `Risposta automatica ${channel} inviata`,
+          channel,
+          outboundResult
+        );
+      }
+
+      if (resolved.quoteDecision === 'create_pdf') {
+        try {
+          const artifacts = await createQuoteArtifactsFromRequestId(partsRequestId);
+          const documentSend = await sendDocument(
+            outboundTarget,
+            artifacts.pdf.buffer,
+            artifacts.pdf.filename,
+            buildQuotePdfCaption(artifacts.quote)
+          );
+          db.prepare(`
+            INSERT INTO whatsapp_messages (
+              conversation_id, direction, channel, external_message_id, message_type,
+              body_text, media_url, media_mime_type, media_metadata_json, delivery_status,
+              error_message, source_system, raw_payload_json
+            )
+            VALUES (?, 'outbound', ?, ?, 'document', ?, ?, ?, ?, ?, ?, 'openai_auto_reply', ?)
+          `).run(
+            conversation.id,
+            channel,
+            extractOutboundMessageId(channel, documentSend),
+            `Preventivo ${artifacts.quote.codicePreventivo}`,
+            extractDocumentMediaRef(channel, documentSend),
+            'application/pdf',
+            JSON.stringify({
+              filename: artifacts.pdf.filename,
+              preventivoId: artifacts.quote.preventivoId,
+              codicePreventivo: artifacts.quote.codicePreventivo
+            }),
+            documentSend.error ? 'error' : (documentSend.statusCode >= 200 && documentSend.statusCode < 300 ? 'sent' : 'error'),
+            documentSend.error || s(documentSend.body?.error?.message) || s(documentSend.body?.description),
+            JSON.stringify(documentSend)
+          );
+          upsertConversationState(conversation.id);
+          logPartEvent(
+            partsRequestId,
+            documentSend.error ? 'errore_integrazione' : 'preventivo_pdf_inviato',
+            documentSend.error ? `Invio PDF ${channel} fallito: ${documentSend.error}` : `Preventivo PDF inviato automaticamente su ${channel}`,
+            channel,
+            {
+              ...documentSend,
+              preventivoId: artifacts.quote.preventivoId,
+              codicePreventivo: artifacts.quote.codicePreventivo,
+              productId: artifacts.quotedProduct.product.id
+            }
+          );
+        } catch (error) {
+          logPartEvent(partsRequestId, 'errore_integrazione', `Creazione/invio preventivo PDF fallito: ${error.message}`, 'crm', {
+            quoteDecision: resolved.quoteDecision,
+            channel
+          });
+        }
+      }
+    }
+
+    const backendResult = await forwardToPartsBackend({
+      originalMessage: bodyText,
+      phone: userKey,
+      externalMessageId,
+      channel,
+      requestUuid: db.prepare('SELECT request_uuid FROM parts_requests WHERE id = ?').get(partsRequestId)?.request_uuid || null,
+      parsed: resolved?.parsed || null,
+      normalizedPart: resolved?.normalizedPart || null,
+      missingData: resolved?.missingData || [],
+      aiSummary: resolved?.aiSummary || null,
+      resolvedStatus: resolved?.resolvedStatus || null,
+      whatsappReplyText: resolved?.whatsappText || null,
+      suggestedService: resolved?.aiRequest?.suggested_service || null,
+      rtws: {
+        status: resolved?.glassCatalog?.status || null,
+        message: resolved?.glassCatalog?.message || null,
+        stateCode: resolved?.glassCatalog?.stateCode || null,
+        results: Array.isArray(resolved?.oeResults) ? resolved.oeResults.slice(0, 20) : []
+      }
+    });
+    if (!backendResult.skipped && !backendResult.error && backendResult.statusCode >= 200 && backendResult.statusCode < 300) {
+      logPartEvent(partsRequestId, 'backend_sync', 'Richiesta inoltrata al backend ricambi', 'parts_backend', backendResult.body || { statusCode: backendResult.statusCode });
+    } else if (backendResult.error) {
+      logPartEvent(partsRequestId, 'errore_integrazione', backendResult.error, 'parts_backend', backendResult);
+    }
+
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch {}
+    console.error('parts inbound webhook error', error);
+  }
+}
+
 router.get('/webhook/whatsapp', (req, res) => {
   const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
   const mode = req.query['hub.mode'];
@@ -2116,201 +2407,57 @@ router.post('/webhook/whatsapp', async (req, res) => {
         const phone = s(message?.from) || s(value?.contacts?.[0]?.wa_id) || 'sconosciuto';
         const bodyText = s(message?.text?.body) || s(message?.button?.text) || s(message?.interactive?.button_reply?.title) || '';
         const externalMessageId = s(message?.id);
-
-        db.exec('BEGIN');
-        try {
-          const activeRequest = getActivePartsRequestForPhone(phone);
-          let partsRequestId = null;
-          if (activeRequest) {
-            partsRequestId = activeRequest.id;
-            db.prepare(`
-              UPDATE parts_requests
-              SET external_message_id = COALESCE(?, external_message_id),
-                  requested_part_text = COALESCE(NULLIF(?, ''), requested_part_text),
-                  updated_at = datetime('now'),
-                  last_message_at = datetime('now')
-              WHERE id = ?
-            `).run(externalMessageId, bodyText, partsRequestId);
-          } else {
-            const requestInsert = db.prepare(`
-              INSERT INTO parts_requests (
-                request_uuid, channel, external_message_id, user_phone, original_message,
-                requested_part_text, status, source_system, last_message_at
-              )
-              VALUES (?, 'whatsapp', ?, ?, ?, ?, 'nuova', 'whatsapp_webhook', datetime('now'))
-            `).run(makeUuid(), externalMessageId, phone, bodyText || '[messaggio senza testo]', bodyText || null);
-            partsRequestId = Number(requestInsert.lastInsertRowid);
-          }
-          const conversation = ensureConversationByPhone(phone, partsRequestId, null);
-
-          db.prepare(`
-            INSERT INTO whatsapp_messages (
-              conversation_id, direction, channel, external_message_id, message_type,
-              body_text, media_url, media_mime_type, media_metadata_json, delivery_status,
-              source_system, raw_payload_json
-            )
-            VALUES (?, 'inbound', 'whatsapp', ?, ?, ?, ?, ?, ?, 'received', 'whatsapp_webhook', ?)
-          `).run(
-            conversation.id,
-            externalMessageId,
-            s(message?.type) || 'text',
-            bodyText,
-            s(message?.image?.id) || s(message?.document?.id) || s(message?.audio?.id) || null,
-            s(message?.image?.mime_type) || s(message?.document?.mime_type) || s(message?.audio?.mime_type) || null,
-            JSON.stringify(message),
-            JSON.stringify({ entry, change, value, message })
-          );
-
-          db.prepare(`
-            UPDATE parts_requests
-            SET updated_at = datetime('now'), last_message_at = datetime('now')
-            WHERE id = ?
-          `).run(partsRequestId);
-
-          upsertConversationState(conversation.id);
-          logPartEvent(partsRequestId, 'richiesta_ricevuta', 'Richiesta ricevuta da webhook WhatsApp', 'whatsapp_webhook', { phone, externalMessageId });
-          const conversationContext = getLatestConversationContext(phone, partsRequestId);
-          const intakeState = getIntakeState(partsRequestId);
-
-          const resolved = await resolvePartsMessageV2({
-            message: bodyText,
-            channel: 'whatsapp',
-            context: conversationContext,
-            intakeState
-          });
-          if (resolved.status === 'ERROR') {
-            db.prepare(`UPDATE parts_requests SET status = 'errore_integrazione', updated_at = datetime('now') WHERE id = ?`).run(partsRequestId);
-            logPartEvent(partsRequestId, 'errore_integrazione', resolved.error || 'Resolve ricambi fallito', 'parts_resolver', resolved);
-          } else {
-            persistResolvedPayload(partsRequestId, resolved);
-            logPartEvent(partsRequestId, 'ai_triage', 'Triage AI completato', 'openai', resolved.aiRequest || {});
-            if (resolved.glassCatalog?.status === 'READY') {
-              logPartEvent(partsRequestId, 'rtws_listini', resolved.glassCatalog.message || 'RTWS_LISTINI eseguito', 'rtws_listini', {
-                items: resolved.glassCatalog.items?.slice(0, 20) || [],
-                stateCode: resolved.glassCatalog.stateCode || ''
-              });
-            } else if (resolved.glassCatalog?.status === 'EMPTY') {
-              logPartEvent(partsRequestId, 'rtws_listini_empty', resolved.glassCatalog.message || 'RTWS_LISTINI senza risultati', 'rtws_listini', {
-                items: resolved.glassCatalog.items?.slice(0, 20) || [],
-                stateCode: resolved.glassCatalog.stateCode || '',
-                rawXml: resolved.glassCatalog.rawXml || ''
-              });
-            } else if (resolved.glassCatalog?.status === 'ERROR') {
-              logPartEvent(partsRequestId, 'errore_integrazione', resolved.glassCatalog.message || 'Errore RTWS_LISTINI', 'rtws_listini', resolved.glassCatalog);
-            }
-
-            if (resolved.whatsappText) {
-              const whatsappSend = await sendWhatsAppText(phone, resolved.whatsappText);
-              db.prepare(`
-                INSERT INTO whatsapp_messages (
-                  conversation_id, direction, channel, external_message_id, message_type,
-                  body_text, delivery_status, error_message, source_system, raw_payload_json
-                )
-                VALUES (?, 'outbound', 'whatsapp', ?, 'text', ?, ?, ?, 'openai_auto_reply', ?)
-              `).run(
-                conversation.id,
-                s(whatsappSend.body?.messages?.[0]?.id),
-                resolved.whatsappText,
-                whatsappSend.error ? 'error' : (whatsappSend.statusCode >= 200 && whatsappSend.statusCode < 300 ? 'sent' : 'error'),
-                whatsappSend.error || s(whatsappSend.body?.error?.message),
-                JSON.stringify(whatsappSend)
-              );
-              upsertConversationState(conversation.id);
-              logPartEvent(
-                partsRequestId,
-                whatsappSend.error ? 'errore_integrazione' : 'messaggio_whatsapp_inviato',
-                whatsappSend.error ? `Invio WhatsApp fallito: ${whatsappSend.error}` : 'Risposta automatica WhatsApp inviata',
-                'whatsapp_meta',
-                whatsappSend
-              );
-            }
-
-            if (resolved.quoteDecision === 'create_pdf') {
-              try {
-                const artifacts = await createQuoteArtifactsFromRequestId(partsRequestId);
-                const documentSend = await sendWhatsAppDocumentBuffer(
-                  phone,
-                  artifacts.pdf.buffer,
-                  artifacts.pdf.filename,
-                  buildQuotePdfCaption(artifacts.quote)
-                );
-                db.prepare(`
-                  INSERT INTO whatsapp_messages (
-                    conversation_id, direction, channel, external_message_id, message_type,
-                    body_text, media_url, media_mime_type, media_metadata_json, delivery_status,
-                    error_message, source_system, raw_payload_json
-                  )
-                  VALUES (?, 'outbound', 'whatsapp', ?, 'document', ?, ?, ?, ?, ?, ?, 'openai_auto_reply', ?)
-                `).run(
-                  conversation.id,
-                  s(documentSend.body?.messages?.[0]?.id),
-                  `Preventivo ${artifacts.quote.codicePreventivo}`,
-                  s(documentSend.mediaId),
-                  'application/pdf',
-                  JSON.stringify({
-                    filename: artifacts.pdf.filename,
-                    preventivoId: artifacts.quote.preventivoId,
-                    codicePreventivo: artifacts.quote.codicePreventivo
-                  }),
-                  documentSend.error ? 'error' : (documentSend.statusCode >= 200 && documentSend.statusCode < 300 ? 'sent' : 'error'),
-                  documentSend.error || s(documentSend.body?.error?.message),
-                  JSON.stringify(documentSend)
-                );
-                upsertConversationState(conversation.id);
-                logPartEvent(
-                  partsRequestId,
-                  documentSend.error ? 'errore_integrazione' : 'preventivo_pdf_inviato',
-                  documentSend.error ? `Invio PDF WhatsApp fallito: ${documentSend.error}` : 'Preventivo PDF inviato automaticamente su WhatsApp',
-                  'whatsapp_meta',
-                  {
-                    ...documentSend,
-                    preventivoId: artifacts.quote.preventivoId,
-                    codicePreventivo: artifacts.quote.codicePreventivo,
-                    productId: artifacts.quotedProduct.product.id
-                  }
-                );
-              } catch (error) {
-                logPartEvent(partsRequestId, 'errore_integrazione', `Creazione/invio preventivo PDF fallito: ${error.message}`, 'crm', {
-                  quoteDecision: resolved.quoteDecision
-                });
-              }
-            }
-          }
-
-          const backendResult = await forwardToPartsBackend({
-            originalMessage: bodyText,
-            phone,
-            externalMessageId,
-            channel: 'whatsapp',
-            requestUuid: db.prepare('SELECT request_uuid FROM parts_requests WHERE id = ?').get(partsRequestId)?.request_uuid || null,
-            parsed: resolved?.parsed || null,
-            normalizedPart: resolved?.normalizedPart || null,
-            missingData: resolved?.missingData || [],
-            aiSummary: resolved?.aiSummary || null,
-            resolvedStatus: resolved?.resolvedStatus || null,
-            whatsappReplyText: resolved?.whatsappText || null,
-            suggestedService: resolved?.aiRequest?.suggested_service || null,
-            rtws: {
-              status: resolved?.glassCatalog?.status || null,
-              message: resolved?.glassCatalog?.message || null,
-              stateCode: resolved?.glassCatalog?.stateCode || null,
-              results: Array.isArray(resolved?.oeResults) ? resolved.oeResults.slice(0, 20) : []
-            }
-          });
-          if (!backendResult.skipped && !backendResult.error && backendResult.statusCode >= 200 && backendResult.statusCode < 300) {
-            logPartEvent(partsRequestId, 'backend_sync', 'Richiesta inoltrata al backend ricambi', 'parts_backend', backendResult.body || { statusCode: backendResult.statusCode });
-          } else if (backendResult.error) {
-            logPartEvent(partsRequestId, 'errore_integrazione', backendResult.error, 'parts_backend', backendResult);
-          }
-
-          db.exec('COMMIT');
-        } catch (error) {
-          try { db.exec('ROLLBACK'); } catch {}
-          console.error('parts webhook error', error);
-        }
+        await processInboundPartsMessage({
+          channel: 'whatsapp',
+          userKey: buildConversationUserKey('whatsapp', phone),
+          outboundTarget: phone,
+          bodyText,
+          externalMessageId,
+          messageType: s(message?.type) || 'text',
+          mediaUrl: s(message?.image?.id) || s(message?.document?.id) || s(message?.audio?.id) || null,
+          mediaMimeType: s(message?.image?.mime_type) || s(message?.document?.mime_type) || s(message?.audio?.mime_type) || null,
+          mediaMetadata: message,
+          rawPayload: { entry, change, value, message },
+          sendText: sendWhatsAppText,
+          sendDocument: sendWhatsAppDocumentBuffer
+        });
       }
     }
   }
+
+  res.json({ ok: true });
+});
+
+router.post('/webhook/telegram', async (req, res) => {
+  const secretHeader = s(req.headers['x-telegram-bot-api-secret-token']);
+  const expectedSecret = s(process.env.TELEGRAM_WEBHOOK_SECRET);
+  if (expectedSecret && secretHeader !== expectedSecret) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const update = req.body || {};
+  const message = update.message || update.edited_message || update.callback_query?.message || null;
+  const callbackData = s(update.callback_query?.data);
+  const chatId = s(message?.chat?.id);
+  const bodyText = s(message?.text) || s(message?.caption) || callbackData || '';
+  const externalMessageId = s(message?.message_id) || s(update.update_id) || s(update.callback_query?.id);
+
+  if (!chatId) return res.json({ ok: true, skipped: 'chat_missing' });
+
+  await processInboundPartsMessage({
+    channel: 'telegram',
+    userKey: buildConversationUserKey('telegram', chatId),
+    outboundTarget: chatId,
+    bodyText,
+    externalMessageId,
+    messageType: callbackData ? 'callback' : (message?.photo ? 'photo' : (message?.document ? 'document' : (message?.text ? 'text' : 'telegram_message'))),
+    mediaUrl: s(message?.document?.file_id) || s(message?.photo?.[message.photo.length - 1]?.file_id) || null,
+    mediaMimeType: s(message?.document?.mime_type) || (message?.photo ? 'image/jpeg' : null),
+    mediaMetadata: message || update.callback_query || update,
+    rawPayload: update,
+    sendText: sendTelegramText,
+    sendDocument: sendTelegramDocumentBuffer
+  });
 
   res.json({ ok: true });
 });
