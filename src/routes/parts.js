@@ -2247,7 +2247,6 @@ async function processInboundPartsMessage({
 }) {
   let partsRequestId = null;
   try {
-    db.exec('BEGIN');
     closeStalePartsRequestsForPhone(userKey);
     const activeRequest = getActivePartsRequestForPhone(userKey);
     if (activeRequest) {
@@ -2477,9 +2476,7 @@ async function processInboundPartsMessage({
       logPartEvent(partsRequestId, 'errore_integrazione', backendResult.error, 'parts_backend', backendResult);
     }
 
-    db.exec('COMMIT');
   } catch (error) {
-    try { db.exec('ROLLBACK'); } catch {}
     if (partsRequestId) {
       try {
         db.prepare(`
