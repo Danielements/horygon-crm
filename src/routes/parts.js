@@ -66,9 +66,14 @@ function extractVinFromText(value) {
 
 function extractOeCodeFromText(value) {
   const compact = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, ' ');
+  const extractedPlate = extractPlateFromText(value);
   const candidates = [...compact.matchAll(/\b([A-Z0-9]{6,18})\b/g)]
     .map((match) => match[1])
-    .filter((token) => /\d/.test(token) && /[A-Z]/.test(token));
+    .filter((token) => /\d/.test(token) && /[A-Z]/.test(token))
+    .filter((token) => token !== extractedPlate)
+    .filter((token) => !/^[A-Z]{2}\d{3}[A-Z]{2}$/.test(token))
+    .filter((token) => !/^[A-Z]{2}\d{4}[A-Z]$/.test(token))
+    .filter((token) => !/^[A-Z]\d{5}[A-Z]$/.test(token));
   return candidates[0] || '';
 }
 
@@ -1504,6 +1509,12 @@ router.post('/webhook/whatsapp', async (req, res) => {
               logPartEvent(partsRequestId, 'rtws_listini', resolved.glassCatalog.message || 'RTWS_LISTINI eseguito', 'rtws_listini', {
                 items: resolved.glassCatalog.items?.slice(0, 20) || [],
                 stateCode: resolved.glassCatalog.stateCode || ''
+              });
+            } else if (resolved.glassCatalog?.status === 'EMPTY') {
+              logPartEvent(partsRequestId, 'rtws_listini_empty', resolved.glassCatalog.message || 'RTWS_LISTINI senza risultati', 'rtws_listini', {
+                items: resolved.glassCatalog.items?.slice(0, 20) || [],
+                stateCode: resolved.glassCatalog.stateCode || '',
+                rawXml: resolved.glassCatalog.rawXml || ''
               });
             } else if (resolved.glassCatalog?.status === 'ERROR') {
               logPartEvent(partsRequestId, 'errore_integrazione', resolved.glassCatalog.message || 'Errore RTWS_LISTINI', 'rtws_listini', resolved.glassCatalog);
