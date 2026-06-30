@@ -723,19 +723,49 @@ function chooseBestGlassItem(items = [], requestedPartText = '') {
   return ranked[0]?.item || items[0];
 }
 
+function detectRequestedGlassKind(text) {
+  const lower = String(text || '').toLowerCase();
+  if (/parabrezza/.test(lower)) return 'parabrezza';
+  if (/lunotto/.test(lower)) return 'lunotto';
+  if (/(vetro laterale|cristallo laterale|scendente)/.test(lower)) return 'vetro_laterale';
+  if (/raschiavetro/.test(lower)) return 'raschiavetro';
+  return '';
+}
+
+function isGlassAccessoryDescription(description = '') {
+  return /(sensore|tergi|spazzol|braccio|meccanismo|motorino|ugello|pompa)/i.test(String(description || ''));
+}
+
 function buildGlassOptions(items = [], requestedPartText = '') {
   if (!items.length) return [];
+  const requestedKind = detectRequestedGlassKind(requestedPartText);
   const tokens = String(requestedPartText || '')
     .toLowerCase()
     .split(/[^a-z0-9àèéìòù]+/i)
     .filter((token) => token.length >= 3);
 
+  let scopedItems = items;
+  if (requestedKind === 'parabrezza') {
+    const direct = items.filter((item) => /parabrezza/i.test(item.description || ''));
+    const nonAccessory = direct.filter((item) => !isGlassAccessoryDescription(item.description || ''));
+    scopedItems = nonAccessory.length ? nonAccessory : (direct.length ? direct : items.filter((item) => !isGlassAccessoryDescription(item.description || '')));
+  } else if (requestedKind === 'lunotto') {
+    const direct = items.filter((item) => /lunotto/i.test(item.description || ''));
+    scopedItems = direct.length ? direct : items;
+  } else if (requestedKind === 'vetro_laterale') {
+    const direct = items.filter((item) => /(vetro|cristallo|scendente)/i.test(item.description || ''));
+    scopedItems = direct.length ? direct : items;
+  }
+
   const ranked = items
     .map((item) => {
       const haystack = `${item.description} ${item.oe_code} ${item.eurocode}`.toLowerCase();
       const score = tokens.reduce((sum, token) => sum + (haystack.includes(token) ? 1 : 0), 0);
-      return { item, score };
+      const kindBonus = requestedKind && haystack.includes(requestedKind.replace('_', ' ')) ? 5 : 0;
+      const accessoryPenalty = requestedKind === 'parabrezza' && isGlassAccessoryDescription(item.description || '') ? -5 : 0;
+      return { item, score: score + kindBonus + accessoryPenalty };
     })
+    .filter((entry) => scopedItems.includes(entry.item))
     .sort((a, b) => b.score - a.score);
 
   const bestScore = ranked[0]?.score ?? 0;
@@ -749,7 +779,7 @@ function buildGlassOptions(items = [], requestedPartText = '') {
     if (seen.has(key)) continue;
     seen.add(key);
     options.push(entry.item);
-    if (options.length >= 5) break;
+    if (options.length >= 12) break;
   }
 
   return options;
@@ -912,6 +942,73 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
 
   const previousContext = context || {};
   const previousIntakeState = intakeState || { slots: {} };
+  const numericSelection = text.match(/^\s*(\d{1,2})\s*$/);
+  const previousOptions = Array.isArray(previousIntakeState.slots?.proposed_glass_options)
+    ? previousIntakeState.slots.proposed_glass_options
+    : [];
+  if (numericSelection && previousOptions.length) {
+    const selectedIndex = Number(numericSelection[1]) - 1;
+    const selectedItem = previousOptions[selectedIndex];
+    if (selectedItem) {
+      const parsed = {
+        originalText: text,
+        plate: s(previousIntakeState.slots?.plate) || s(previousContext.plate) || '',
+        vin: s(previousIntakeState.slots?.vin) || s(previousContext.vin) || '',
+        oeCode: s(selectedItem.oe_code) || '',
+        requestedPartText: s(previousIntakeState.slots?.part_name) || s(previousContext.normalized_part_name) || 'Ricambio cristalli',
+        confidence: 1
+      };
+      const normalizedPart = {
+        name: s(previousIntakeState.slots?.part_name) || 'Ricambio cristalli',
+        category: 'cristalli'
+      };
+      return {
+        status: 'OK',
+        parsed,
+        vehicle: null,
+        normalizedPart,
+        dbrtResult: {},
+        glassCatalog: { status: 'READY', message: 'Variante cristalli selezionata da cliente', items: previousOptions },
+        oeCatalog: {},
+        oeResults: [selectedItem],
+        equivalents: {},
+        missingData: [],
+        whatsappText: buildGlassReplyText(selectedItem, previousOptions.length),
+        aiRequest: {
+          intent: 'glass_option_selection',
+          request_is_valid: true,
+          suggested_service: 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2',
+          instruction: 'Selezione diretta di una variante RTWS proposta in precedenza.',
+          availableSources: ['CONVERSATION_CONTEXT', 'RTWS_LISTINI'],
+          parsed,
+          normalizedPart,
+          selectedOptionIndex: selectedIndex + 1,
+          openai: {
+            skipped: true,
+            error: null,
+            model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+            statusCode: null,
+            raw: null,
+            parsed: null
+          }
+        },
+        aiSummary: null,
+        resolvedStatus: 'oe_trovato',
+        intakeState: {
+          stage: 'selection_completed',
+          pendingSlot: null,
+          pendingQuestion: null,
+          slots: {
+            ...previousIntakeState.slots,
+            oe_code: s(selectedItem.oe_code) || s(previousIntakeState.slots?.oe_code) || '',
+            selected_glass_option: selectedItem,
+            proposed_glass_options: []
+          }
+        }
+      };
+    }
+  }
+
   const fallbackPlate = extractPlateFromText(text);
   const fallbackVin = extractVinFromText(text);
   const fallbackOeCode = extractOeCodeFromText(text);
@@ -1070,7 +1167,10 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
         stage: 'ready_for_service',
         pendingSlot: null,
         pendingQuestion: null,
-        slots: intakeSlots
+        slots: {
+          ...intakeSlots,
+          proposed_glass_options: options
+        }
       }
     };
   }
@@ -1181,7 +1281,10 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
       stage: glassEligible ? 'ready_for_service' : 'ready_for_ai',
       pendingSlot: null,
       pendingQuestion: null,
-      slots: finalSlots
+      slots: {
+        ...finalSlots,
+        proposed_glass_options: options || []
+      }
     }
   };
 }
