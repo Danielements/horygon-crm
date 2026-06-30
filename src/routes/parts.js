@@ -1029,6 +1029,298 @@ async function sendTelegramDocumentBuffer(chatId, buffer, filename, caption = ''
   return callTelegramApi('sendDocument', form, true);
 }
 
+function looksLikeImageMimeType(mimeType) {
+  return /^image\//i.test(String(mimeType || '').trim());
+}
+
+function looksLikeImageFilename(filename) {
+  return /\.(jpg|jpeg|png|webp|gif|bmp|heic|heif)$/i.test(String(filename || '').trim());
+}
+
+function guessFilenameFromMimeType(mimeType, fallbackBase = 'media') {
+  const lower = String(mimeType || '').toLowerCase();
+  const extMap = {
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+    'image/bmp': 'bmp',
+    'image/heic': 'heic',
+    'image/heif': 'heif'
+  };
+  const ext = extMap[lower] || 'bin';
+  return `${fallbackBase}.${ext}`;
+}
+
+function buildMediaDerivedMessageText(bodyText, mediaData) {
+  const bits = [
+    s(bodyText),
+    s(mediaData?.requested_part_text),
+    s(mediaData?.normalized_part_name),
+    s(mediaData?.plate) ? `targa ${normalizePlate(mediaData.plate)}` : null,
+    s(mediaData?.vin) ? `vin ${s(mediaData.vin)}` : null,
+    s(mediaData?.oe_code) ? `oe ${s(mediaData.oe_code)}` : null,
+    s(mediaData?.glass_position) ? s(mediaData.glass_position).replace(/_/g, ' ') : null,
+    s(mediaData?.side),
+    s(mediaData?.axle),
+    s(mediaData?.brake_component),
+    s(mediaData?.filter_type),
+    s(mediaData?.visible_text)
+  ].filter(Boolean);
+
+  const deduped = [];
+  const seen = new Set();
+  bits.forEach((bit) => {
+    const key = String(bit).trim().toLowerCase();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    deduped.push(String(bit).trim());
+  });
+  return deduped.join(' ').trim();
+}
+
+async function downloadWhatsAppInboundMedia(mediaId) {
+  if (!isWhatsappConfigured()) return { ok: false, error: 'whatsapp_non_configurato' };
+  const version = process.env.WHATSAPP_API_VERSION || 'v20.0';
+  const metadataEndpoint = `https://graph.facebook.com/${version}/${encodeURIComponent(String(mediaId || ''))}`;
+  const metadataResponse = await fetch(metadataEndpoint, {
+    headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` }
+  });
+  const metadataRaw = await metadataResponse.text();
+  const metadataBody = parseWhatsappResponseBody(metadataRaw);
+  if (!metadataResponse.ok || !metadataBody?.url) {
+    return {
+      ok: false,
+      stage: 'metadata',
+      statusCode: metadataResponse.status,
+      raw: metadataRaw,
+      body: metadataBody,
+      error: metadataBody?.error?.message || metadataRaw || `WhatsApp media metadata HTTP ${metadataResponse.status}`
+    };
+  }
+
+  const binaryResponse = await fetch(metadataBody.url, {
+    headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` }
+  });
+  const binaryBuffer = Buffer.from(await binaryResponse.arrayBuffer());
+  if (!binaryResponse.ok) {
+    const raw = binaryBuffer.toString('utf8');
+    return {
+      ok: false,
+      stage: 'download',
+      statusCode: binaryResponse.status,
+      raw,
+      error: raw || `WhatsApp media download HTTP ${binaryResponse.status}`
+    };
+  }
+
+  return {
+    ok: true,
+    buffer: binaryBuffer,
+    mimeType: s(metadataBody.mime_type) || s(binaryResponse.headers.get('content-type')) || null,
+    filename: guessFilenameFromMimeType(metadataBody.mime_type, `whatsapp-${metadataBody.id || mediaId}`),
+    metadata: metadataBody
+  };
+}
+
+async function downloadTelegramInboundMedia(fileId, mediaMetadata = null) {
+  if (!process.env.TELEGRAM_BOT_TOKEN) return { ok: false, error: 'telegram_non_configurato' };
+  const fileInfoResponse = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getFile?file_id=${encodeURIComponent(String(fileId || ''))}`);
+  const fileInfoRaw = await fileInfoResponse.text();
+  const fileInfoBody = parseWhatsappResponseBody(fileInfoRaw);
+  const filePath = s(fileInfoBody?.result?.file_path);
+  if (!fileInfoResponse.ok || !filePath) {
+    return {
+      ok: false,
+      stage: 'metadata',
+      statusCode: fileInfoResponse.status,
+      raw: fileInfoRaw,
+      body: fileInfoBody,
+      error: fileInfoBody?.description || fileInfoRaw || `Telegram getFile HTTP ${fileInfoResponse.status}`
+    };
+  }
+
+  const binaryResponse = await fetch(`https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${filePath}`);
+  const binaryBuffer = Buffer.from(await binaryResponse.arrayBuffer());
+  if (!binaryResponse.ok) {
+    const raw = binaryBuffer.toString('utf8');
+    return {
+      ok: false,
+      stage: 'download',
+      statusCode: binaryResponse.status,
+      raw,
+      error: raw || `Telegram file download HTTP ${binaryResponse.status}`
+    };
+  }
+
+  const explicitFilename = s(mediaMetadata?.document?.file_name);
+  const mimeType = s(mediaMetadata?.document?.mime_type) || s(binaryResponse.headers.get('content-type')) || null;
+  return {
+    ok: true,
+    buffer: binaryBuffer,
+    mimeType,
+    filename: explicitFilename || filePath.split('/').pop() || guessFilenameFromMimeType(mimeType, `telegram-${fileId}`),
+    metadata: fileInfoBody?.result || null
+  };
+}
+
+async function downloadInboundMediaForAi({ channel, mediaUrl, mediaMimeType, mediaMetadata, messageType }) {
+  const effectiveMimeType = s(mediaMimeType) || s(mediaMetadata?.document?.mime_type) || s(mediaMetadata?.image?.mime_type);
+  const effectiveFilename = s(mediaMetadata?.document?.file_name);
+  const imageCandidate = looksLikeImageMimeType(effectiveMimeType)
+    || looksLikeImageFilename(effectiveFilename)
+    || String(messageType || '').toLowerCase() === 'image'
+    || String(messageType || '').toLowerCase() === 'photo';
+
+  if (!mediaUrl || !imageCandidate) {
+    return {
+      skipped: true,
+      reason: mediaUrl ? 'media_non_supportato_per_vision' : 'media_mancante'
+    };
+  }
+
+  if (channel === 'whatsapp') return downloadWhatsAppInboundMedia(mediaUrl);
+  if (channel === 'telegram') return downloadTelegramInboundMedia(mediaUrl, mediaMetadata);
+  return { skipped: true, reason: 'canale_media_non_supportato' };
+}
+
+async function analyzeInboundMediaWithOpenAI({ channel, bodyText, mediaUrl, mediaMimeType, mediaMetadata, messageType }) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const model = process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  if (!apiKey) {
+    return { skipped: true, reason: 'openai_non_configurato', meta: { model } };
+  }
+
+  const mediaDownload = await downloadInboundMediaForAi({ channel, mediaUrl, mediaMimeType, mediaMetadata, messageType });
+  if (mediaDownload?.skipped) {
+    return { skipped: true, reason: mediaDownload.reason, meta: { model } };
+  }
+  if (!mediaDownload?.ok || !mediaDownload?.buffer?.length) {
+    return {
+      skipped: false,
+      error: mediaDownload?.error || 'Download media fallito',
+      meta: {
+        model,
+        stage: mediaDownload?.stage || 'download',
+        statusCode: mediaDownload?.statusCode || null,
+        raw: mediaDownload?.raw || null,
+        parsed: mediaDownload?.body || null
+      }
+    };
+  }
+
+  const mimeType = s(mediaDownload.mimeType) || s(mediaMimeType) || 'image/jpeg';
+  if (!looksLikeImageMimeType(mimeType)) {
+    return { skipped: true, reason: 'mime_non_immagine', meta: { model, mimeType } };
+  }
+
+  const imageDataUrl = `data:${mimeType};base64,${mediaDownload.buffer.toString('base64')}`;
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.1,
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'parts_media_analysis',
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              media_kind: { type: 'string' },
+              summary: { type: 'string' },
+              visible_text: { type: 'string' },
+              plate: { type: 'string' },
+              vin: { type: 'string' },
+              oe_code: { type: 'string' },
+              requested_part_text: { type: 'string' },
+              normalized_part_name: { type: 'string' },
+              normalized_part_category: { type: 'string' },
+              glass_position: { type: 'string' },
+              side: { type: 'string' },
+              axle: { type: 'string' },
+              brake_component: { type: 'string' },
+              filter_type: { type: 'string' },
+              confidence: { type: 'number' },
+              needs_followup: { type: 'boolean' },
+              followup_question: { type: 'string' }
+            },
+            required: ['media_kind', 'summary', 'visible_text', 'plate', 'vin', 'oe_code', 'requested_part_text', 'normalized_part_name', 'normalized_part_category', 'glass_position', 'side', 'axle', 'brake_component', 'filter_type', 'confidence', 'needs_followup', 'followup_question']
+          }
+        }
+      },
+      messages: [
+        {
+          role: 'system',
+          content: 'Analizza immagini ricevute per richieste ricambi auto. L immagine puo mostrare targa, libretto, etichetta OE oppure il pezzo stesso. Estrai con prudenza solo dati leggibili o altamente probabili. Se l immagine non basta per completare la richiesta, imposta needs_followup=true e scrivi una domanda breve e utile per il riparatore. Usa normalized_part_category tra cristalli, freni, filtri, retrovisori, illuminazione, ricambio_generico.'
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: `Messaggio/caption del cliente: ${String(bodyText || '').trim() || '[vuoto]'}`
+            },
+            {
+              type: 'image_url',
+              image_url: {
+                url: imageDataUrl,
+                detail: 'high'
+              }
+            }
+          ]
+        }
+      ]
+    })
+  });
+
+  const raw = await response.text();
+  const parsed = parseWhatsappResponseBody(raw);
+  if (!response.ok) {
+    return {
+      skipped: false,
+      error: parsed?.error?.message || raw || `OpenAI vision HTTP ${response.status}`,
+      meta: { model, statusCode: response.status, raw, parsed, mimeType }
+    };
+  }
+  const content = parsed?.choices?.[0]?.message?.content;
+  if (!content) {
+    return {
+      skipped: false,
+      error: 'Risposta OpenAI vision vuota',
+      meta: { model, statusCode: response.status, raw, parsed, mimeType }
+    };
+  }
+  try {
+    return {
+      skipped: false,
+      data: JSON.parse(content),
+      meta: {
+        model,
+        statusCode: response.status,
+        raw,
+        parsed,
+        content,
+        mimeType,
+        filename: mediaDownload.filename || null
+      }
+    };
+  } catch {
+    return {
+      skipped: false,
+      error: 'JSON OpenAI vision non valido',
+      raw: content,
+      meta: { model, statusCode: response.status, raw, parsed, content, mimeType }
+    };
+  }
+}
+
 async function triangulateWithOpenAI(messageText) {
   const apiKey = process.env.OPENAI_API_KEY;
   const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
@@ -1364,9 +1656,11 @@ async function resolvePartsMessage({ message, channel = 'whatsapp', context = nu
   };
 }
 
-async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = null, intakeState = null }) {
+async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = null, intakeState = null, mediaAnalysis = null }) {
   const text = String(message || '').trim();
-  if (!text) return { status: 'ERROR', error: 'message obbligatorio' };
+  const mediaAi = mediaAnalysis?.data || null;
+  const effectiveText = buildMediaDerivedMessageText(text, mediaAi) || text;
+  if (!effectiveText) return { status: 'ERROR', error: 'message obbligatorio' };
 
   const previousContext = context || {};
   const previousIntakeState = intakeState || { slots: {} };
@@ -1702,19 +1996,21 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     }
   }
 
-  const fallbackPlate = extractPlateFromText(text);
-  const fallbackVin = extractVinFromText(text);
-  const fallbackOeCode = extractOeCodeFromText(text);
-  const basePlate = normalizePlate(fallbackPlate || previousContext.plate || previousIntakeState.slots?.plate || '');
-  const baseVin = fallbackVin || s(previousContext.vin) || s(previousIntakeState.slots?.vin) || '';
-  const baseOeCode = fallbackOeCode || s(previousContext.oe_code) || s(previousIntakeState.slots?.oe_code) || '';
-  const baseRequestedPartText = deriveRequestedPartText(text, basePlate, baseVin, baseOeCode)
+  const fallbackPlate = extractPlateFromText(effectiveText);
+  const fallbackVin = extractVinFromText(effectiveText);
+  const fallbackOeCode = extractOeCodeFromText(effectiveText);
+  const basePlate = normalizePlate(fallbackPlate || mediaAi?.plate || previousContext.plate || previousIntakeState.slots?.plate || '');
+  const baseVin = fallbackVin || s(mediaAi?.vin) || s(previousContext.vin) || s(previousIntakeState.slots?.vin) || '';
+  const baseOeCode = fallbackOeCode || s(mediaAi?.oe_code) || s(previousContext.oe_code) || s(previousIntakeState.slots?.oe_code) || '';
+  const baseRequestedPartText = deriveRequestedPartText(effectiveText, basePlate, baseVin, baseOeCode)
+    || s(mediaAi?.requested_part_text)
+    || s(mediaAi?.normalized_part_name)
     || s(previousContext.requested_part_text)
     || s(previousContext.normalized_part_name)
-    || text;
+    || effectiveText;
 
   const preliminaryParsed = {
-    originalText: text,
+    originalText: effectiveText,
     plate: basePlate,
     vin: baseVin,
     oeCode: baseOeCode,
@@ -1722,8 +2018,8 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     confidence: 0
   };
   const preliminaryNormalizedPart = {
-    name: s(previousContext.normalized_part_name) || preliminaryParsed.requestedPartText,
-    category: s(previousContext.normalized_part_category) || guessPartCategory(preliminaryParsed.requestedPartText)
+    name: s(mediaAi?.normalized_part_name) || s(previousContext.normalized_part_name) || preliminaryParsed.requestedPartText,
+    category: s(mediaAi?.normalized_part_category) || s(previousContext.normalized_part_category) || guessPartCategory(preliminaryParsed.requestedPartText)
   };
 
   const intakeSlots = mergeIntakeSlots({
@@ -1758,7 +2054,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
       oeResults: [],
       equivalents: {},
       missingData: intakeDecision.pendingSlot ? [intakeDecision.pendingSlot] : [],
-      whatsappText: intakeDecision.question,
+      whatsappText: s(mediaAi?.followup_question) || intakeDecision.question,
       aiRequest: {
         intent: 'intake_collection',
         request_is_valid: true,
@@ -1769,6 +2065,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
         normalizedPart,
         intakeSlots,
         intakeDecision,
+        mediaAnalysis: mediaAi,
         openai: {
           skipped: true,
           error: null,
@@ -1872,22 +2169,24 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   }
 
   const aiPrompt = [
-    `Messaggio cliente: ${text}`,
-    `Contesto raccolto: ${JSON.stringify(intakeSlots)}`
-  ].join('\n');
+    `Messaggio cliente: ${text || '[vuoto]'}`,
+    `Testo ricostruito da messaggio+immagine: ${effectiveText}`,
+    `Contesto raccolto: ${JSON.stringify(intakeSlots)}`,
+    mediaAi ? `Analisi immagine: ${JSON.stringify(mediaAi)}` : null
+  ].filter(Boolean).join('\n');
   const aiResult = await triangulateWithOpenAI(aiPrompt);
   const ai = aiResult.data || {};
   const parsed = {
-    originalText: text,
-    plate: normalizePlate(ai.plate || intakeSlots.plate || ''),
-    vin: s(ai.vin) || intakeSlots.vin || '',
-    oeCode: s(ai.oe_code) || intakeSlots.oe_code || '',
-    requestedPartText: s(ai.requested_part_text) || intakeSlots.part_name || preliminaryParsed.requestedPartText,
+    originalText: effectiveText,
+    plate: normalizePlate(ai.plate || mediaAi?.plate || intakeSlots.plate || ''),
+    vin: s(ai.vin) || s(mediaAi?.vin) || intakeSlots.vin || '',
+    oeCode: s(ai.oe_code) || s(mediaAi?.oe_code) || intakeSlots.oe_code || '',
+    requestedPartText: s(ai.requested_part_text) || s(mediaAi?.requested_part_text) || intakeSlots.part_name || preliminaryParsed.requestedPartText,
     confidence: ai.confidence ?? 0
   };
   const normalizedPart = {
-    name: s(ai.normalized_part_name) || intakeSlots.part_name || parsed.requestedPartText,
-    category: s(ai.normalized_part_category) || intakeSlots.part_category || preliminaryNormalizedPart.category
+    name: s(ai.normalized_part_name) || s(mediaAi?.normalized_part_name) || intakeSlots.part_name || parsed.requestedPartText,
+    category: s(ai.normalized_part_category) || s(mediaAi?.normalized_part_category) || intakeSlots.part_category || preliminaryNormalizedPart.category
   };
   const finalSlots = mergeIntakeSlots({
     parsed,
@@ -1953,10 +2252,11 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
       normalizedPart,
       intakeSlots: finalSlots,
       intakeDecision: { ready: true, stage: glassEligible ? 'ready_for_service' : 'ready_for_ai' },
+      mediaAnalysis: mediaAi,
       extraction: {
-        plate_source: ai.plate ? 'openai' : (fallbackPlate ? 'regex' : (previousContext.plate || previousIntakeState.slots?.plate ? 'context' : 'missing')),
-        vin_source: ai.vin ? 'openai' : (fallbackVin ? 'regex' : (previousContext.vin || previousIntakeState.slots?.vin ? 'context' : 'missing')),
-        oe_source: ai.oe_code ? 'openai' : (fallbackOeCode ? 'regex' : (previousContext.oe_code || previousIntakeState.slots?.oe_code ? 'context' : 'missing'))
+        plate_source: ai.plate ? 'openai' : (mediaAi?.plate ? 'media_ai' : (fallbackPlate ? 'regex' : (previousContext.plate || previousIntakeState.slots?.plate ? 'context' : 'missing'))),
+        vin_source: ai.vin ? 'openai' : (mediaAi?.vin ? 'media_ai' : (fallbackVin ? 'regex' : (previousContext.vin || previousIntakeState.slots?.vin ? 'context' : 'missing'))),
+        oe_source: ai.oe_code ? 'openai' : (mediaAi?.oe_code ? 'media_ai' : (fallbackOeCode ? 'regex' : (previousContext.oe_code || previousIntakeState.slots?.oe_code ? 'context' : 'missing')))
       },
       conversationContext: previousContext ? {
         plate: s(previousContext.plate) || null,
@@ -2325,12 +2625,33 @@ async function processInboundPartsMessage({
     logPartEvent(partsRequestId, 'richiesta_ricevuta', `Richiesta ricevuta da webhook ${channel}`, `${channel}_webhook`, { userKey, externalMessageId });
     const conversationContext = getLatestConversationContext(userKey, partsRequestId);
     const intakeState = getIntakeState(partsRequestId);
+    const mediaAnalysis = mediaUrl
+      ? await analyzeInboundMediaWithOpenAI({
+        channel,
+        bodyText,
+        mediaUrl,
+        mediaMimeType,
+        mediaMetadata,
+        messageType
+      })
+      : { skipped: true, reason: 'media_assente' };
+
+    if (!mediaAnalysis?.skipped) {
+      logPartEvent(
+        partsRequestId,
+        mediaAnalysis.error ? 'errore_integrazione' : 'media_ai_analysis',
+        mediaAnalysis.error ? `Analisi immagine fallita: ${mediaAnalysis.error}` : 'Analisi immagine completata',
+        'openai_vision',
+        mediaAnalysis
+      );
+    }
 
     const resolved = await resolvePartsMessageV2({
-      message: bodyText,
+      message: bodyText || (mediaUrl ? 'foto ricevuta' : ''),
       channel,
       context: conversationContext,
-      intakeState
+      intakeState,
+      mediaAnalysis
     });
 
     if (resolved.status === 'ERROR') {
@@ -2547,7 +2868,12 @@ router.post('/webhook/whatsapp', async (req, res) => {
       const messages = Array.isArray(value?.messages) ? value.messages : [];
       for (const message of messages) {
         const phone = s(message?.from) || s(value?.contacts?.[0]?.wa_id) || 'sconosciuto';
-        const bodyText = s(message?.text?.body) || s(message?.button?.text) || s(message?.interactive?.button_reply?.title) || '';
+        const bodyText = s(message?.text?.body)
+          || s(message?.image?.caption)
+          || s(message?.document?.caption)
+          || s(message?.button?.text)
+          || s(message?.interactive?.button_reply?.title)
+          || '';
         const externalMessageId = s(message?.id);
         enqueueInboundPartsMessage({
           channel: 'whatsapp',
