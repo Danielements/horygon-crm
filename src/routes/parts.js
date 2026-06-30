@@ -123,6 +123,8 @@ function collectXmlBlocks(xml, tag) {
 function guessPartCategory(text) {
   const lower = String(text || '').toLowerCase();
   if (/(parabrezza|lunotto|cristall|vetro|scendente|raschiavetro|alzacristall|fisso porta)/.test(lower)) return 'cristalli';
+  if (/(fren|pastigli|disch|pinz|tambur|ganasc|ceppi|cilindrett)/.test(lower)) return 'freni';
+  if (/(filtro|filtri|abitacolo|olio|aria|carburante)/.test(lower)) return 'filtri';
   if (/(specchietto|retrovisore)/.test(lower)) return 'retrovisori';
   if (/(fanale|faro|stop)/.test(lower)) return 'illuminazione';
   return 'ricambio_generico';
@@ -174,6 +176,245 @@ function ensureConversationByPhone(phone, partsRequestId = null, customerId = nu
   }
 
   return conversation;
+}
+
+function getLatestConversationContext(phone, currentPartsRequestId = null) {
+  if (!phone) return null;
+  return db.prepare(`
+    SELECT
+      id,
+      plate,
+      vin,
+      oe_code,
+      requested_part_text,
+      normalized_part_name,
+      normalized_part_category,
+      ai_summary,
+      whatsapp_reply_text,
+      status,
+      created_at,
+      updated_at
+    FROM parts_requests
+    WHERE user_phone = ?
+      AND (? IS NULL OR id <> ?)
+      AND (
+        COALESCE(plate, '') <> ''
+        OR COALESCE(vin, '') <> ''
+        OR COALESCE(oe_code, '') <> ''
+        OR COALESCE(requested_part_text, '') <> ''
+        OR COALESCE(normalized_part_category, '') <> ''
+      )
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(phone, currentPartsRequestId, currentPartsRequestId);
+}
+
+function getActivePartsRequestForPhone(phone) {
+  if (!phone) return null;
+  return db.prepare(`
+    SELECT *
+    FROM parts_requests
+    WHERE user_phone = ?
+      AND status IN ('nuova', 'in_lavorazione', 'in_attesa_dati_cliente', 'in_attesa_verifica_tecnica', 'oe_trovato', 'preventivo_pronto')
+    ORDER BY last_message_at DESC, id DESC
+    LIMIT 1
+  `).get(phone);
+}
+
+function getIntakeState(partsRequestId) {
+  if (!partsRequestId) return null;
+  const row = db.prepare(`
+    SELECT *
+    FROM parts_request_intake_state
+    WHERE parts_request_id = ?
+    LIMIT 1
+  `).get(partsRequestId);
+  if (!row) return null;
+  return {
+    ...row,
+    slots: json(row.slots_json, {}) || {}
+  };
+}
+
+function saveIntakeState(partsRequestId, intakeState = {}) {
+  const payload = {
+    stage: s(intakeState.stage) || 'new',
+    pendingSlot: s(intakeState.pendingSlot),
+    pendingQuestion: s(intakeState.pendingQuestion),
+    slots: intakeState.slots || {}
+  };
+
+  db.prepare(`
+    INSERT INTO parts_request_intake_state (
+      parts_request_id, stage, pending_slot, pending_question, slots_json
+    )
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(parts_request_id) DO UPDATE SET
+      stage = excluded.stage,
+      pending_slot = excluded.pending_slot,
+      pending_question = excluded.pending_question,
+      slots_json = excluded.slots_json,
+      updated_at = datetime('now')
+  `).run(
+    partsRequestId,
+    payload.stage,
+    payload.pendingSlot,
+    payload.pendingQuestion,
+    JSON.stringify(payload.slots)
+  );
+}
+
+function detectSide(text) {
+  const lower = String(text || '').toLowerCase();
+  if (/\b(sinistr|sx)\b/.test(lower)) return 'sinistro';
+  if (/\b(destr|dx)\b/.test(lower)) return 'destro';
+  return '';
+}
+
+function detectAxle(text) {
+  const lower = String(text || '').toLowerCase();
+  if (/\b(anteriore|anteriori|ant)\b/.test(lower)) return 'anteriore';
+  if (/\b(posteriore|posteriori|post)\b/.test(lower)) return 'posteriore';
+  return '';
+}
+
+function detectGlassPosition(text) {
+  const lower = String(text || '').toLowerCase();
+  if (/parabrezza/.test(lower)) return 'parabrezza_anteriore';
+  if (/lunotto/.test(lower)) return 'lunotto_posteriore';
+  if (/(scendente|vetro laterale|cristallo laterale)/.test(lower)) {
+    const axle = detectAxle(lower);
+    const side = detectSide(lower);
+    return ['vetro_laterale', axle, side].filter(Boolean).join('_');
+  }
+  if (/raschiavetro/.test(lower)) {
+    const axle = detectAxle(lower);
+    const side = detectSide(lower);
+    return ['raschiavetro', axle, side].filter(Boolean).join('_');
+  }
+  return '';
+}
+
+function detectBrakeComponent(text) {
+  const lower = String(text || '').toLowerCase();
+  if (/pastigli/.test(lower)) return 'pastiglie';
+  if (/disch/.test(lower)) return 'dischi';
+  if (/pinz/.test(lower)) return 'pinza';
+  if (/tambur/.test(lower)) return 'tamburo';
+  if (/ganasc|ceppi/.test(lower)) return 'ganasce';
+  if (/cilindrett/.test(lower)) return 'cilindretto';
+  return '';
+}
+
+function detectFilterType(text) {
+  const lower = String(text || '').toLowerCase();
+  if (/abitacolo|antipolline/.test(lower)) return 'abitacolo';
+  if (/\baria\b/.test(lower)) return 'aria';
+  if (/\bolio\b/.test(lower)) return 'olio';
+  if (/carburante|gasolio|benzina/.test(lower)) return 'carburante';
+  return '';
+}
+
+function mergeIntakeSlots({ parsed, normalizedPart, context, intakeState }) {
+  const existing = intakeState?.slots || {};
+  const sourceText = `${parsed?.requestedPartText || ''} ${parsed?.originalText || ''} ${normalizedPart?.name || ''}`.trim();
+  const category = s(normalizedPart?.category) || s(existing.part_category) || s(context?.normalized_part_category) || guessPartCategory(sourceText);
+  const partName = s(normalizedPart?.name) || s(existing.part_name) || s(context?.normalized_part_name) || s(parsed?.requestedPartText);
+
+  return {
+    plate: s(parsed?.plate) || s(existing.plate) || s(context?.plate) || '',
+    vin: s(parsed?.vin) || s(existing.vin) || s(context?.vin) || '',
+    oe_code: s(parsed?.oeCode) || s(existing.oe_code) || s(context?.oe_code) || '',
+    part_category: category || '',
+    part_name: partName || '',
+    glass_position: detectGlassPosition(sourceText) || s(existing.glass_position) || '',
+    side: detectSide(sourceText) || s(existing.side) || '',
+    axle: detectAxle(sourceText) || s(existing.axle) || '',
+    brake_component: detectBrakeComponent(sourceText) || s(existing.brake_component) || '',
+    filter_type: detectFilterType(sourceText) || s(existing.filter_type) || ''
+  };
+}
+
+function buildIntakeDecision(slots = {}) {
+  if (!slots.plate) {
+    return {
+      ready: false,
+      stage: 'waiting_plate',
+      pendingSlot: 'plate',
+      question: 'Per proseguire ho bisogno della targa del veicolo.'
+    };
+  }
+
+  switch (slots.part_category) {
+    case 'cristalli':
+      if (!slots.glass_position) {
+        return {
+          ready: false,
+          stage: 'waiting_glass_position',
+          pendingSlot: 'glass_position',
+          question: 'Ho preso la targa. Dimmi quale cristallo ti serve: parabrezza, lunotto oppure vetro laterale.'
+        };
+      }
+      return { ready: true, stage: 'ready_for_service', pendingSlot: null, question: null };
+    case 'freni':
+      if (!slots.brake_component) {
+        return {
+          ready: false,
+          stage: 'waiting_brake_component',
+          pendingSlot: 'brake_component',
+          question: 'Ho preso la targa. Per i freni dimmi se ti servono pastiglie, dischi, pinza o altro.'
+        };
+      }
+      if (!slots.axle) {
+        return {
+          ready: false,
+          stage: 'waiting_axle',
+          pendingSlot: 'axle',
+          question: 'Perfetto. Mi confermi se ti servono anteriori o posteriori?'
+        };
+      }
+      return { ready: true, stage: 'ready_for_ai', pendingSlot: null, question: null };
+    case 'filtri':
+      if (!slots.filter_type) {
+        return {
+          ready: false,
+          stage: 'waiting_filter_type',
+          pendingSlot: 'filter_type',
+          question: 'Ho preso la targa. Dimmi quale filtro ti serve: aria, olio, abitacolo o carburante.'
+        };
+      }
+      return { ready: true, stage: 'ready_for_ai', pendingSlot: null, question: null };
+    case 'retrovisori':
+      if (!slots.side) {
+        return {
+          ready: false,
+          stage: 'waiting_side',
+          pendingSlot: 'side',
+          question: 'Ho preso la targa. Mi serve sapere se il ricambio e destro o sinistro.'
+        };
+      }
+      return { ready: true, stage: 'ready_for_ai', pendingSlot: null, question: null };
+    case 'illuminazione':
+      if (!slots.side) {
+        return {
+          ready: false,
+          stage: 'waiting_side',
+          pendingSlot: 'side',
+          question: 'Ho preso la targa. Mi confermi se ti serve lato destro o sinistro?'
+        };
+      }
+      return { ready: true, stage: 'ready_for_ai', pendingSlot: null, question: null };
+    default:
+      if (!slots.part_name || slots.part_name.length < 4) {
+        return {
+          ready: false,
+          stage: 'waiting_part_name',
+          pendingSlot: 'part_name',
+          question: 'Ho preso la targa. Dimmi meglio quale ricambio ti serve.'
+        };
+      }
+      return { ready: true, stage: 'ready_for_ai', pendingSlot: null, question: null };
+  }
 }
 
 function parseBackendUrl() {
@@ -493,20 +734,24 @@ function buildGlassReplyText(selectedItem, itemsCount) {
   return parts.join('\n');
 }
 
-async function resolvePartsMessage({ message, channel = 'whatsapp' }) {
+async function resolvePartsMessage({ message, channel = 'whatsapp', context = null }) {
   const text = String(message || '').trim();
   if (!text) return { status: 'ERROR', error: 'message obbligatorio' };
 
   const aiResult = await triangulateWithOpenAI(text);
   const ai = aiResult.data || {};
+  const previousContext = context || {};
   const fallbackPlate = extractPlateFromText(text);
   const fallbackVin = extractVinFromText(text);
   const fallbackOeCode = extractOeCodeFromText(text);
-  const resolvedPlate = normalizePlate(ai.plate || fallbackPlate || '');
-  const resolvedVin = s(ai.vin) || fallbackVin;
-  const resolvedOeCode = s(ai.oe_code) || fallbackOeCode;
+  const resolvedPlate = normalizePlate(ai.plate || fallbackPlate || previousContext.plate || '');
+  const resolvedVin = s(ai.vin) || fallbackVin || s(previousContext.vin) || '';
+  const resolvedOeCode = s(ai.oe_code) || fallbackOeCode || s(previousContext.oe_code) || '';
   const resolvedRequestedPartText = s(ai.requested_part_text)
-    || deriveRequestedPartText(text, resolvedPlate, resolvedVin, resolvedOeCode);
+    || deriveRequestedPartText(text, resolvedPlate, resolvedVin, resolvedOeCode)
+    || s(previousContext.requested_part_text)
+    || s(previousContext.normalized_part_name)
+    || text;
   const parsed = {
     originalText: text,
     plate: resolvedPlate,
@@ -516,8 +761,8 @@ async function resolvePartsMessage({ message, channel = 'whatsapp' }) {
     confidence: ai.confidence ?? 0
   };
   const normalizedPart = {
-    name: s(ai.normalized_part_name) || parsed.requestedPartText,
-    category: s(ai.normalized_part_category) || guessPartCategory(parsed.requestedPartText)
+    name: s(ai.normalized_part_name) || s(previousContext.normalized_part_name) || parsed.requestedPartText,
+    category: s(ai.normalized_part_category) || s(previousContext.normalized_part_category) || guessPartCategory(parsed.requestedPartText)
   };
   const glassEligible = ai.request_is_valid !== false
     && parsed.plate
@@ -571,6 +816,14 @@ async function resolvePartsMessage({ message, channel = 'whatsapp' }) {
         vin_source: ai.vin ? 'openai' : (fallbackVin ? 'regex' : 'missing'),
         oe_source: ai.oe_code ? 'openai' : (fallbackOeCode ? 'regex' : 'missing')
       },
+      conversationContext: previousContext ? {
+        plate: s(previousContext.plate) || null,
+        vin: s(previousContext.vin) || null,
+        oe_code: s(previousContext.oe_code) || null,
+        requested_part_text: s(previousContext.requested_part_text) || null,
+        normalized_part_name: s(previousContext.normalized_part_name) || null,
+        normalized_part_category: s(previousContext.normalized_part_category) || null
+      } : null,
       openai: {
         skipped: !!aiResult.skipped,
         error: aiResult.error || null,
@@ -582,6 +835,206 @@ async function resolvePartsMessage({ message, channel = 'whatsapp' }) {
     },
     aiSummary: s(ai.ai_summary) || null,
     resolvedStatus: status
+  };
+}
+
+async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = null, intakeState = null }) {
+  const text = String(message || '').trim();
+  if (!text) return { status: 'ERROR', error: 'message obbligatorio' };
+
+  const previousContext = context || {};
+  const previousIntakeState = intakeState || { slots: {} };
+  const fallbackPlate = extractPlateFromText(text);
+  const fallbackVin = extractVinFromText(text);
+  const fallbackOeCode = extractOeCodeFromText(text);
+  const basePlate = normalizePlate(fallbackPlate || previousContext.plate || previousIntakeState.slots?.plate || '');
+  const baseVin = fallbackVin || s(previousContext.vin) || s(previousIntakeState.slots?.vin) || '';
+  const baseOeCode = fallbackOeCode || s(previousContext.oe_code) || s(previousIntakeState.slots?.oe_code) || '';
+  const baseRequestedPartText = deriveRequestedPartText(text, basePlate, baseVin, baseOeCode)
+    || s(previousContext.requested_part_text)
+    || s(previousContext.normalized_part_name)
+    || text;
+
+  const preliminaryParsed = {
+    originalText: text,
+    plate: basePlate,
+    vin: baseVin,
+    oeCode: baseOeCode,
+    requestedPartText: baseRequestedPartText,
+    confidence: 0
+  };
+  const preliminaryNormalizedPart = {
+    name: s(previousContext.normalized_part_name) || preliminaryParsed.requestedPartText,
+    category: s(previousContext.normalized_part_category) || guessPartCategory(preliminaryParsed.requestedPartText)
+  };
+
+  const intakeSlots = mergeIntakeSlots({
+    parsed: preliminaryParsed,
+    normalizedPart: preliminaryNormalizedPart,
+    context: previousContext,
+    intakeState: previousIntakeState
+  });
+  const intakeDecision = buildIntakeDecision(intakeSlots);
+
+  if (!intakeDecision.ready) {
+    const parsed = {
+      originalText: text,
+      plate: intakeSlots.plate || '',
+      vin: intakeSlots.vin || '',
+      oeCode: intakeSlots.oe_code || '',
+      requestedPartText: intakeSlots.part_name || preliminaryParsed.requestedPartText,
+      confidence: 0
+    };
+    const normalizedPart = {
+      name: intakeSlots.part_name || parsed.requestedPartText,
+      category: intakeSlots.part_category || preliminaryNormalizedPart.category
+    };
+    return {
+      status: 'OK',
+      parsed,
+      vehicle: null,
+      normalizedPart,
+      dbrtResult: {},
+      glassCatalog: { status: 'SKIPPED', message: 'In attesa di dati cliente', items: [] },
+      oeCatalog: {},
+      oeResults: [],
+      equivalents: {},
+      missingData: intakeDecision.pendingSlot ? [intakeDecision.pendingSlot] : [],
+      whatsappText: intakeDecision.question,
+      aiRequest: {
+        intent: 'intake_collection',
+        request_is_valid: true,
+        suggested_service: 'WAITING_DATA',
+        instruction: 'Raccolta dati progressiva senza chiamata AI finche la richiesta non e completa.',
+        availableSources: ['RULES', 'CONVERSATION_CONTEXT'],
+        parsed,
+        normalizedPart,
+        intakeSlots,
+        intakeDecision,
+        openai: {
+          skipped: true,
+          error: null,
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          statusCode: null,
+          raw: null,
+          parsed: null
+        }
+      },
+      aiSummary: null,
+      resolvedStatus: 'in_attesa_dati_cliente',
+      intakeState: {
+        stage: intakeDecision.stage,
+        pendingSlot: intakeDecision.pendingSlot,
+        pendingQuestion: intakeDecision.question,
+        slots: intakeSlots
+      }
+    };
+  }
+
+  const aiPrompt = [
+    `Messaggio cliente: ${text}`,
+    `Contesto raccolto: ${JSON.stringify(intakeSlots)}`
+  ].join('\n');
+  const aiResult = await triangulateWithOpenAI(aiPrompt);
+  const ai = aiResult.data || {};
+  const parsed = {
+    originalText: text,
+    plate: normalizePlate(ai.plate || intakeSlots.plate || ''),
+    vin: s(ai.vin) || intakeSlots.vin || '',
+    oeCode: s(ai.oe_code) || intakeSlots.oe_code || '',
+    requestedPartText: s(ai.requested_part_text) || intakeSlots.part_name || preliminaryParsed.requestedPartText,
+    confidence: ai.confidence ?? 0
+  };
+  const normalizedPart = {
+    name: s(ai.normalized_part_name) || intakeSlots.part_name || parsed.requestedPartText,
+    category: s(ai.normalized_part_category) || intakeSlots.part_category || preliminaryNormalizedPart.category
+  };
+  const finalSlots = mergeIntakeSlots({
+    parsed,
+    normalizedPart,
+    context: previousContext,
+    intakeState: { slots: intakeSlots }
+  });
+  const glassEligible = ai.request_is_valid !== false
+    && parsed.plate
+    && finalSlots.part_category === 'cristalli'
+    && (String(ai.suggested_service || '') === 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2' || normalizedPart.category === 'cristalli');
+
+  let glassCatalog = { status: 'SKIPPED', message: 'Nessun servizio tecnico eseguito', items: [] };
+  let whatsappText = s(ai.operator_reply_text) || '';
+  let status = s(ai.status) || 'nuova';
+
+  if (glassEligible) {
+    glassCatalog = await rtwsCheckEurocodeDaTargaOE2({ plate: parsed.plate, oeCode: parsed.oeCode });
+    const selectedItem = chooseBestGlassItem(glassCatalog.items, parsed.requestedPartText);
+    if (selectedItem) {
+      parsed.oeCode = selectedItem.oe_code || parsed.oeCode;
+      whatsappText = buildGlassReplyText(selectedItem, glassCatalog.items.length);
+      status = 'oe_trovato';
+    } else {
+      whatsappText = whatsappText || 'Ho identificato una richiesta cristalli, ma dalla sola targa non emerge un risultato univoco. Indicami meglio quale vetro o allega una foto del ricambio.';
+      status = 'in_attesa_verifica_tecnica';
+    }
+  } else if (!parsed.plate) {
+    whatsappText = whatsappText || 'Per usare i servizi attivi oggi ho bisogno almeno della targa. Inviami targa e tipo di cristallo/ricambio richiesto.';
+    status = 'in_attesa_dati_cliente';
+  } else if (normalizedPart.category !== 'cristalli') {
+    whatsappText = whatsappText || 'Ho raccolto i dati essenziali della richiesta. La inoltro per verifica tecnica e preparazione ricambio.';
+    status = 'in_attesa_verifica_tecnica';
+  }
+
+  return {
+    status: glassCatalog.status === 'ERROR' ? 'ERROR' : 'OK',
+    parsed,
+    vehicle: null,
+    normalizedPart,
+    dbrtResult: {},
+    glassCatalog,
+    oeCatalog: {},
+    oeResults: glassCatalog.items || [],
+    equivalents: {},
+    missingData: ai.missing_data || [],
+    whatsappText,
+    aiRequest: {
+      intent: ai.intent || 'automotive_parts_resolution',
+      request_is_valid: ai.request_is_valid !== false,
+      suggested_service: ai.suggested_service || (glassEligible ? 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2' : 'MANUAL_REVIEW'),
+      instruction: 'Triage AI e scelta del servizio RTWS piu utile con minimizzazione dei falsi positivi.',
+      availableSources: ['OPENAI', 'RTWS_LISTINI', 'RTWS_BDRT'],
+      parsed,
+      normalizedPart,
+      intakeSlots: finalSlots,
+      intakeDecision: { ready: true, stage: glassEligible ? 'ready_for_service' : 'ready_for_ai' },
+      extraction: {
+        plate_source: ai.plate ? 'openai' : (fallbackPlate ? 'regex' : (previousContext.plate || previousIntakeState.slots?.plate ? 'context' : 'missing')),
+        vin_source: ai.vin ? 'openai' : (fallbackVin ? 'regex' : (previousContext.vin || previousIntakeState.slots?.vin ? 'context' : 'missing')),
+        oe_source: ai.oe_code ? 'openai' : (fallbackOeCode ? 'regex' : (previousContext.oe_code || previousIntakeState.slots?.oe_code ? 'context' : 'missing'))
+      },
+      conversationContext: previousContext ? {
+        plate: s(previousContext.plate) || null,
+        vin: s(previousContext.vin) || null,
+        oe_code: s(previousContext.oe_code) || null,
+        requested_part_text: s(previousContext.requested_part_text) || null,
+        normalized_part_name: s(previousContext.normalized_part_name) || null,
+        normalized_part_category: s(previousContext.normalized_part_category) || null
+      } : null,
+      openai: {
+        skipped: !!aiResult.skipped,
+        error: aiResult.error || null,
+        model: aiResult.meta?.model || null,
+        statusCode: aiResult.meta?.statusCode || null,
+        raw: aiResult.meta?.content || aiResult.meta?.raw || aiResult.raw || null,
+        parsed: aiResult.data || aiResult.meta?.parsed || null
+      }
+    },
+    aiSummary: s(ai.ai_summary) || null,
+    resolvedStatus: status,
+    intakeState: {
+      stage: glassEligible ? 'ready_for_service' : 'ready_for_ai',
+      pendingSlot: null,
+      pendingQuestion: null,
+      slots: finalSlots
+    }
   };
 }
 
@@ -631,6 +1084,10 @@ function persistResolvedPayload(partsRequestId, resolved) {
       JSON.stringify(item)
     );
   });
+
+  if (resolved?.intakeState) {
+    saveIntakeState(partsRequestId, resolved.intakeState);
+  }
 }
 
 function forwardToPartsBackend(payload) {
@@ -778,6 +1235,7 @@ function serializeRequestDetails(id) {
   return {
     ...request,
     tags: json(request.tags_json, []),
+    intake_state: getIntakeState(id),
     vehicle: db.prepare('SELECT * FROM parts_request_vehicle_data WHERE parts_request_id = ?').get(id) || null,
     oe_results: db.prepare(`
       SELECT * FROM parts_request_oe_results
@@ -834,15 +1292,28 @@ router.post('/webhook/whatsapp', async (req, res) => {
 
         db.exec('BEGIN');
         try {
-          const requestInsert = db.prepare(`
-            INSERT INTO parts_requests (
-              request_uuid, channel, external_message_id, user_phone, original_message,
-              requested_part_text, status, source_system, last_message_at
-            )
-            VALUES (?, 'whatsapp', ?, ?, ?, ?, 'nuova', 'whatsapp_webhook', datetime('now'))
-          `).run(makeUuid(), externalMessageId, phone, bodyText || '[messaggio senza testo]', bodyText || null);
-
-          const partsRequestId = Number(requestInsert.lastInsertRowid);
+          const activeRequest = getActivePartsRequestForPhone(phone);
+          let partsRequestId = null;
+          if (activeRequest) {
+            partsRequestId = activeRequest.id;
+            db.prepare(`
+              UPDATE parts_requests
+              SET external_message_id = COALESCE(?, external_message_id),
+                  requested_part_text = COALESCE(NULLIF(?, ''), requested_part_text),
+                  updated_at = datetime('now'),
+                  last_message_at = datetime('now')
+              WHERE id = ?
+            `).run(externalMessageId, bodyText, partsRequestId);
+          } else {
+            const requestInsert = db.prepare(`
+              INSERT INTO parts_requests (
+                request_uuid, channel, external_message_id, user_phone, original_message,
+                requested_part_text, status, source_system, last_message_at
+              )
+              VALUES (?, 'whatsapp', ?, ?, ?, ?, 'nuova', 'whatsapp_webhook', datetime('now'))
+            `).run(makeUuid(), externalMessageId, phone, bodyText || '[messaggio senza testo]', bodyText || null);
+            partsRequestId = Number(requestInsert.lastInsertRowid);
+          }
           const conversation = ensureConversationByPhone(phone, partsRequestId, null);
 
           db.prepare(`
@@ -871,8 +1342,15 @@ router.post('/webhook/whatsapp', async (req, res) => {
 
           upsertConversationState(conversation.id);
           logPartEvent(partsRequestId, 'richiesta_ricevuta', 'Richiesta ricevuta da webhook WhatsApp', 'whatsapp_webhook', { phone, externalMessageId });
+          const conversationContext = getLatestConversationContext(phone, partsRequestId);
+          const intakeState = getIntakeState(partsRequestId);
 
-          const resolved = await resolvePartsMessage({ message: bodyText, channel: 'whatsapp' });
+          const resolved = await resolvePartsMessageV2({
+            message: bodyText,
+            channel: 'whatsapp',
+            context: conversationContext,
+            intakeState
+          });
           if (resolved.status === 'ERROR') {
             db.prepare(`UPDATE parts_requests SET status = 'errore_integrazione', updated_at = datetime('now') WHERE id = ?`).run(partsRequestId);
             logPartEvent(partsRequestId, 'errore_integrazione', resolved.error || 'Resolve ricambi fallito', 'parts_resolver', resolved);
@@ -956,7 +1434,7 @@ router.post('/webhook/whatsapp', async (req, res) => {
 router.use(authMiddleware);
 
 router.post('/parts/resolve', requirePermesso('ricambi', 'read'), async (req, res) => {
-  const resolved = await resolvePartsMessage({
+  const resolved = await resolvePartsMessageV2({
     message: req.body?.message,
     channel: req.body?.channel || 'crm'
   });

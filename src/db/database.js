@@ -673,6 +673,18 @@ db.exec(`
     FOREIGN KEY (author_user_id) REFERENCES utenti(id) ON DELETE SET NULL
   );
 
+  CREATE TABLE IF NOT EXISTS parts_request_intake_state (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parts_request_id INTEGER NOT NULL UNIQUE,
+    stage TEXT DEFAULT 'new',
+    pending_slot TEXT,
+    pending_question TEXT,
+    slots_json TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (parts_request_id) REFERENCES parts_requests(id) ON DELETE CASCADE
+  );
+
   CREATE TABLE IF NOT EXISTS whatsapp_conversations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_uuid TEXT NOT NULL UNIQUE,
