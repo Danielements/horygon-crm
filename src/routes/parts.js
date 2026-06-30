@@ -779,7 +779,6 @@ function buildGlassOptions(items = [], requestedPartText = '') {
     if (seen.has(key)) continue;
     seen.add(key);
     options.push(entry.item);
-    if (options.length >= 12) break;
   }
 
   return options;
@@ -808,7 +807,7 @@ function buildGlassOptionsReplyText(options = [], itemsCount = 0) {
 
   const lines = [
     'Ho trovato piu varianti compatibili dalla targa.',
-    'Ti elenco le opzioni piu vicine trovate in RTWS:'
+    'Ti elenco le varianti trovate in RTWS:'
   ];
 
   options.forEach((item, index) => {
@@ -942,10 +941,63 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
 
   const previousContext = context || {};
   const previousIntakeState = intakeState || { slots: {} };
+  const variantsRequest = /^(mostra( tutte)?( le)? varianti|varianti|altre varianti)$/i.test(text);
   const numericSelection = text.match(/^\s*(\d{1,2})\s*$/);
   const previousOptions = Array.isArray(previousIntakeState.slots?.proposed_glass_options)
     ? previousIntakeState.slots.proposed_glass_options
     : [];
+  if (variantsRequest && previousOptions.length) {
+    const parsed = {
+      originalText: text,
+      plate: s(previousIntakeState.slots?.plate) || s(previousContext.plate) || '',
+      vin: s(previousIntakeState.slots?.vin) || s(previousContext.vin) || '',
+      oeCode: s(previousIntakeState.slots?.oe_code) || s(previousContext.oe_code) || '',
+      requestedPartText: s(previousIntakeState.slots?.part_name) || s(previousContext.normalized_part_name) || 'Ricambio cristalli',
+      confidence: 1
+    };
+    const normalizedPart = {
+      name: s(previousIntakeState.slots?.part_name) || 'Ricambio cristalli',
+      category: 'cristalli'
+    };
+    return {
+      status: 'OK',
+      parsed,
+      vehicle: null,
+      normalizedPart,
+      dbrtResult: {},
+      glassCatalog: { status: 'READY', message: 'Varianti cristalli riproposte al cliente', items: previousOptions },
+      oeCatalog: {},
+      oeResults: previousOptions,
+      equivalents: {},
+      missingData: [],
+      whatsappText: buildGlassOptionsReplyText(previousOptions, previousOptions.length),
+      aiRequest: {
+        intent: 'glass_options_recap',
+        request_is_valid: true,
+        suggested_service: 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2',
+        instruction: 'Riproposta delle varianti RTWS gia trovate in precedenza.',
+        availableSources: ['CONVERSATION_CONTEXT', 'RTWS_LISTINI'],
+        parsed,
+        normalizedPart,
+        openai: {
+          skipped: true,
+          error: null,
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          statusCode: null,
+          raw: null,
+          parsed: null
+        }
+      },
+      aiSummary: null,
+      resolvedStatus: 'in_attesa_verifica_tecnica',
+      intakeState: {
+        stage: 'ready_for_service',
+        pendingSlot: null,
+        pendingQuestion: null,
+        slots: previousIntakeState.slots
+      }
+    };
+  }
   if (numericSelection && previousOptions.length) {
     const selectedIndex = Number(numericSelection[1]) - 1;
     const selectedItem = previousOptions[selectedIndex];
@@ -1002,7 +1054,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
             ...previousIntakeState.slots,
             oe_code: s(selectedItem.oe_code) || s(previousIntakeState.slots?.oe_code) || '',
             selected_glass_option: selectedItem,
-            proposed_glass_options: []
+            proposed_glass_options: previousOptions
           }
         }
       };
