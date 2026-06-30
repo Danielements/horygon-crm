@@ -10,6 +10,7 @@ const router = express.Router();
 
 const PARTS_OPEN_STATUSES = ['nuova', 'in_lavorazione', 'in_attesa_dati_cliente', 'in_attesa_verifica_tecnica', 'oe_trovato', 'preventivo_pronto'];
 const rtwsSessions = new Map();
+let partsInboundProcessingQueue = Promise.resolve();
 
 function s(value) {
   return value === undefined || value === null || value === '' ? null : String(value).trim();
@@ -2221,6 +2222,15 @@ function buildPublicPdfLinkMessage(quote, publicPdfUrl) {
   ].filter(Boolean).join('\n');
 }
 
+function enqueueInboundPartsMessage(payload) {
+  const run = async () => processInboundPartsMessage(payload);
+  const next = partsInboundProcessingQueue.then(run, run);
+  partsInboundProcessingQueue = next.catch((error) => {
+    console.error('parts inbound queue error', error);
+  });
+  return next;
+}
+
 async function processInboundPartsMessage({
   channel,
   userKey,
@@ -2501,7 +2511,7 @@ router.post('/webhook/whatsapp', async (req, res) => {
         const phone = s(message?.from) || s(value?.contacts?.[0]?.wa_id) || 'sconosciuto';
         const bodyText = s(message?.text?.body) || s(message?.button?.text) || s(message?.interactive?.button_reply?.title) || '';
         const externalMessageId = s(message?.id);
-        processInboundPartsMessage({
+        enqueueInboundPartsMessage({
           channel: 'whatsapp',
           userKey: buildConversationUserKey('whatsapp', phone),
           outboundTarget: phone,
@@ -2539,7 +2549,7 @@ router.post('/webhook/telegram', async (req, res) => {
   if (!chatId) return res.json({ ok: true, skipped: 'chat_missing' });
   res.json({ ok: true });
 
-  processInboundPartsMessage({
+  enqueueInboundPartsMessage({
     channel: 'telegram',
     userKey: buildConversationUserKey('telegram', chatId),
     outboundTarget: chatId,
