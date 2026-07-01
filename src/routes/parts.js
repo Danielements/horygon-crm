@@ -2698,10 +2698,10 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
       status = 'in_attesa_verifica_tecnica';
     }
   } else if (servicePlan.mode === 'waiting_data') {
-    whatsappText = whatsappText || servicePlan.question || buildFallbackMissingDataQuestion(finalSlots, evidence);
+    whatsappText = servicePlan.question || buildFallbackMissingDataQuestion(finalSlots, evidence);
     status = 'in_attesa_dati_cliente';
   } else if (servicePlan.mode === 'escalate_service_pending') {
-    whatsappText = whatsappText || servicePlan.message;
+    whatsappText = servicePlan.message || whatsappText;
     status = 'in_attesa_verifica_tecnica';
   }
 
