@@ -943,6 +943,14 @@ function buildServiceExecutionPlan(slots = {}, suggestedService = '', evidence =
     };
   }
 
+  if (category === 'cristalli' && !hasPlate) {
+    return {
+      mode: 'waiting_data',
+      missing: ['plate'],
+      question: 'Per cercare i cristalli con i servizi attivi oggi mi serve la targa del veicolo. Inviamela e procedo subito.'
+    };
+  }
+
   if (category === 'cristalli' && hasPlate && partName) {
     return {
       mode: 'execute_service',
