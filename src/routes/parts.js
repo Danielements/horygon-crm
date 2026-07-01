@@ -5,12 +5,14 @@ const crypto = require('crypto');
 const db = require('../db/database');
 const { authMiddleware, requirePermesso } = require('../middleware/auth');
 const { createPreventivoPdfBuffer } = require('../services/document-pdf');
+const { createNotificationsForUserIds } = require('../services/google');
 
 const router = express.Router();
 
 const PARTS_OPEN_STATUSES = ['nuova', 'in_lavorazione', 'in_attesa_dati_cliente', 'in_attesa_verifica_tecnica', 'oe_trovato'];
 const rtwsSessions = new Map();
 let partsInboundProcessingQueue = Promise.resolve();
+let partsAttentionWatchdogStarted = false;
 
 function s(value) {
   return value === undefined || value === null || value === '' ? null : String(value).trim();
@@ -190,6 +192,102 @@ function logPartEvent(partsRequestId, eventType, eventMessage, eventSource = 'cr
     INSERT INTO parts_request_events (parts_request_id, event_type, event_message, event_source, payload_json)
     VALUES (?, ?, ?, ?, ?)
   `).run(partsRequestId, eventType, s(eventMessage), s(eventSource), payload ? JSON.stringify(payload) : null);
+}
+
+function pickDefaultPartsAssigneeUserId() {
+  const row = db.prepare(`
+    SELECT u.id
+    FROM utenti u
+    LEFT JOIN ruoli r ON r.id = u.ruolo_id
+    WHERE u.attivo = 1
+      AND COALESCE(r.nome, '') IN ('commerciale', 'admin', 'superadmin', 'amministrazione', 'logistica')
+    ORDER BY
+      CASE COALESCE(r.nome, '')
+        WHEN 'commerciale' THEN 1
+        WHEN 'admin' THEN 2
+        WHEN 'superadmin' THEN 3
+        WHEN 'amministrazione' THEN 4
+        WHEN 'logistica' THEN 5
+        ELSE 99
+      END,
+      u.id ASC
+    LIMIT 1
+  `).get();
+  return i(row?.id);
+}
+
+function getPartsAttentionUserIds() {
+  return db.prepare(`
+    SELECT u.id
+    FROM utenti u
+    LEFT JOIN ruoli r ON r.id = u.ruolo_id
+    WHERE u.attivo = 1
+      AND COALESCE(r.nome, '') IN ('commerciale', 'admin', 'superadmin', 'amministrazione', 'logistica')
+    ORDER BY u.id ASC
+  `).all().map((row) => i(row.id)).filter(Boolean);
+}
+
+function getPartsEscalationWindowSeconds() {
+  const parsed = parseInt(process.env.PARTS_ESCALATION_WINDOW_SECONDS || '60', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 60;
+}
+
+function notifyAndEscalatePartsRequest(partsRequestId, reason = 'manual_review_required', extra = {}) {
+  if (!partsRequestId) return false;
+  const alreadyEscalated = db.prepare(`
+    SELECT id
+    FROM parts_request_events
+    WHERE parts_request_id = ?
+      AND event_type = 'richiesta_escalata_operatore'
+    LIMIT 1
+  `).get(partsRequestId);
+  if (alreadyEscalated) return false;
+
+  const request = db.prepare(`
+    SELECT id, request_uuid, user_phone, plate, vin, oe_code, requested_part_text, normalized_part_name, normalized_part_category, assigned_to_user_id
+    FROM parts_requests
+    WHERE id = ?
+  `).get(partsRequestId);
+  if (!request) return false;
+
+  const assigneeId = i(request.assigned_to_user_id) || pickDefaultPartsAssigneeUserId();
+  if (assigneeId) {
+    db.prepare(`
+      UPDATE parts_requests
+      SET assigned_to_user_id = COALESCE(assigned_to_user_id, ?),
+          updated_at = datetime('now')
+      WHERE id = ?
+    `).run(assigneeId, partsRequestId);
+  }
+
+  logPartEvent(partsRequestId, 'richiesta_escalata_operatore', 'Richiesta girata a operatore per evitare stallo del flusso', 'crm', {
+    reason,
+    assigned_to_user_id: assigneeId,
+    ...extra
+  });
+
+  const title = `Richiesta ricambi da presidiare #${request.id}`;
+  const body = [
+    request.normalized_part_name || request.requested_part_text || 'Richiesta ricambi',
+    request.plate ? `targa ${request.plate}` : null,
+    request.vin ? `VIN ${request.vin}` : null,
+    reason === 'service_not_available' ? 'servizio automatico non ancora disponibile' : 'nessun esito automatico entro la soglia prevista'
+  ].filter(Boolean).join(' • ');
+
+  const userIds = getPartsAttentionUserIds();
+  if (userIds.length) {
+    createNotificationsForUserIds(userIds, {
+      tipo: 'ricambi_attention',
+      titolo: title,
+      messaggio: body,
+      livello_urgenza: 'alta',
+      entita_tipo: 'parts_request',
+      entita_id: partsRequestId,
+      uniqueSuffix: `parts-escalation:${reason}`
+    });
+  }
+
+  return true;
 }
 
 function closeStalePartsRequestsForPhone(phone) {
@@ -754,6 +852,57 @@ function buildIntakeDecision(slots = {}) {
       }
       return { ready: true, stage: 'ready_for_ai', pendingSlot: null, question: null };
   }
+}
+
+function buildFallbackMissingDataQuestion(slots = {}, evidence = null) {
+  if (s(evidence?.next_best_question)) return s(evidence.next_best_question);
+  if (!slots.plate && !slots.vin && !slots.oe_code) {
+    return 'Per procedere ho bisogno di almeno uno tra targa, VIN o codice OE del ricambio.';
+  }
+  if (!slots.part_name) {
+    return 'Ho preso i dati tecnici principali. Dimmi ora quale ricambio ti serve esattamente.';
+  }
+  return 'Ho raccolto parte dei dati, ma mi serve ancora un dettaglio in piu per procedere correttamente.';
+}
+
+function buildServiceExecutionPlan(slots = {}, suggestedService = '', evidence = null, normalizedPart = null) {
+  const category = s(slots.part_category) || s(normalizedPart?.category) || guessPartCategory(slots.part_name || '');
+  const partName = s(slots.part_name) || s(normalizedPart?.name) || '';
+  const hasPlate = !!s(slots.plate);
+  const hasVin = !!s(slots.vin);
+  const hasOe = !!s(slots.oe_code);
+  const hasVehicleKey = hasPlate || hasVin;
+  const hasLookupKey = hasVehicleKey || hasOe;
+
+  if (!hasLookupKey) {
+    return {
+      mode: 'waiting_data',
+      missing: ['plate_or_vin_or_oe'],
+      question: buildFallbackMissingDataQuestion(slots, evidence)
+    };
+  }
+
+  if (!partName && !hasOe) {
+    return {
+      mode: 'waiting_data',
+      missing: ['part_name'],
+      question: buildFallbackMissingDataQuestion(slots, evidence)
+    };
+  }
+
+  if (category === 'cristalli' && hasPlate && partName) {
+    return {
+      mode: 'execute_service',
+      service: 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2'
+    };
+  }
+
+  return {
+    mode: 'escalate_service_pending',
+    service: s(suggestedService) || `CATEGORY_${String(category || 'GENERIC').toUpperCase()}_PENDING`,
+    category,
+    message: 'Ho raccolto i dati necessari della richiesta. La giro subito al reparto tecnico per usare il servizio piu adatto appena disponibile.'
+  };
 }
 
 function parseBackendUrl() {
@@ -2368,10 +2517,10 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     context: previousContext,
     intakeState: { slots: intakeSlots }
   });
-  const glassEligible = ai.request_is_valid !== false
-    && parsed.plate
-    && finalSlots.part_category === 'cristalli'
-    && (String(ai.suggested_service || '') === 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2' || normalizedPart.category === 'cristalli');
+  const servicePlan = buildServiceExecutionPlan(finalSlots, ai.suggested_service || evidence.suggested_service || '', evidence, normalizedPart);
+  const glassEligible = servicePlan.mode === 'execute_service'
+    && servicePlan.service === 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2'
+    && ai.request_is_valid !== false;
 
   let glassCatalog = { status: 'SKIPPED', message: 'Nessun servizio tecnico eseguito', items: [] };
   let whatsappText = s(ai.operator_reply_text) || '';
@@ -2396,11 +2545,11 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
       whatsappText = whatsappText || 'Ho identificato una richiesta cristalli, ma dalla sola targa non emerge un risultato univoco. Indicami meglio quale vetro o allega una foto del ricambio.';
       status = 'in_attesa_verifica_tecnica';
     }
-  } else if (!parsed.plate) {
-    whatsappText = whatsappText || 'Per usare i servizi attivi oggi ho bisogno almeno della targa. Inviami targa e tipo di cristallo/ricambio richiesto.';
+  } else if (servicePlan.mode === 'waiting_data') {
+    whatsappText = whatsappText || servicePlan.question || buildFallbackMissingDataQuestion(finalSlots, evidence);
     status = 'in_attesa_dati_cliente';
-  } else if (normalizedPart.category !== 'cristalli') {
-    whatsappText = whatsappText || 'Ho raccolto i dati essenziali della richiesta. La inoltro per verifica tecnica e preparazione ricambio.';
+  } else if (servicePlan.mode === 'escalate_service_pending') {
+    whatsappText = whatsappText || servicePlan.message;
     status = 'in_attesa_verifica_tecnica';
   }
 
@@ -2414,18 +2563,23 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     oeCatalog: {},
     oeResults: glassCatalog.items || [],
     equivalents: {},
-    missingData: ai.missing_data || evidence.missing_fields || [],
+    missingData: ai.missing_data || evidence.missing_fields || (servicePlan.missing || []),
     whatsappText,
+    escalationRequired: servicePlan.mode === 'escalate_service_pending',
     aiRequest: {
       intent: ai.intent || 'automotive_parts_resolution',
       request_is_valid: ai.request_is_valid !== false,
-      suggested_service: ai.suggested_service || (glassEligible ? 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2' : 'MANUAL_REVIEW'),
+      suggested_service: ai.suggested_service || servicePlan.service || (glassEligible ? 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2' : 'MANUAL_REVIEW'),
       instruction: 'Triage AI e scelta del servizio RTWS piu utile con minimizzazione dei falsi positivi.',
       availableSources: ['OPENAI', 'RTWS_LISTINI', 'RTWS_BDRT'],
       parsed,
       normalizedPart,
       intakeSlots: finalSlots,
-      intakeDecision: { ready: true, stage: glassEligible ? 'ready_for_service' : 'ready_for_ai' },
+      intakeDecision: {
+        ready: servicePlan.mode === 'execute_service',
+        stage: glassEligible ? 'ready_for_service' : (servicePlan.mode === 'waiting_data' ? 'waiting_data' : 'manual_review')
+      },
+      servicePlan,
       evidenceAnalysis: evidence,
       mediaAnalysis: mediaAi,
       extraction: {
@@ -2453,9 +2607,13 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     aiSummary: s(ai.ai_summary) || null,
     resolvedStatus: status,
     intakeState: {
-      stage: glassEligible && selectedItem && options.length <= 1 && confidentSelection ? 'waiting_quote_pdf_confirmation' : (glassEligible ? 'ready_for_service' : 'ready_for_ai'),
+      stage: glassEligible && selectedItem && options.length <= 1 && confidentSelection
+        ? 'waiting_quote_pdf_confirmation'
+        : (glassEligible ? 'ready_for_service' : (servicePlan.mode === 'waiting_data' ? 'waiting_data' : 'manual_review')),
       pendingSlot: glassEligible && selectedItem && options.length <= 1 && confidentSelection ? 'quote_pdf_confirmation' : null,
-      pendingQuestion: glassEligible && selectedItem && options.length <= 1 && confidentSelection ? 'Vuoi che ti prepari subito un preventivo PDF? Rispondi SI oppure NO.' : null,
+      pendingQuestion: glassEligible && selectedItem && options.length <= 1 && confidentSelection
+        ? 'Vuoi che ti prepari subito un preventivo PDF? Rispondi SI oppure NO.'
+        : (servicePlan.mode === 'waiting_data' ? (servicePlan.question || buildFallbackMissingDataQuestion(finalSlots, evidence)) : null),
       slots: {
         ...finalSlots,
         oe_code: glassEligible && selectedItem && confidentSelection ? (selectedItem.oe_code || finalSlots.oe_code || '') : (finalSlots.oe_code || ''),
@@ -2722,6 +2880,40 @@ function enqueueInboundPartsMessage(payload) {
   return next;
 }
 
+function scanAndEscalateAgedPartsRequests() {
+  const windowSeconds = getPartsEscalationWindowSeconds();
+  const rows = db.prepare(`
+    SELECT id, request_uuid, status, updated_at, last_message_at
+    FROM parts_requests
+    WHERE status IN (${PARTS_OPEN_STATUSES.map(() => '?').join(', ')})
+      AND COALESCE(last_message_at, updated_at, created_at) < datetime('now', ?)
+    ORDER BY updated_at ASC, id ASC
+    LIMIT 50
+  `).all(...PARTS_OPEN_STATUSES, `-${windowSeconds} seconds`);
+
+  rows.forEach((row) => {
+    notifyAndEscalatePartsRequest(row.id, 'timeout_1m', {
+      inactivity_window_seconds: windowSeconds,
+      request_uuid: row.request_uuid,
+      status: row.status
+    });
+  });
+}
+
+function startPartsAttentionWatchdog() {
+  if (partsAttentionWatchdogStarted) return;
+  partsAttentionWatchdogStarted = true;
+  setInterval(() => {
+    try {
+      scanAndEscalateAgedPartsRequests();
+    } catch (error) {
+      console.error('parts attention watchdog error', error);
+    }
+  }, 60000);
+}
+
+startPartsAttentionWatchdog();
+
 async function processInboundPartsMessage({
   channel,
   userKey,
@@ -2968,6 +3160,13 @@ async function processInboundPartsMessage({
             channel
           });
         }
+      }
+
+      if (resolved.escalationRequired) {
+        notifyAndEscalatePartsRequest(partsRequestId, 'service_not_available', {
+          suggested_service: resolved.aiRequest?.suggested_service || null,
+          normalized_part_category: resolved.normalizedPart?.category || null
+        });
       }
     }
 
