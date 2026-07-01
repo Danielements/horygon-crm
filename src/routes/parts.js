@@ -211,9 +211,15 @@ function isGenericVehicleDocumentLabel(value) {
   ].includes(normalized);
 }
 
+function isVehicleDocumentMediaKind(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return /(libretto|carta di circolazione|documento|document)/.test(normalized);
+}
+
 function shouldTrustMediaPartExtraction(mediaData = null, bodyText = '') {
   if (!mediaData) return false;
   if (!isSyntheticInboundPlaceholder(bodyText) && s(bodyText)) return true;
+  if (isVehicleDocumentMediaKind(mediaData?.media_kind)) return false;
   if (s(mediaData?.oe_code)) return true;
   const partName = s(mediaData?.normalized_part_name) || s(mediaData?.requested_part_text) || '';
   const category = normalizePartCategory(mediaData?.normalized_part_category, partName);
@@ -223,6 +229,7 @@ function shouldTrustMediaPartExtraction(mediaData = null, bodyText = '') {
 function shouldTrustEvidencePartExtraction(evidence = null, bodyText = '') {
   if (!evidence) return false;
   if (!isSyntheticInboundPlaceholder(bodyText) && s(bodyText)) return true;
+  if (isVehicleDocumentMediaKind(evidence?.detected_subject) || isVehicleDocumentMediaKind(evidence?.media_kind)) return false;
   if (s(evidence?.oe_code)) return true;
   const partName = s(evidence?.normalized_part_name) || s(evidence?.requested_part_text) || '';
   const category = normalizePartCategory(evidence?.normalized_part_category, partName);
