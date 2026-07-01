@@ -2321,6 +2321,10 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
 
   const previousContext = context || {};
   const previousIntakeState = intakeState || { slots: {} };
+  const earlyPlate = normalizePlate(extractPlateFromText(text));
+  const earlyVin = extractVinFromText(text);
+  const earlyOeCode = sanitizeOeCode(extractOeCodeFromText(text), earlyPlate);
+  const earlyExplicitPart = deriveExplicitPartRequest(text, earlyPlate, earlyVin, earlyOeCode);
   const masterCase = classifyInboundCase({ text, mediaAi });
   const sessionIntent = detectSessionKeywordIntent(text);
   const currentPartSummary = buildCurrentPartSummary(previousIntakeState.slots || {}, previousContext);
@@ -2329,6 +2333,9 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   const noAnswer = /^(no|no grazie|annulla|non ora)$/i.test(normalizedAnswer);
   const variantsRequest = /^(mostra( tutte)?( le)? varianti|varianti|altre varianti)$/i.test(text);
   const numericSelection = text.match(/^\s*(\d{1,2})\s*$/);
+  const bypassPendingForFreshRequest = !!earlyExplicitPart
+    && !!(earlyPlate || earlyVin || earlyOeCode)
+    && ['ambiguous_code_type', 'session_action', 'quote_pdf_confirmation'].includes(String(previousIntakeState.pendingSlot || ''));
   const previousOptions = Array.isArray(previousIntakeState.slots?.proposed_glass_options)
     ? previousIntakeState.slots.proposed_glass_options
     : [];
@@ -2382,7 +2389,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     };
   }
 
-  if (previousIntakeState.pendingSlot === 'ambiguous_code_type') {
+  if (previousIntakeState.pendingSlot === 'ambiguous_code_type' && !bypassPendingForFreshRequest) {
     const pendingValue = String(previousIntakeState.slots?.pending_ambiguous_code || '').toUpperCase();
     const resolvedCodeType = detectAmbiguousCodeTypeAnswer(text);
     if (pendingValue && resolvedCodeType) {
@@ -2459,7 +2466,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     };
   }
 
-  if (previousIntakeState.pendingSlot === 'session_action') {
+  if (previousIntakeState.pendingSlot === 'session_action' && !bypassPendingForFreshRequest) {
     const proposedPartName = s(previousIntakeState.slots?.proposed_next_part_name) || '';
     const proposedCategory = s(previousIntakeState.slots?.proposed_next_part_category) || '';
     const baseSlots = previousIntakeState.slots || {};
@@ -2665,7 +2672,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
       intakeState: previousIntakeState
     };
   }
-  if (previousIntakeState.pendingSlot === 'quote_pdf_confirmation') {
+  if (previousIntakeState.pendingSlot === 'quote_pdf_confirmation' && !bypassPendingForFreshRequest) {
     if (variantsRequest && previousOptions.length) {
       const parsed = {
         originalText: text,
@@ -3009,14 +3016,22 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
 
   const fallbackPlate = extractPlateFromText(effectiveText);
   const fallbackVin = extractVinFromText(effectiveText);
-  const fallbackOeCode = extractOeCodeFromText(effectiveText);
+  const fallbackOeCode = sanitizeOeCode(extractOeCodeFromText(effectiveText), fallbackPlate);
   const basePlate = normalizePlate(fallbackPlate || s(evidence.plate) || mediaAi?.plate || previousContext.plate || previousIntakeState.slots?.plate || '');
   const baseVin = fallbackVin || s(evidence.vin) || s(mediaAi?.vin) || s(previousContext.vin) || s(previousIntakeState.slots?.vin) || '';
-  const baseOeCode = fallbackOeCode || s(evidence.oe_code) || s(mediaAi?.oe_code) || s(previousContext.oe_code) || s(previousIntakeState.slots?.oe_code) || '';
+  const baseOeCode = sanitizeOeCode(
+    fallbackOeCode || s(evidence.oe_code) || s(mediaAi?.oe_code) || s(previousContext.oe_code) || s(previousIntakeState.slots?.oe_code) || '',
+    basePlate
+  );
   const explicitBodyPartText = deriveExplicitPartRequest(text, basePlate, baseVin, baseOeCode);
   const explicitEffectivePartText = (!isSyntheticInboundPlaceholder(text) && text)
     ? deriveExplicitPartRequest(effectiveText, basePlate, baseVin, baseOeCode)
     : '';
+  const currentMessageGlassPosition = detectGlassPosition(`${explicitBodyPartText || ''} ${explicitEffectivePartText || ''} ${text}`.trim());
+  const currentMessageSide = detectSide(`${explicitBodyPartText || ''} ${explicitEffectivePartText || ''} ${text}`.trim());
+  const currentMessageAxle = detectAxle(`${explicitBodyPartText || ''} ${explicitEffectivePartText || ''} ${text}`.trim());
+  const currentMessageBrakeComponent = detectBrakeComponent(`${explicitBodyPartText || ''} ${explicitEffectivePartText || ''} ${text}`.trim());
+  const currentMessageFilterType = detectFilterType(`${explicitBodyPartText || ''} ${explicitEffectivePartText || ''} ${text}`.trim());
   const baseRequestedPartText = explicitBodyPartText
     || explicitEffectivePartText
     || (useEvidencePartExtraction ? s(evidence.requested_part_text) : null)
@@ -3030,6 +3045,8 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   const previousOpenPart = buildCurrentPartSummary(previousIntakeState.slots || {}, previousContext);
   const incomingExplicitPart = explicitBodyPartText || explicitEffectivePartText || '';
   if (
+    !selfContainedFreshRequest
+    &&
     previousOpenPart
     && incomingExplicitPart
     && !isOperationalFeedbackMessage(incomingExplicitPart)
@@ -3160,24 +3177,24 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   const mergedIntakeSlots = mergeIntakeSlots({
     parsed: preliminaryParsed,
     normalizedPart: preliminaryNormalizedPart,
-    context: previousContext,
-    intakeState: previousIntakeState
+    context: selfContainedFreshRequest ? {} : previousContext,
+    intakeState: selfContainedFreshRequest ? { slots: {} } : previousIntakeState
   });
   const intakeSlots = {
     ...mergedIntakeSlots,
     plate: normalizePlate(s(evidence.plate) || mergedIntakeSlots.plate || ''),
     vin: s(evidence.vin) || mergedIntakeSlots.vin || '',
-    oe_code: s(evidence.oe_code) || mergedIntakeSlots.oe_code || '',
+    oe_code: sanitizeOeCode(s(evidence.oe_code) || mergedIntakeSlots.oe_code || '', normalizePlate(s(evidence.plate) || mergedIntakeSlots.plate || '')),
     part_category: normalizePartCategory(
       (useEvidencePartExtraction ? s(evidence.normalized_part_category) : null) || mergedIntakeSlots.part_category,
       (useEvidencePartExtraction ? (s(evidence.normalized_part_name) || s(evidence.requested_part_text)) : null) || mergedIntakeSlots.part_name || ''
     ),
     part_name: (useEvidencePartExtraction ? (s(evidence.normalized_part_name) || s(evidence.requested_part_text)) : null) || mergedIntakeSlots.part_name || '',
-    glass_position: s(evidence.glass_position) || mergedIntakeSlots.glass_position || '',
-    side: s(evidence.side) || mergedIntakeSlots.side || '',
-    axle: s(evidence.axle) || mergedIntakeSlots.axle || '',
-    brake_component: s(evidence.brake_component) || mergedIntakeSlots.brake_component || '',
-    filter_type: s(evidence.filter_type) || mergedIntakeSlots.filter_type || ''
+    glass_position: currentMessageGlassPosition || s(evidence.glass_position) || mergedIntakeSlots.glass_position || '',
+    side: currentMessageSide || s(evidence.side) || mergedIntakeSlots.side || '',
+    axle: currentMessageAxle || s(evidence.axle) || mergedIntakeSlots.axle || '',
+    brake_component: currentMessageBrakeComponent || s(evidence.brake_component) || mergedIntakeSlots.brake_component || '',
+    filter_type: currentMessageFilterType || s(evidence.filter_type) || mergedIntakeSlots.filter_type || ''
   };
   const intakeDecision = buildIntakeDecision(intakeSlots);
   const parsed = {
