@@ -25,6 +25,22 @@ function buildInboundMessagePlaceholder(messageType = 'text', mediaUrl = null) {
   return '[messaggio senza testo]';
 }
 
+function isSyntheticInboundPlaceholder(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return [
+    '[foto ricevuta]',
+    '[documento ricevuto]',
+    '[audio ricevuto]',
+    '[allegato ricevuto]',
+    '[messaggio senza testo]',
+    'foto ricevuta',
+    'documento ricevuto',
+    'audio ricevuto',
+    'allegato ricevuto',
+    'messaggio senza testo'
+  ].includes(normalized);
+}
+
 function i(value) {
   const parsed = parseInt(value, 10);
   return Number.isNaN(parsed) ? null : parsed;
@@ -111,6 +127,7 @@ function extractOeCodeFromText(value) {
 }
 
 function deriveRequestedPartText(value, plate = '', vin = '', oeCode = '') {
+  if (isSyntheticInboundPlaceholder(value)) return '';
   let text = String(value || '');
 
   [plate, vin, oeCode].filter(Boolean).forEach((token) => {
@@ -1073,7 +1090,7 @@ function guessFilenameFromMimeType(mimeType, fallbackBase = 'media') {
 
 function buildMediaDerivedMessageText(bodyText, mediaData) {
   const bits = [
-    s(bodyText),
+    isSyntheticInboundPlaceholder(bodyText) ? null : s(bodyText),
     s(mediaData?.requested_part_text),
     s(mediaData?.normalized_part_name),
     s(mediaData?.plate) ? `targa ${normalizePlate(mediaData.plate)}` : null,
@@ -1431,6 +1448,118 @@ async function triangulateWithOpenAI(messageText) {
   }
 }
 
+async function analyzeInboundEvidenceWithOpenAI({
+  messageText,
+  mediaAnalysis = null,
+  context = null,
+  intakeState = null
+}) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  const cleanMessageText = isSyntheticInboundPlaceholder(messageText) ? '' : String(messageText || '').trim();
+  const mediaData = mediaAnalysis?.data || mediaAnalysis || null;
+  if (!apiKey) {
+    return { skipped: true, reason: 'openai_non_configurato', meta: { model } };
+  }
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.1,
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'parts_inbound_evidence',
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              intent: { type: 'string' },
+              request_is_valid: { type: 'boolean' },
+              detected_subject: { type: 'string' },
+              confidence: { type: 'number' },
+              ai_summary: { type: 'string' },
+              suggested_service: { type: 'string' },
+              requested_part_text: { type: 'string' },
+              normalized_part_name: { type: 'string' },
+              normalized_part_category: { type: 'string' },
+              plate: { type: 'string' },
+              vin: { type: 'string' },
+              oe_code: { type: 'string' },
+              glass_position: { type: 'string' },
+              side: { type: 'string' },
+              axle: { type: 'string' },
+              brake_component: { type: 'string' },
+              filter_type: { type: 'string' },
+              missing_fields: {
+                type: 'array',
+                items: { type: 'string' }
+              },
+              ready_for_service: { type: 'boolean' },
+              next_best_question: { type: 'string' },
+              operator_reply_text: { type: 'string' },
+              status: { type: 'string' }
+            },
+            required: ['intent', 'request_is_valid', 'detected_subject', 'confidence', 'ai_summary', 'suggested_service', 'requested_part_text', 'normalized_part_name', 'normalized_part_category', 'plate', 'vin', 'oe_code', 'glass_position', 'side', 'axle', 'brake_component', 'filter_type', 'missing_fields', 'ready_for_service', 'next_best_question', 'operator_reply_text', 'status']
+          }
+        }
+      },
+      messages: [
+        {
+          role: 'system',
+          content: 'Sei il motore di raccolta evidenze di Horygon Parts Systems. Devi raccogliere il prima possibile le informazioni minime per interrogare i webservice ricambi con il minor numero di domande. In input puoi ricevere solo testo, solo foto, o foto con testo. Non inventare dati. Se la foto mostra una targa o un libretto, priorita assoluta a estrarre targa e VIN. Se la foto mostra un pezzo o un etichetta, estrai codice OE, descrizione probabile e categoria. next_best_question deve essere una sola domanda breve e ad alto valore informativo. operator_reply_text deve essere la risposta pronta da inviare al cliente, dinamica e concreta. Se hai gia dati sufficienti per partire con i servizi, ready_for_service=true. normalized_part_category deve essere uno tra cristalli, freni, filtri, retrovisori, illuminazione, ricambio_generico.'
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            message_text: cleanMessageText,
+            media_analysis: mediaData,
+            current_context: context || {},
+            intake_state: intakeState?.slots || {}
+          })
+        }
+      ]
+    })
+  });
+
+  const raw = await response.text();
+  const parsed = parseWhatsappResponseBody(raw);
+  if (!response.ok) {
+    return {
+      skipped: false,
+      error: parsed?.error?.message || raw || `OpenAI evidence HTTP ${response.status}`,
+      meta: { model, statusCode: response.status, raw, parsed }
+    };
+  }
+  const content = parsed?.choices?.[0]?.message?.content;
+  if (!content) {
+    return {
+      skipped: false,
+      error: 'Risposta OpenAI evidence vuota',
+      meta: { model, statusCode: response.status, raw, parsed }
+    };
+  }
+  try {
+    return {
+      skipped: false,
+      data: JSON.parse(content),
+      meta: { model, statusCode: response.status, raw, parsed, content }
+    };
+  } catch {
+    return {
+      skipped: false,
+      error: 'JSON OpenAI evidence non valido',
+      raw: content,
+      meta: { model, statusCode: response.status, raw, parsed, content }
+    };
+  }
+}
+
 function chooseBestGlassItem(items = [], requestedPartText = '') {
   if (!items.length) return null;
   const tokens = String(requestedPartText || '')
@@ -1677,8 +1806,8 @@ async function resolvePartsMessage({ message, channel = 'whatsapp', context = nu
 async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = null, intakeState = null, mediaAnalysis = null }) {
   const text = String(message || '').trim();
   const mediaAi = mediaAnalysis?.data || null;
-  const effectiveText = buildMediaDerivedMessageText(text, mediaAi) || text;
-  if (!effectiveText) return { status: 'ERROR', error: 'message obbligatorio' };
+  const effectiveText = buildMediaDerivedMessageText(text, mediaAi) || text || (mediaAi ? '[evidenza immagine]' : '');
+  if (!effectiveText && !mediaAi) return { status: 'ERROR', error: 'message obbligatorio' };
 
   const previousContext = context || {};
   const previousIntakeState = intakeState || { slots: {} };
@@ -2014,13 +2143,23 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     }
   }
 
+  const evidenceResult = await analyzeInboundEvidenceWithOpenAI({
+    messageText: text,
+    mediaAnalysis,
+    context: previousContext,
+    intakeState: previousIntakeState
+  });
+  const evidence = evidenceResult.data || {};
+
   const fallbackPlate = extractPlateFromText(effectiveText);
   const fallbackVin = extractVinFromText(effectiveText);
   const fallbackOeCode = extractOeCodeFromText(effectiveText);
-  const basePlate = normalizePlate(fallbackPlate || mediaAi?.plate || previousContext.plate || previousIntakeState.slots?.plate || '');
-  const baseVin = fallbackVin || s(mediaAi?.vin) || s(previousContext.vin) || s(previousIntakeState.slots?.vin) || '';
-  const baseOeCode = fallbackOeCode || s(mediaAi?.oe_code) || s(previousContext.oe_code) || s(previousIntakeState.slots?.oe_code) || '';
+  const basePlate = normalizePlate(fallbackPlate || s(evidence.plate) || mediaAi?.plate || previousContext.plate || previousIntakeState.slots?.plate || '');
+  const baseVin = fallbackVin || s(evidence.vin) || s(mediaAi?.vin) || s(previousContext.vin) || s(previousIntakeState.slots?.vin) || '';
+  const baseOeCode = fallbackOeCode || s(evidence.oe_code) || s(mediaAi?.oe_code) || s(previousContext.oe_code) || s(previousIntakeState.slots?.oe_code) || '';
   const baseRequestedPartText = deriveRequestedPartText(effectiveText, basePlate, baseVin, baseOeCode)
+    || s(evidence.requested_part_text)
+    || s(evidence.normalized_part_name)
     || s(mediaAi?.requested_part_text)
     || s(mediaAi?.normalized_part_name)
     || s(previousContext.requested_part_text)
@@ -2036,16 +2175,29 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     confidence: 0
   };
   const preliminaryNormalizedPart = {
-    name: s(mediaAi?.normalized_part_name) || s(previousContext.normalized_part_name) || preliminaryParsed.requestedPartText,
-    category: s(mediaAi?.normalized_part_category) || s(previousContext.normalized_part_category) || guessPartCategory(preliminaryParsed.requestedPartText)
+    name: s(evidence.normalized_part_name) || s(mediaAi?.normalized_part_name) || s(previousContext.normalized_part_name) || preliminaryParsed.requestedPartText,
+    category: s(evidence.normalized_part_category) || s(mediaAi?.normalized_part_category) || s(previousContext.normalized_part_category) || guessPartCategory(preliminaryParsed.requestedPartText)
   };
 
-  const intakeSlots = mergeIntakeSlots({
+  const mergedIntakeSlots = mergeIntakeSlots({
     parsed: preliminaryParsed,
     normalizedPart: preliminaryNormalizedPart,
     context: previousContext,
     intakeState: previousIntakeState
   });
+  const intakeSlots = {
+    ...mergedIntakeSlots,
+    plate: normalizePlate(s(evidence.plate) || mergedIntakeSlots.plate || ''),
+    vin: s(evidence.vin) || mergedIntakeSlots.vin || '',
+    oe_code: s(evidence.oe_code) || mergedIntakeSlots.oe_code || '',
+    part_category: s(evidence.normalized_part_category) || mergedIntakeSlots.part_category || '',
+    part_name: s(evidence.normalized_part_name) || s(evidence.requested_part_text) || mergedIntakeSlots.part_name || '',
+    glass_position: s(evidence.glass_position) || mergedIntakeSlots.glass_position || '',
+    side: s(evidence.side) || mergedIntakeSlots.side || '',
+    axle: s(evidence.axle) || mergedIntakeSlots.axle || '',
+    brake_component: s(evidence.brake_component) || mergedIntakeSlots.brake_component || '',
+    filter_type: s(evidence.filter_type) || mergedIntakeSlots.filter_type || ''
+  };
   const intakeDecision = buildIntakeDecision(intakeSlots);
 
   if (!intakeDecision.ready) {
@@ -2071,34 +2223,37 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
       oeCatalog: {},
       oeResults: [],
       equivalents: {},
-      missingData: intakeDecision.pendingSlot ? [intakeDecision.pendingSlot] : [],
-      whatsappText: s(mediaAi?.followup_question) || intakeDecision.question,
+      missingData: Array.isArray(evidence.missing_fields) && evidence.missing_fields.length
+        ? evidence.missing_fields
+        : (intakeDecision.pendingSlot ? [intakeDecision.pendingSlot] : []),
+      whatsappText: s(evidence.operator_reply_text) || s(evidence.next_best_question) || s(mediaAi?.followup_question) || intakeDecision.question,
       aiRequest: {
-        intent: 'intake_collection',
-        request_is_valid: true,
-        suggested_service: 'WAITING_DATA',
+        intent: evidence.intent || 'intake_collection',
+        request_is_valid: evidence.request_is_valid !== false,
+        suggested_service: evidence.suggested_service || 'WAITING_DATA',
         instruction: 'Raccolta dati progressiva senza chiamata AI finche la richiesta non e completa.',
-        availableSources: ['RULES', 'CONVERSATION_CONTEXT'],
+        availableSources: ['OPENAI', 'RULES', 'CONVERSATION_CONTEXT'],
         parsed,
         normalizedPart,
         intakeSlots,
         intakeDecision,
+        evidenceAnalysis: evidence,
         mediaAnalysis: mediaAi,
         openai: {
-          skipped: true,
-          error: null,
-          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-          statusCode: null,
-          raw: null,
-          parsed: null
+          skipped: !!evidenceResult.skipped,
+          error: evidenceResult.error || null,
+          model: evidenceResult.meta?.model || process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          statusCode: evidenceResult.meta?.statusCode || null,
+          raw: evidenceResult.meta?.content || evidenceResult.meta?.raw || evidenceResult.raw || null,
+          parsed: evidenceResult.data || evidenceResult.meta?.parsed || null
         }
       },
-      aiSummary: null,
-      resolvedStatus: 'in_attesa_dati_cliente',
+      aiSummary: s(evidence.ai_summary) || null,
+      resolvedStatus: s(evidence.status) || 'in_attesa_dati_cliente',
       intakeState: {
         stage: intakeDecision.stage,
         pendingSlot: intakeDecision.pendingSlot,
-        pendingQuestion: intakeDecision.question,
+        pendingQuestion: s(evidence.next_best_question) || intakeDecision.question,
         slots: intakeSlots
       }
     };
@@ -2190,21 +2345,22 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     `Messaggio cliente: ${text || '[vuoto]'}`,
     `Testo ricostruito da messaggio+immagine: ${effectiveText}`,
     `Contesto raccolto: ${JSON.stringify(intakeSlots)}`,
+    evidence ? `Analisi evidenze: ${JSON.stringify(evidence)}` : null,
     mediaAi ? `Analisi immagine: ${JSON.stringify(mediaAi)}` : null
   ].filter(Boolean).join('\n');
   const aiResult = await triangulateWithOpenAI(aiPrompt);
   const ai = aiResult.data || {};
   const parsed = {
     originalText: effectiveText,
-    plate: normalizePlate(ai.plate || mediaAi?.plate || intakeSlots.plate || ''),
-    vin: s(ai.vin) || s(mediaAi?.vin) || intakeSlots.vin || '',
-    oeCode: s(ai.oe_code) || s(mediaAi?.oe_code) || intakeSlots.oe_code || '',
-    requestedPartText: s(ai.requested_part_text) || s(mediaAi?.requested_part_text) || intakeSlots.part_name || preliminaryParsed.requestedPartText,
+    plate: normalizePlate(ai.plate || s(evidence.plate) || mediaAi?.plate || intakeSlots.plate || ''),
+    vin: s(ai.vin) || s(evidence.vin) || s(mediaAi?.vin) || intakeSlots.vin || '',
+    oeCode: s(ai.oe_code) || s(evidence.oe_code) || s(mediaAi?.oe_code) || intakeSlots.oe_code || '',
+    requestedPartText: s(ai.requested_part_text) || s(evidence.requested_part_text) || s(mediaAi?.requested_part_text) || intakeSlots.part_name || preliminaryParsed.requestedPartText,
     confidence: ai.confidence ?? 0
   };
   const normalizedPart = {
-    name: s(ai.normalized_part_name) || s(mediaAi?.normalized_part_name) || intakeSlots.part_name || parsed.requestedPartText,
-    category: s(ai.normalized_part_category) || s(mediaAi?.normalized_part_category) || intakeSlots.part_category || preliminaryNormalizedPart.category
+    name: s(ai.normalized_part_name) || s(evidence.normalized_part_name) || s(mediaAi?.normalized_part_name) || intakeSlots.part_name || parsed.requestedPartText,
+    category: s(ai.normalized_part_category) || s(evidence.normalized_part_category) || s(mediaAi?.normalized_part_category) || intakeSlots.part_category || preliminaryNormalizedPart.category
   };
   const finalSlots = mergeIntakeSlots({
     parsed,
@@ -2258,7 +2414,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     oeCatalog: {},
     oeResults: glassCatalog.items || [],
     equivalents: {},
-    missingData: ai.missing_data || [],
+    missingData: ai.missing_data || evidence.missing_fields || [],
     whatsappText,
     aiRequest: {
       intent: ai.intent || 'automotive_parts_resolution',
@@ -2270,11 +2426,12 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
       normalizedPart,
       intakeSlots: finalSlots,
       intakeDecision: { ready: true, stage: glassEligible ? 'ready_for_service' : 'ready_for_ai' },
+      evidenceAnalysis: evidence,
       mediaAnalysis: mediaAi,
       extraction: {
-        plate_source: ai.plate ? 'openai' : (mediaAi?.plate ? 'media_ai' : (fallbackPlate ? 'regex' : (previousContext.plate || previousIntakeState.slots?.plate ? 'context' : 'missing'))),
-        vin_source: ai.vin ? 'openai' : (mediaAi?.vin ? 'media_ai' : (fallbackVin ? 'regex' : (previousContext.vin || previousIntakeState.slots?.vin ? 'context' : 'missing'))),
-        oe_source: ai.oe_code ? 'openai' : (mediaAi?.oe_code ? 'media_ai' : (fallbackOeCode ? 'regex' : (previousContext.oe_code || previousIntakeState.slots?.oe_code ? 'context' : 'missing')))
+        plate_source: ai.plate ? 'openai' : (evidence.plate ? 'evidence_ai' : (mediaAi?.plate ? 'media_ai' : (fallbackPlate ? 'regex' : (previousContext.plate || previousIntakeState.slots?.plate ? 'context' : 'missing')))),
+        vin_source: ai.vin ? 'openai' : (evidence.vin ? 'evidence_ai' : (mediaAi?.vin ? 'media_ai' : (fallbackVin ? 'regex' : (previousContext.vin || previousIntakeState.slots?.vin ? 'context' : 'missing')))),
+        oe_source: ai.oe_code ? 'openai' : (evidence.oe_code ? 'evidence_ai' : (mediaAi?.oe_code ? 'media_ai' : (fallbackOeCode ? 'regex' : (previousContext.oe_code || previousIntakeState.slots?.oe_code ? 'context' : 'missing'))))
       },
       conversationContext: previousContext ? {
         plate: s(previousContext.plate) || null,
@@ -2674,7 +2831,7 @@ async function processInboundPartsMessage({
     }
 
     const resolved = await resolvePartsMessageV2({
-      message: bodyText || (mediaUrl ? 'foto ricevuta' : ''),
+      message: bodyText || '',
       channel,
       context: conversationContext,
       intakeState,
