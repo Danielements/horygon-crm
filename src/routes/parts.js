@@ -92,6 +92,33 @@ function normalizePlate(value) {
   return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
+function enrichMediaAnalysisData(data = {}) {
+  if (!data || typeof data !== 'object') return data;
+  const visibleText = s(data.visible_text) || '';
+  const summary = s(data.summary) || '';
+  const requestedPartText = s(data.requested_part_text) || '';
+  const normalizedPartName = s(data.normalized_part_name) || '';
+  const extractionText = [visibleText, summary, requestedPartText, normalizedPartName].filter(Boolean).join(' ');
+
+  const plate = normalizePlate(s(data.plate) || extractPlateFromText(extractionText) || '');
+  const vin = s(data.vin) || extractVinFromText(extractionText) || '';
+  const oeCode = s(data.oe_code) || extractOeCodeFromText(extractionText) || '';
+  const normalizedPartCategory = normalizePartCategory(
+    s(data.normalized_part_category),
+    `${requestedPartText} ${normalizedPartName} ${visibleText}`.trim()
+  );
+
+  return {
+    ...data,
+    plate,
+    vin,
+    oe_code: oeCode,
+    normalized_part_category: normalizedPartCategory,
+    requested_part_text: requestedPartText || deriveRequestedPartText(extractionText, plate, vin, oeCode),
+    normalized_part_name: normalizedPartName || requestedPartText || deriveRequestedPartText(extractionText, plate, vin, oeCode)
+  };
+}
+
 function extractPlateFromText(value) {
   const compact = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, ' ');
   const patterns = [
@@ -1520,7 +1547,7 @@ async function analyzeInboundMediaWithOpenAI({ channel, bodyText, mediaUrl, medi
       messages: [
         {
           role: 'system',
-          content: 'Analizza immagini ricevute per richieste ricambi auto. L immagine puo mostrare targa, libretto, etichetta OE oppure il pezzo stesso. Estrai con prudenza solo dati leggibili o altamente probabili. Se l immagine non basta per completare la richiesta, imposta needs_followup=true e scrivi una domanda breve e utile per il riparatore. Usa normalized_part_category tra cristalli, freni, filtri, retrovisori, illuminazione, ricambio_generico.'
+          content: 'Analizza immagini ricevute per richieste ricambi auto. L immagine puo mostrare targa, libretto, etichetta OE oppure il pezzo stesso. Se vedi un libretto o una carta di circolazione, devi trascrivere quanto piu testo utile possibile in visible_text ed estrarre separatamente sia targa sia VIN quando leggibili. Non fermarti al primo identificativo trovato: raccogli tutti i dati tecnici utili presenti nell immagine. Estrai con prudenza solo dati leggibili o altamente probabili. Se l immagine non basta per completare la richiesta, imposta needs_followup=true e scrivi una domanda breve e utile per il riparatore. Usa normalized_part_category tra cristalli, freni, filtri, retrovisori, illuminazione, ricambio_generico.'
         },
         {
           role: 'user',
@@ -1560,9 +1587,10 @@ async function analyzeInboundMediaWithOpenAI({ channel, bodyText, mediaUrl, medi
     };
   }
   try {
+    const parsedData = enrichMediaAnalysisData(JSON.parse(content));
     return {
       skipped: false,
-      data: JSON.parse(content),
+      data: parsedData,
       meta: {
         model,
         statusCode: response.status,
