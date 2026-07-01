@@ -263,6 +263,26 @@ function isGenericVehicleDocumentLabel(value) {
   ].includes(normalized);
 }
 
+function isOperationalFeedbackMessage(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return false;
+  return [
+    'non ci siamo',
+    'non sta funzionando',
+    'non funziona',
+    'non va',
+    'non va bene',
+    'aiuto',
+    'help',
+    'ok',
+    'va bene',
+    'grazie',
+    'no',
+    'si',
+    'sì'
+  ].includes(normalized);
+}
+
 function isVehicleDocumentMediaKind(value) {
   const normalized = String(value || '').trim().toLowerCase();
   return /(libretto|carta di circolazione|documento|document|registration|vehicle registration|registration document|circulation)/.test(normalized);
@@ -423,7 +443,11 @@ function shouldTrustEvidencePartExtraction(evidence = null, bodyText = '') {
 
 function shouldOverridePartSelection(value) {
   const normalized = s(value);
-  return !!normalized && normalized.length >= 3 && !isGenericVehicleDocumentLabel(normalized);
+  if (!normalized || normalized.length < 3) return false;
+  if (isGenericVehicleDocumentLabel(normalized)) return false;
+  if (isOperationalFeedbackMessage(normalized)) return false;
+  if (normalizePartCategory('', normalized) === 'ricambio_generico' && normalized.split(/\s+/).length > 4) return false;
+  return true;
 }
 
 function xmlEscape(value) {
@@ -2175,7 +2199,8 @@ function buildGlassOptionsReplyText(options = [], itemsCount = 0) {
   return lines.join('\n');
 }
 
-async function resolvePartsMessage({ message, channel = 'whatsapp', context = null }) {
+// Legacy resolver kept only as historical reference. Runtime webhook flow uses resolvePartsMessageV2.
+async function legacyResolvePartsMessageUnused({ message, channel = 'whatsapp', context = null }) {
   const text = String(message || '').trim();
   if (!text) return { status: 'ERROR', error: 'message obbligatorio' };
 
@@ -2438,6 +2463,60 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     const proposedPartName = s(previousIntakeState.slots?.proposed_next_part_name) || '';
     const proposedCategory = s(previousIntakeState.slots?.proposed_next_part_category) || '';
     const baseSlots = previousIntakeState.slots || {};
+
+    if (noAnswer) {
+      return {
+        status: 'OK',
+        parsed: {
+          originalText: text,
+          plate: s(baseSlots.plate) || s(previousContext.plate) || '',
+          vin: s(baseSlots.vin) || s(previousContext.vin) || '',
+          oeCode: s(baseSlots.oe_code) || s(previousContext.oe_code) || '',
+          requestedPartText: currentPartSummary || proposedPartName,
+          confidence: 1
+        },
+        vehicle: null,
+        normalizedPart: {
+          name: currentPartSummary || proposedPartName,
+          category: normalizePartCategory(
+            s(baseSlots.part_category) || proposedCategory || s(previousContext.normalized_part_category),
+            currentPartSummary || proposedPartName
+          )
+        },
+        dbrtResult: {},
+        glassCatalog: { status: 'SKIPPED', message: 'Nuovo ricambio non confermato, sessione corrente mantenuta', items: [] },
+        oeCatalog: {},
+        oeResults: [],
+        equivalents: {},
+        missingData: [],
+        whatsappText: currentPartSummary
+          ? `Va bene, continuo con la richiesta aperta per ${currentPartSummary}.`
+          : 'Va bene, continuo con la richiesta aperta.',
+        aiRequest: {
+          intent: 'session_action_cancelled',
+          request_is_valid: true,
+          suggested_service: 'WAITING_DATA',
+          instruction: 'Il cliente non vuole sostituire o aggiungere il nuovo testo rilevato. Mantieni la richiesta corrente.',
+          availableSources: ['KEYWORDS', 'CONVERSATION_CONTEXT'],
+          masterCase,
+          sessionIntent,
+          openai: { skipped: true, error: null, model: null, statusCode: null, raw: null, parsed: null }
+        },
+        aiSummary: 'Richiesta corrente mantenuta, proposta di nuovo ricambio annullata.',
+        resolvedStatus: s(previousContext.status) || 'in_lavorazione',
+        intakeState: {
+          stage: previousIntakeState.stage || 'in_lavorazione',
+          pendingSlot: null,
+          pendingQuestion: null,
+          slots: {
+            ...baseSlots,
+            proposed_next_part_name: '',
+            proposed_next_part_category: '',
+            proposed_next_part_source: ''
+          }
+        }
+      };
+    }
 
     if (sessionIntent === 'replace_part') {
       return {
@@ -2953,7 +3032,9 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   if (
     previousOpenPart
     && incomingExplicitPart
+    && !isOperationalFeedbackMessage(incomingExplicitPart)
     && previousOpenPart.toLowerCase() !== incomingExplicitPart.toLowerCase()
+    && normalizePartCategory('', incomingExplicitPart) !== 'ricambio_generico'
     && previousIntakeState.pendingSlot !== 'quote_pdf_confirmation'
   ) {
     return {
@@ -3099,21 +3180,21 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     filter_type: s(evidence.filter_type) || mergedIntakeSlots.filter_type || ''
   };
   const intakeDecision = buildIntakeDecision(intakeSlots);
+  const parsed = {
+    originalText: text,
+    plate: intakeSlots.plate || '',
+    vin: intakeSlots.vin || '',
+    oeCode: intakeSlots.oe_code || '',
+    requestedPartText: intakeSlots.part_name || preliminaryParsed.requestedPartText,
+    confidence: 0
+  };
+  const normalizedPart = {
+    name: intakeSlots.part_name || parsed.requestedPartText,
+    category: normalizePartCategory(intakeSlots.part_category || preliminaryNormalizedPart.category, intakeSlots.part_name || parsed.requestedPartText)
+  };
 
   if (!intakeDecision.ready) {
-    const waitingQuestion = s(evidence.next_best_question) || s(mediaAi?.followup_question) || intakeDecision.question;
-    const parsed = {
-      originalText: text,
-      plate: intakeSlots.plate || '',
-      vin: intakeSlots.vin || '',
-      oeCode: intakeSlots.oe_code || '',
-      requestedPartText: intakeSlots.part_name || preliminaryParsed.requestedPartText,
-      confidence: 0
-    };
-    const normalizedPart = {
-      name: intakeSlots.part_name || parsed.requestedPartText,
-      category: normalizePartCategory(intakeSlots.part_category || preliminaryNormalizedPart.category, intakeSlots.part_name || parsed.requestedPartText)
-    };
+    const waitingQuestion = intakeDecision.question || s(evidence.next_best_question) || s(mediaAi?.followup_question);
     return {
       status: 'OK',
       parsed,
@@ -3150,7 +3231,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
         }
       },
       aiSummary: s(evidence.ai_summary) || null,
-      resolvedStatus: s(evidence.status) || 'in_attesa_dati_cliente',
+      resolvedStatus: 'in_attesa_dati_cliente',
       intakeState: {
         stage: intakeDecision.stage,
         pendingSlot: intakeDecision.pendingSlot,
@@ -3160,7 +3241,55 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     };
   }
 
-  if (intakeDecision.stage === 'ready_for_service' && intakeSlots.part_category === 'cristalli') {
+  const servicePlan = buildServiceExecutionPlan(intakeSlots, evidence.suggested_service || '', evidence, normalizedPart);
+  if (servicePlan.mode === 'waiting_data') {
+    const waitingQuestion = servicePlan.question || buildFallbackMissingDataQuestion(intakeSlots, evidence);
+    return {
+      status: 'OK',
+      parsed,
+      vehicle: null,
+      normalizedPart,
+      dbrtResult: {},
+      glassCatalog: { status: 'SKIPPED', message: 'In attesa del dato necessario per il servizio', items: [] },
+      oeCatalog: {},
+      oeResults: [],
+      equivalents: {},
+      missingData: servicePlan.missing || [],
+      whatsappText: waitingQuestion,
+      aiRequest: {
+        intent: 'service_waiting_data',
+        request_is_valid: true,
+        suggested_service: 'WAITING_DATA',
+        instruction: 'Dati generali presenti, ma manca ancora il dato minimo richiesto dal servizio tecnico selezionato.',
+        availableSources: ['RULES', 'CONVERSATION_CONTEXT', 'OPENAI'],
+        parsed,
+        normalizedPart,
+        intakeSlots,
+        intakeDecision,
+        servicePlan,
+        evidenceAnalysis: evidence,
+        mediaAnalysis: mediaAi,
+        openai: {
+          skipped: !!evidenceResult.skipped,
+          error: evidenceResult.error || null,
+          model: evidenceResult.meta?.model || process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          statusCode: evidenceResult.meta?.statusCode || null,
+          raw: evidenceResult.meta?.content || evidenceResult.meta?.raw || evidenceResult.raw || null,
+          parsed: evidenceResult.data || evidenceResult.meta?.parsed || null
+        }
+      },
+      aiSummary: s(evidence.ai_summary) || null,
+      resolvedStatus: 'in_attesa_dati_cliente',
+      intakeState: {
+        stage: 'waiting_service_key',
+        pendingSlot: (servicePlan.missing || [])[0] || intakeDecision.pendingSlot || null,
+        pendingQuestion: waitingQuestion,
+        slots: intakeSlots
+      }
+    };
+  }
+
+  if (servicePlan.mode === 'execute_service' && servicePlan.service === 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2' && intakeSlots.part_category === 'cristalli') {
     const parsed = {
       originalText: text,
       plate: intakeSlots.plate || '',
@@ -3217,6 +3346,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
         normalizedPart,
         intakeSlots,
         intakeDecision,
+        servicePlan,
         openai: {
           skipped: true,
           error: null,
@@ -3242,201 +3372,51 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     };
   }
 
-  if (intakeDecision.ready && intakeSlots.part_category && !['', 'ricambio_generico', 'cristalli'].includes(intakeSlots.part_category)) {
-    const parsed = {
-      originalText: effectiveText,
-      plate: intakeSlots.plate || '',
-      vin: intakeSlots.vin || '',
-      oeCode: intakeSlots.oe_code || '',
-      requestedPartText: intakeSlots.part_name || preliminaryParsed.requestedPartText,
-      confidence: 1
-    };
-    const normalizedPart = {
-      name: intakeSlots.part_name || parsed.requestedPartText,
-      category: normalizePartCategory(intakeSlots.part_category || preliminaryNormalizedPart.category, intakeSlots.part_name || parsed.requestedPartText)
-    };
-    const servicePlan = buildServiceExecutionPlan(intakeSlots, evidence.suggested_service || '', evidence, normalizedPart);
-    const whatsappText = servicePlan.message
-      || `Ho raccolto i dati per ${normalizedPart.name || 'il ricambio richiesto'}, ma al momento il servizio automatico per la categoria ${normalizedPart.category} non e ancora disponibile. La richiesta passa in verifica manuale al reparto tecnico.`;
-
-    return {
-      status: 'OK',
-      parsed,
-      vehicle: null,
-      normalizedPart,
-      dbrtResult: {},
-      glassCatalog: { status: 'SKIPPED', message: 'Servizio cristalli non applicabile a questa categoria', items: [] },
-      oeCatalog: {},
-      oeResults: [],
-      equivalents: {},
-      missingData: [],
-      whatsappText,
-      escalationRequired: true,
-      aiRequest: {
-        intent: evidence.intent || 'service_pending_manual_review',
-        request_is_valid: evidence.request_is_valid !== false,
-        suggested_service: servicePlan.service || evidence.suggested_service || 'MANUAL_REVIEW',
-        instruction: 'Categoria riconosciuta con dati tecnici sufficienti, ma servizio RTWS dedicato non ancora disponibile. Passaggio diretto a revisione manuale.',
-        availableSources: ['OPENAI', 'RULES', 'CONVERSATION_CONTEXT'],
-        parsed,
-        normalizedPart,
-        intakeSlots,
-        intakeDecision,
-        evidenceAnalysis: evidence,
-        mediaAnalysis: mediaAi,
-        openai: {
-          skipped: true,
-          error: null,
-          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-          statusCode: null,
-          raw: null,
-          parsed: null
-        }
-      },
-      aiSummary: s(evidence.ai_summary) || null,
-      resolvedStatus: 'in_attesa_verifica_tecnica',
-      intakeState: {
-        stage: 'manual_review',
-        pendingSlot: null,
-        pendingQuestion: null,
-        slots: intakeSlots
-      }
-    };
-  }
-
-  const aiPrompt = [
-    `Messaggio cliente: ${text || '[vuoto]'}`,
-    `Testo ricostruito da messaggio+immagine: ${effectiveText}`,
-    `Contesto raccolto: ${JSON.stringify(intakeSlots)}`,
-    evidence ? `Analisi evidenze: ${JSON.stringify(evidence)}` : null,
-    mediaAi ? `Analisi immagine: ${JSON.stringify(mediaAi)}` : null
-  ].filter(Boolean).join('\n');
-  const aiResult = await triangulateWithOpenAI(aiPrompt);
-  const ai = aiResult.data || {};
-  const parsed = {
-    originalText: effectiveText,
-    plate: normalizePlate(ai.plate || s(evidence.plate) || mediaAi?.plate || intakeSlots.plate || ''),
-    vin: s(ai.vin) || s(evidence.vin) || s(mediaAi?.vin) || intakeSlots.vin || '',
-    oeCode: s(ai.oe_code) || s(evidence.oe_code) || s(mediaAi?.oe_code) || intakeSlots.oe_code || '',
-    requestedPartText: s(ai.requested_part_text) || s(evidence.requested_part_text) || s(mediaAi?.requested_part_text) || intakeSlots.part_name || preliminaryParsed.requestedPartText,
-    confidence: ai.confidence ?? 0
-  };
-  const normalizedPart = {
-    name: s(ai.normalized_part_name) || s(evidence.normalized_part_name) || s(mediaAi?.normalized_part_name) || intakeSlots.part_name || parsed.requestedPartText,
-    category: normalizePartCategory(
-      s(ai.normalized_part_category) || s(evidence.normalized_part_category) || s(mediaAi?.normalized_part_category) || intakeSlots.part_category || preliminaryNormalizedPart.category,
-      s(ai.normalized_part_name) || s(evidence.normalized_part_name) || s(mediaAi?.normalized_part_name) || intakeSlots.part_name || parsed.requestedPartText
-    )
-  };
-  const finalSlots = mergeIntakeSlots({
-    parsed,
-    normalizedPart,
-    context: previousContext,
-    intakeState: { slots: intakeSlots }
-  });
-  const servicePlan = buildServiceExecutionPlan(finalSlots, ai.suggested_service || evidence.suggested_service || '', evidence, normalizedPart);
-  const glassEligible = servicePlan.mode === 'execute_service'
-    && servicePlan.service === 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2'
-    && ai.request_is_valid !== false;
-
-  let glassCatalog = { status: 'SKIPPED', message: 'Nessun servizio tecnico eseguito', items: [] };
-  let whatsappText = s(ai.operator_reply_text) || '';
-  let status = s(ai.status) || 'nuova';
-  let options = [];
-  let selectedItem = null;
-  let confidentSelection = false;
-
-  if (glassEligible) {
-    glassCatalog = await rtwsCheckEurocodeDaTargaOE2({ plate: parsed.plate, oeCode: parsed.oeCode });
-    selectedItem = chooseBestGlassItem(glassCatalog.items, parsed.requestedPartText);
-    options = buildGlassOptions(glassCatalog.items, parsed.requestedPartText);
-    confidentSelection = isConfidentGlassSelection(selectedItem, parsed.requestedPartText, options);
-    if (selectedItem && options.length <= 1 && confidentSelection) {
-      parsed.oeCode = selectedItem.oe_code || parsed.oeCode;
-      whatsappText = buildGlassReplyText(selectedItem, glassCatalog.items.length);
-      status = 'oe_trovato';
-    } else if (options.length > 1) {
-      whatsappText = buildGlassOptionsReplyText(options, glassCatalog.items.length);
-      status = 'in_attesa_verifica_tecnica';
-    } else {
-      whatsappText = whatsappText || 'Ho identificato una richiesta cristalli, ma dalla sola targa non emerge un risultato univoco. Indicami meglio quale vetro o allega una foto del ricambio.';
-      status = 'in_attesa_verifica_tecnica';
-    }
-  } else if (servicePlan.mode === 'waiting_data') {
-    whatsappText = servicePlan.question || buildFallbackMissingDataQuestion(finalSlots, evidence);
-    status = 'in_attesa_dati_cliente';
-  } else if (servicePlan.mode === 'escalate_service_pending') {
-    whatsappText = servicePlan.message || whatsappText;
-    status = 'in_attesa_verifica_tecnica';
-  }
+  const manualReviewMessage = servicePlan.message
+    || `Ho raccolto i dati per ${normalizedPart.name || 'il ricambio richiesto'}, ma al momento il servizio automatico per la categoria ${normalizedPart.category || 'ricambio_generico'} non e ancora disponibile. La richiesta passa in verifica manuale al reparto tecnico.`;
 
   return {
-    status: glassCatalog.status === 'ERROR' ? 'ERROR' : 'OK',
+    status: 'OK',
     parsed,
     vehicle: null,
     normalizedPart,
     dbrtResult: {},
-    glassCatalog,
+    glassCatalog: { status: 'SKIPPED', message: 'Servizio automatico non disponibile per questa categoria', items: [] },
     oeCatalog: {},
-    oeResults: glassCatalog.items || [],
+    oeResults: [],
     equivalents: {},
-    missingData: ai.missing_data || evidence.missing_fields || (servicePlan.missing || []),
-    whatsappText,
-    escalationRequired: servicePlan.mode === 'escalate_service_pending',
+    missingData: [],
+    whatsappText: manualReviewMessage,
+    escalationRequired: true,
     aiRequest: {
-      intent: ai.intent || 'automotive_parts_resolution',
-      request_is_valid: ai.request_is_valid !== false,
-      suggested_service: ai.suggested_service || servicePlan.service || (glassEligible ? 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2' : 'MANUAL_REVIEW'),
-      instruction: 'Triage AI e scelta del servizio RTWS piu utile con minimizzazione dei falsi positivi.',
-      availableSources: ['OPENAI', 'RTWS_LISTINI', 'RTWS_BDRT'],
+      intent: evidence.intent || 'service_pending_manual_review',
+      request_is_valid: evidence.request_is_valid !== false,
+      suggested_service: servicePlan.service || evidence.suggested_service || 'MANUAL_REVIEW',
+      instruction: 'Flusso unico lato server: dati raccolti correttamente, ma servizio dedicato non disponibile. Escalation manuale senza secondo triage AI.',
+      availableSources: ['OPENAI', 'RULES', 'CONVERSATION_CONTEXT'],
       parsed,
       normalizedPart,
-      intakeSlots: finalSlots,
-      intakeDecision: {
-        ready: servicePlan.mode === 'execute_service',
-        stage: glassEligible ? 'ready_for_service' : (servicePlan.mode === 'waiting_data' ? 'waiting_data' : 'manual_review')
-      },
+      intakeSlots,
+      intakeDecision,
       servicePlan,
       evidenceAnalysis: evidence,
       mediaAnalysis: mediaAi,
-      extraction: {
-        plate_source: ai.plate ? 'openai' : (evidence.plate ? 'evidence_ai' : (mediaAi?.plate ? 'media_ai' : (fallbackPlate ? 'regex' : (previousContext.plate || previousIntakeState.slots?.plate ? 'context' : 'missing')))),
-        vin_source: ai.vin ? 'openai' : (evidence.vin ? 'evidence_ai' : (mediaAi?.vin ? 'media_ai' : (fallbackVin ? 'regex' : (previousContext.vin || previousIntakeState.slots?.vin ? 'context' : 'missing')))),
-        oe_source: ai.oe_code ? 'openai' : (evidence.oe_code ? 'evidence_ai' : (mediaAi?.oe_code ? 'media_ai' : (fallbackOeCode ? 'regex' : (previousContext.oe_code || previousIntakeState.slots?.oe_code ? 'context' : 'missing'))))
-      },
-      conversationContext: previousContext ? {
-        plate: s(previousContext.plate) || null,
-        vin: s(previousContext.vin) || null,
-        oe_code: s(previousContext.oe_code) || null,
-        requested_part_text: s(previousContext.requested_part_text) || null,
-        normalized_part_name: s(previousContext.normalized_part_name) || null,
-        normalized_part_category: s(previousContext.normalized_part_category) || null
-      } : null,
       openai: {
-        skipped: !!aiResult.skipped,
-        error: aiResult.error || null,
-        model: aiResult.meta?.model || null,
-        statusCode: aiResult.meta?.statusCode || null,
-        raw: aiResult.meta?.content || aiResult.meta?.raw || aiResult.raw || null,
-        parsed: aiResult.data || aiResult.meta?.parsed || null
+        skipped: !!evidenceResult.skipped,
+        error: evidenceResult.error || null,
+        model: evidenceResult.meta?.model || process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        statusCode: evidenceResult.meta?.statusCode || null,
+        raw: evidenceResult.meta?.content || evidenceResult.meta?.raw || evidenceResult.raw || null,
+        parsed: evidenceResult.data || evidenceResult.meta?.parsed || null
       }
     },
-    aiSummary: s(ai.ai_summary) || null,
-    resolvedStatus: status,
+    aiSummary: s(evidence.ai_summary) || null,
+    resolvedStatus: 'in_attesa_verifica_tecnica',
     intakeState: {
-      stage: glassEligible && selectedItem && options.length <= 1 && confidentSelection
-        ? 'waiting_quote_pdf_confirmation'
-        : (glassEligible ? 'ready_for_service' : (servicePlan.mode === 'waiting_data' ? 'waiting_data' : 'manual_review')),
-      pendingSlot: glassEligible && selectedItem && options.length <= 1 && confidentSelection ? 'quote_pdf_confirmation' : null,
-      pendingQuestion: glassEligible && selectedItem && options.length <= 1 && confidentSelection
-        ? 'Vuoi che ti prepari subito un preventivo PDF? Rispondi SI oppure NO.'
-        : (servicePlan.mode === 'waiting_data' ? (servicePlan.question || buildFallbackMissingDataQuestion(finalSlots, evidence)) : null),
-      slots: {
-        ...finalSlots,
-        oe_code: glassEligible && selectedItem && confidentSelection ? (selectedItem.oe_code || finalSlots.oe_code || '') : (finalSlots.oe_code || ''),
-        selected_glass_option: glassEligible && selectedItem && options.length <= 1 && confidentSelection ? selectedItem : null,
-        proposed_glass_options: options || []
-      }
+      stage: 'manual_review',
+      pendingSlot: null,
+      pendingQuestion: null,
+      slots: intakeSlots
     }
   };
 }
@@ -3688,6 +3668,27 @@ function buildPublicPdfLinkMessage(quote, publicPdfUrl) {
   ].filter(Boolean).join('\n');
 }
 
+function buildFlowMessageCode(resolved = {}) {
+  const intent = String(resolved?.aiRequest?.intent || '').toLowerCase();
+  const stage = String(resolved?.intakeState?.stage || '').toLowerCase();
+  const suggestedService = String(resolved?.aiRequest?.suggested_service || '').toUpperCase();
+
+  if (intent.includes('vehicle_document')) return 'HPS2-DOC';
+  if (intent.includes('ambiguous_code')) return 'HPS2-CODE';
+  if (intent.includes('session_') || stage.includes('session')) return 'HPS2-SESSION';
+  if (intent.includes('quote_pdf') || stage.includes('quote')) return 'HPS2-PDF';
+  if (intent.includes('glass_option') || intent.includes('deterministic_glass') || suggestedService === 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2') return 'HPS2-RTWS';
+  if (resolved?.escalationRequired || stage === 'manual_review') return 'HPS2-MANUAL';
+  return 'HPS2-ASK';
+}
+
+function decorateFlowReplyText(bodyText, resolved = {}) {
+  const text = s(bodyText);
+  if (!text) return '';
+  if (/^\[HPS2-[A-Z]+\]\s/.test(text)) return text;
+  return `[${buildFlowMessageCode(resolved)}] ${text}`;
+}
+
 function enqueueInboundPartsMessage(payload) {
   const run = async () => processInboundPartsMessage(payload);
   const next = partsInboundProcessingQueue.then(run, run);
@@ -3846,6 +3847,9 @@ async function processInboundPartsMessage({
       intakeState,
       mediaAnalysis
     });
+    if (resolved?.whatsappText) {
+      resolved.whatsappText = decorateFlowReplyText(resolved.whatsappText, resolved);
+    }
 
     if (resolved.status === 'ERROR') {
       db.prepare(`UPDATE parts_requests SET status = 'errore_integrazione', updated_at = datetime('now') WHERE id = ?`).run(partsRequestId);
