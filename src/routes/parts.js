@@ -173,6 +173,47 @@ function extractOeCodeFromText(value) {
   return candidates[0] || '';
 }
 
+function hasExplicitPlateLabel(value = '') {
+  return /\b(targa|plate|license plate)\b/i.test(String(value || ''));
+}
+
+function hasExplicitOeLabel(value = '') {
+  return /\b(codice\s*oe|oe\b|oem\b|originale)\b/i.test(String(value || ''));
+}
+
+function extractStandaloneMixedCodeCandidate(value = '') {
+  const compact = String(value || '').toUpperCase();
+  const tokens = [...compact.matchAll(/\b([A-Z0-9]{6,18})\b/g)]
+    .map((match) => match[1])
+    .filter((token) => /\d/.test(token) && /[A-Z]/.test(token));
+  if (tokens.length !== 1) return '';
+  return tokens[0];
+}
+
+function detectAmbiguousCodeTypeAnswer(value = '') {
+  const text = String(value || '').trim().toLowerCase();
+  if (!text) return '';
+  if (/\b(targa|plate)\b/.test(text)) return 'plate';
+  if (/\b(codice\s*oe|oe\b|oem\b|originale)\b/.test(text)) return 'oe_code';
+  return '';
+}
+
+function detectAmbiguousIdentifierCandidate({
+  text = '',
+  plate = '',
+  vin = '',
+  oeCode = '',
+  partName = ''
+} = {}) {
+  if (plate || vin || oeCode) return '';
+  if (hasExplicitPlateLabel(text) || hasExplicitOeLabel(text)) return '';
+  if (partName) return '';
+  const candidate = extractStandaloneMixedCodeCandidate(text);
+  if (!candidate) return '';
+  if (/^[A-HJ-NPR-Z0-9]{17}$/.test(candidate)) return '';
+  return candidate;
+}
+
 function deriveRequestedPartText(value, plate = '', vin = '', oeCode = '') {
   if (isSyntheticInboundPlaceholder(value)) return '';
   let text = String(value || '');
@@ -2316,6 +2357,83 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     };
   }
 
+  if (previousIntakeState.pendingSlot === 'ambiguous_code_type') {
+    const pendingValue = String(previousIntakeState.slots?.pending_ambiguous_code || '').toUpperCase();
+    const resolvedCodeType = detectAmbiguousCodeTypeAnswer(text);
+    if (pendingValue && resolvedCodeType) {
+      const nextSlots = {
+        ...previousIntakeState.slots,
+        pending_ambiguous_code: '',
+        plate: resolvedCodeType === 'plate'
+          ? normalizePlate(pendingValue)
+          : (s(previousIntakeState.slots?.plate) || ''),
+        oe_code: resolvedCodeType === 'oe_code'
+          ? sanitizeOeCode(pendingValue, s(previousIntakeState.slots?.plate) || '')
+          : (s(previousIntakeState.slots?.oe_code) || '')
+      };
+      const nextText = s(previousIntakeState.slots?.pending_ambiguous_part_name)
+        || s(previousIntakeState.slots?.part_name)
+        || text;
+      return resolvePartsMessageV2({
+        message: nextText,
+        channel,
+        context: {
+          ...previousContext,
+          plate: nextSlots.plate || s(previousContext.plate) || '',
+          oe_code: nextSlots.oe_code || s(previousContext.oe_code) || ''
+        },
+        intakeState: {
+          ...previousIntakeState,
+          pendingSlot: null,
+          pendingQuestion: null,
+          slots: {
+            ...nextSlots,
+            pending_ambiguous_part_name: ''
+          }
+        },
+        mediaAnalysis
+      });
+    }
+    return {
+      status: 'OK',
+      parsed: {
+        originalText: text,
+        plate: s(previousIntakeState.slots?.plate) || s(previousContext.plate) || '',
+        vin: s(previousIntakeState.slots?.vin) || s(previousContext.vin) || '',
+        oeCode: s(previousIntakeState.slots?.oe_code) || s(previousContext.oe_code) || '',
+        requestedPartText: s(previousIntakeState.slots?.part_name) || s(previousContext.normalized_part_name) || '',
+        confidence: 0
+      },
+      vehicle: null,
+      normalizedPart: {
+        name: s(previousIntakeState.slots?.part_name) || s(previousContext.normalized_part_name) || '',
+        category: normalizePartCategory(
+          s(previousIntakeState.slots?.part_category) || s(previousContext.normalized_part_category),
+          s(previousIntakeState.slots?.part_name) || s(previousContext.normalized_part_name) || ''
+        )
+      },
+      dbrtResult: {},
+      glassCatalog: { status: 'SKIPPED', message: 'In attesa di chiarimento sul codice ambiguo', items: [] },
+      oeCatalog: {},
+      oeResults: [],
+      equivalents: {},
+      missingData: ['ambiguous_code_type'],
+      whatsappText: `Ho il valore ${pendingValue || 'indicato'} in sospeso. Mi confermi se e una targa oppure un codice OE?`,
+      aiRequest: {
+        intent: 'ambiguous_code_type_repeat',
+        request_is_valid: true,
+        suggested_service: 'WAITING_DATA',
+        instruction: 'Richiesta di chiarimento per distinguere tra targa e codice OE.',
+        availableSources: ['RULES', 'CONVERSATION_CONTEXT'],
+        masterCase,
+        openai: { skipped: true, error: null, model: null, statusCode: null, raw: null, parsed: null }
+      },
+      aiSummary: 'In attesa di conferma se il codice inserito e una targa o un codice OE.',
+      resolvedStatus: 'in_attesa_dati_cliente',
+      intakeState: previousIntakeState
+    };
+  }
+
   if (previousIntakeState.pendingSlot === 'session_action') {
     const proposedPartName = s(previousIntakeState.slots?.proposed_next_part_name) || '';
     const proposedCategory = s(previousIntakeState.slots?.proposed_next_part_category) || '';
@@ -2903,6 +3021,60 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
       preliminaryParsed.requestedPartText
     )
   };
+
+  const ambiguousCandidate = detectAmbiguousIdentifierCandidate({
+    text,
+    plate: preliminaryParsed.plate,
+    vin: preliminaryParsed.vin,
+    oeCode: preliminaryParsed.oeCode,
+    partName: preliminaryParsed.requestedPartText
+  });
+  if (ambiguousCandidate) {
+    return {
+      status: 'OK',
+      parsed: {
+        originalText: text,
+        plate: '',
+        vin: '',
+        oeCode: '',
+        requestedPartText: '',
+        confidence: 0
+      },
+      vehicle: null,
+      normalizedPart: {
+        name: '',
+        category: ''
+      },
+      dbrtResult: {},
+      glassCatalog: { status: 'SKIPPED', message: 'Codice ambiguo rilevato, chiarimento richiesto al cliente', items: [] },
+      oeCatalog: {},
+      oeResults: [],
+      equivalents: {},
+      missingData: ['ambiguous_code_type'],
+      whatsappText: `Ho trovato il valore ${ambiguousCandidate}. Mi confermi se e una targa oppure un codice OE?`,
+      aiRequest: {
+        intent: 'ambiguous_code_type',
+        request_is_valid: true,
+        suggested_service: 'WAITING_DATA',
+        instruction: 'Richiedere al cliente se il valore inserito rappresenta una targa oppure un codice OE.',
+        availableSources: ['RULES', 'CONVERSATION_CONTEXT'],
+        masterCase,
+        openai: { skipped: true, error: null, model: null, statusCode: null, raw: null, parsed: null }
+      },
+      aiSummary: 'Rilevato valore ambiguo da classificare come targa o codice OE.',
+      resolvedStatus: 'in_attesa_dati_cliente',
+      intakeState: {
+        stage: 'waiting_ambiguous_code_type',
+        pendingSlot: 'ambiguous_code_type',
+        pendingQuestion: `Ho trovato il valore ${ambiguousCandidate}. Mi confermi se e una targa oppure un codice OE?`,
+        slots: {
+          ...previousIntakeState.slots,
+          pending_ambiguous_code: ambiguousCandidate,
+          pending_ambiguous_part_name: ''
+        }
+      }
+    };
+  }
 
   const mergedIntakeSlots = mergeIntakeSlots({
     parsed: preliminaryParsed,
