@@ -145,6 +145,44 @@ function deriveRequestedPartText(value, plate = '', vin = '', oeCode = '') {
   return text || String(value || '').trim();
 }
 
+function isGenericVehicleDocumentLabel(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return true;
+  return [
+    'foto ricevuta',
+    'documento ricevuto',
+    'audio ricevuto',
+    'allegato ricevuto',
+    'messaggio senza testo',
+    'libretto',
+    'carta di circolazione',
+    'documento',
+    'documento di registrazione',
+    'documento veicolo',
+    'veicolo',
+    'auto',
+    'automobile',
+    'ricambio',
+    'pezzo'
+  ].includes(normalized);
+}
+
+function shouldTrustMediaPartExtraction(mediaData = null, bodyText = '') {
+  if (!mediaData) return false;
+  if (!isSyntheticInboundPlaceholder(bodyText) && s(bodyText)) return true;
+  if (s(mediaData?.oe_code)) return true;
+  const category = s(mediaData?.normalized_part_category);
+  return !!category && category !== 'ricambio_generico';
+}
+
+function shouldTrustEvidencePartExtraction(evidence = null, bodyText = '') {
+  if (!evidence) return false;
+  if (!isSyntheticInboundPlaceholder(bodyText) && s(bodyText)) return true;
+  if (s(evidence?.oe_code)) return true;
+  const category = s(evidence?.normalized_part_category);
+  return !!category && category !== 'ricambio_generico';
+}
+
 function xmlEscape(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -844,7 +882,7 @@ function buildIntakeDecision(slots = {}) {
       }
       return { ready: true, stage: 'ready_for_ai', pendingSlot: null, question: null };
     default:
-      if (!slots.part_name || slots.part_name.length < 4) {
+      if (!slots.part_name || slots.part_name.length < 4 || isGenericVehicleDocumentLabel(slots.part_name)) {
         return {
           ready: false,
           stage: 'waiting_part_name',
@@ -1240,10 +1278,11 @@ function guessFilenameFromMimeType(mimeType, fallbackBase = 'media') {
 }
 
 function buildMediaDerivedMessageText(bodyText, mediaData) {
+  const includeMediaPart = shouldTrustMediaPartExtraction(mediaData, bodyText);
   const bits = [
     isSyntheticInboundPlaceholder(bodyText) ? null : s(bodyText),
-    s(mediaData?.requested_part_text),
-    s(mediaData?.normalized_part_name),
+    includeMediaPart ? s(mediaData?.requested_part_text) : null,
+    includeMediaPart ? s(mediaData?.normalized_part_name) : null,
     s(mediaData?.plate) ? `targa ${normalizePlate(mediaData.plate)}` : null,
     s(mediaData?.vin) ? `vin ${s(mediaData.vin)}` : null,
     s(mediaData?.oe_code) ? `oe ${s(mediaData.oe_code)}` : null,
@@ -1957,6 +1996,7 @@ async function resolvePartsMessage({ message, channel = 'whatsapp', context = nu
 async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = null, intakeState = null, mediaAnalysis = null }) {
   const text = String(message || '').trim();
   const mediaAi = mediaAnalysis?.data || null;
+  const trustMediaPartExtraction = shouldTrustMediaPartExtraction(mediaAi, text);
   const effectiveText = buildMediaDerivedMessageText(text, mediaAi) || text || (mediaAi ? '[evidenza immagine]' : '');
   if (!effectiveText && !mediaAi) return { status: 'ERROR', error: 'message obbligatorio' };
 
@@ -2301,6 +2341,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     intakeState: previousIntakeState
   });
   const evidence = evidenceResult.data || {};
+  const useEvidencePartExtraction = shouldTrustEvidencePartExtraction(evidence, text);
 
   const fallbackPlate = extractPlateFromText(effectiveText);
   const fallbackVin = extractVinFromText(effectiveText);
@@ -2309,10 +2350,10 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   const baseVin = fallbackVin || s(evidence.vin) || s(mediaAi?.vin) || s(previousContext.vin) || s(previousIntakeState.slots?.vin) || '';
   const baseOeCode = fallbackOeCode || s(evidence.oe_code) || s(mediaAi?.oe_code) || s(previousContext.oe_code) || s(previousIntakeState.slots?.oe_code) || '';
   const baseRequestedPartText = deriveRequestedPartText(effectiveText, basePlate, baseVin, baseOeCode)
-    || s(evidence.requested_part_text)
-    || s(evidence.normalized_part_name)
-    || s(mediaAi?.requested_part_text)
-    || s(mediaAi?.normalized_part_name)
+    || (useEvidencePartExtraction ? s(evidence.requested_part_text) : null)
+    || (useEvidencePartExtraction ? s(evidence.normalized_part_name) : null)
+    || (trustMediaPartExtraction ? s(mediaAi?.requested_part_text) : null)
+    || (trustMediaPartExtraction ? s(mediaAi?.normalized_part_name) : null)
     || s(previousContext.requested_part_text)
     || s(previousContext.normalized_part_name)
     || effectiveText;
@@ -2326,7 +2367,10 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     confidence: 0
   };
   const preliminaryNormalizedPart = {
-    name: s(evidence.normalized_part_name) || s(mediaAi?.normalized_part_name) || s(previousContext.normalized_part_name) || preliminaryParsed.requestedPartText,
+    name: (useEvidencePartExtraction ? s(evidence.normalized_part_name) : null)
+      || (trustMediaPartExtraction ? s(mediaAi?.normalized_part_name) : null)
+      || s(previousContext.normalized_part_name)
+      || preliminaryParsed.requestedPartText,
     category: s(evidence.normalized_part_category) || s(mediaAi?.normalized_part_category) || s(previousContext.normalized_part_category) || guessPartCategory(preliminaryParsed.requestedPartText)
   };
 
@@ -2352,6 +2396,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   const intakeDecision = buildIntakeDecision(intakeSlots);
 
   if (!intakeDecision.ready) {
+    const waitingQuestion = s(evidence.next_best_question) || s(mediaAi?.followup_question) || intakeDecision.question;
     const parsed = {
       originalText: text,
       plate: intakeSlots.plate || '',
@@ -2377,7 +2422,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
       missingData: Array.isArray(evidence.missing_fields) && evidence.missing_fields.length
         ? evidence.missing_fields
         : (intakeDecision.pendingSlot ? [intakeDecision.pendingSlot] : []),
-      whatsappText: s(evidence.operator_reply_text) || s(evidence.next_best_question) || s(mediaAi?.followup_question) || intakeDecision.question,
+      whatsappText: waitingQuestion,
       aiRequest: {
         intent: evidence.intent || 'intake_collection',
         request_is_valid: evidence.request_is_valid !== false,
@@ -2404,7 +2449,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
       intakeState: {
         stage: intakeDecision.stage,
         pendingSlot: intakeDecision.pendingSlot,
-        pendingQuestion: s(evidence.next_best_question) || intakeDecision.question,
+        pendingQuestion: waitingQuestion,
         slots: intakeSlots
       }
     };
@@ -2492,7 +2537,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     };
   }
 
-  if (intakeDecision.ready && intakeSlots.part_category && intakeSlots.part_category !== 'cristalli') {
+  if (intakeDecision.ready && intakeSlots.part_category && !['', 'ricambio_generico', 'cristalli'].includes(intakeSlots.part_category)) {
     const parsed = {
       originalText: effectiveText,
       plate: intakeSlots.plate || '',
