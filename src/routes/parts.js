@@ -92,6 +92,17 @@ function normalizePlate(value) {
   return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
+function sanitizeOeCode(value, plate = '') {
+  const normalized = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const normalizedPlate = normalizePlate(plate);
+  if (!normalized) return '';
+  if (normalized === normalizedPlate) return '';
+  if (/^[A-Z]{2}\d{3}[A-Z]{2}$/.test(normalized)) return '';
+  if (/^[A-Z]{2}\d{4}[A-Z]$/.test(normalized)) return '';
+  if (/^[A-Z]\d{5}[A-Z]$/.test(normalized)) return '';
+  return normalized;
+}
+
 function enrichMediaAnalysisData(data = {}) {
   if (!data || typeof data !== 'object') return data;
   const visibleText = s(data.visible_text) || '';
@@ -107,7 +118,7 @@ function enrichMediaAnalysisData(data = {}) {
 
   const plate = normalizePlate(s(data.plate) || extractPlateFromText(extractionText) || '');
   const vin = s(data.vin) || extractVinFromText(extractionText) || '';
-  const oeCode = s(data.oe_code) || extractOeCodeFromText(extractionText) || '';
+  const oeCode = sanitizeOeCode(s(data.oe_code) || extractOeCodeFromText(extractionText) || '', plate);
   const normalizedPartCategory = normalizePartCategory(
     s(data.normalized_part_category),
     `${requestedPartText} ${normalizedPartName} ${visibleText}`.trim()
@@ -213,14 +224,26 @@ function isGenericVehicleDocumentLabel(value) {
 
 function isVehicleDocumentMediaKind(value) {
   const normalized = String(value || '').trim().toLowerCase();
-  return /(libretto|carta di circolazione|documento|document)/.test(normalized);
+  return /(libretto|carta di circolazione|documento|document|registration|vehicle registration|registration document|circulation)/.test(normalized);
+}
+
+function isLikelyVehicleDocumentAnalysis(mediaAi = null) {
+  if (!mediaAi) return false;
+  const signals = [
+    mediaAi?.media_kind,
+    mediaAi?.detected_subject,
+    mediaAi?.summary,
+    mediaAi?.visible_text
+  ].filter(Boolean).join(' ').toLowerCase();
+  const hasVehicleIds = !!(s(mediaAi?.plate) || s(mediaAi?.vin));
+  return isVehicleDocumentMediaKind(signals) || (hasVehicleIds && !s(mediaAi?.requested_part_text) && !s(mediaAi?.normalized_part_name));
 }
 
 function classifyInboundCase({ text = '', mediaAi = null }) {
   const hasExplicitText = !!(String(text || '').trim() && !isSyntheticInboundPlaceholder(text));
   const mediaKind = String(mediaAi?.media_kind || mediaAi?.detected_subject || '').trim().toLowerCase();
   const hasMedia = !!mediaAi;
-  const isVehicleDocument = hasMedia && isVehicleDocumentMediaKind(mediaKind);
+  const isVehicleDocument = hasMedia && (isVehicleDocumentMediaKind(mediaKind) || isLikelyVehicleDocumentAnalysis(mediaAi));
   const hasMediaPartGuess = !!(s(mediaAi?.normalized_part_name) || s(mediaAi?.requested_part_text));
   const hasMediaOe = !!s(mediaAi?.oe_code);
 
