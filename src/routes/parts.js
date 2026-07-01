@@ -171,7 +171,7 @@ function shouldTrustMediaPartExtraction(mediaData = null, bodyText = '') {
   if (!mediaData) return false;
   if (!isSyntheticInboundPlaceholder(bodyText) && s(bodyText)) return true;
   if (s(mediaData?.oe_code)) return true;
-  const category = s(mediaData?.normalized_part_category);
+  const category = normalizePartCategory(mediaData?.normalized_part_category, `${mediaData?.normalized_part_name || ''} ${mediaData?.requested_part_text || ''}`.trim());
   return !!category && category !== 'ricambio_generico';
 }
 
@@ -179,7 +179,7 @@ function shouldTrustEvidencePartExtraction(evidence = null, bodyText = '') {
   if (!evidence) return false;
   if (!isSyntheticInboundPlaceholder(bodyText) && s(bodyText)) return true;
   if (s(evidence?.oe_code)) return true;
-  const category = s(evidence?.normalized_part_category);
+  const category = normalizePartCategory(evidence?.normalized_part_category, `${evidence?.normalized_part_name || ''} ${evidence?.requested_part_text || ''}`.trim());
   return !!category && category !== 'ricambio_generico';
 }
 
@@ -228,6 +228,19 @@ function guessPartCategory(text) {
   if (/(specchietto|retrovisore)/.test(lower)) return 'retrovisori';
   if (/(fanale|faro|stop)/.test(lower)) return 'illuminazione';
   return 'ricambio_generico';
+}
+
+function normalizePartCategory(value, fallbackText = '') {
+  const raw = s(value);
+  if (!raw) return guessPartCategory(fallbackText);
+  const lower = raw.toLowerCase();
+  if (/(cristall|vetr|glass|windshield|windscreen|parabrezza|lunotto|scendente|raschiavetro|alzacristall)/.test(lower)) return 'cristalli';
+  if (/(fren|brake|pastigli|disch|pinz|tambur|ganasc|ceppi|cilindrett)/.test(lower)) return 'freni';
+  if (/(filtr|filter|olio|aria|abitacolo|carburante)/.test(lower)) return 'filtri';
+  if (/(retrovisor|specchiett|mirror)/.test(lower)) return 'retrovisori';
+  if (/(illuminaz|fanal|faro|stop|light|lamp)/.test(lower)) return 'illuminazione';
+  if (/(generic|generico|ricambio)/.test(lower)) return 'ricambio_generico';
+  return guessPartCategory(`${raw} ${fallbackText}`.trim());
 }
 
 function logPartEvent(partsRequestId, eventType, eventMessage, eventSource = 'crm', payload = null) {
@@ -803,9 +816,12 @@ function mergeIntakeSlots({ parsed, normalizedPart, context, intakeState }) {
     : (shouldOverridePartSelection(parsed?.requestedPartText) ? s(parsed?.requestedPartText) : null);
   const previousPartName = s(existing.part_name) || s(context?.normalized_part_name) || '';
   const partChanged = !!incomingPartName && incomingPartName.toLowerCase() !== previousPartName.toLowerCase();
+  const normalizedIncomingCategory = normalizePartCategory(normalizedPart?.category, incomingPartName || sourceText);
+  const normalizedExistingCategory = normalizePartCategory(existing.part_category, `${existing.part_name || ''} ${sourceText}`.trim());
+  const normalizedContextCategory = normalizePartCategory(context?.normalized_part_category, `${context?.normalized_part_name || ''} ${sourceText}`.trim());
   const category = partChanged
-    ? (s(normalizedPart?.category) || guessPartCategory(incomingPartName || sourceText))
-    : (s(normalizedPart?.category) || s(existing.part_category) || s(context?.normalized_part_category) || guessPartCategory(sourceText));
+    ? (normalizedIncomingCategory || guessPartCategory(incomingPartName || sourceText))
+    : (normalizedIncomingCategory || normalizedExistingCategory || normalizedContextCategory || guessPartCategory(sourceText));
   const partName = incomingPartName || previousPartName || s(parsed?.requestedPartText);
   const keepExistingCategoryDetails = !partChanged;
 
@@ -919,7 +935,7 @@ function buildFallbackMissingDataQuestion(slots = {}, evidence = null) {
 }
 
 function buildServiceExecutionPlan(slots = {}, suggestedService = '', evidence = null, normalizedPart = null) {
-  const category = s(slots.part_category) || s(normalizedPart?.category) || guessPartCategory(slots.part_name || '');
+  const category = normalizePartCategory(s(slots.part_category) || s(normalizedPart?.category), slots.part_name || normalizedPart?.name || '');
   const partName = s(slots.part_name) || s(normalizedPart?.name) || '';
   const hasPlate = !!s(slots.plate);
   const hasVin = !!s(slots.vin);
@@ -2392,7 +2408,10 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
       || (trustMediaPartExtraction ? s(mediaAi?.normalized_part_name) : null)
       || s(previousContext.normalized_part_name)
       || preliminaryParsed.requestedPartText,
-    category: s(evidence.normalized_part_category) || s(mediaAi?.normalized_part_category) || s(previousContext.normalized_part_category) || guessPartCategory(preliminaryParsed.requestedPartText)
+    category: normalizePartCategory(
+      s(evidence.normalized_part_category) || s(mediaAi?.normalized_part_category) || s(previousContext.normalized_part_category),
+      preliminaryParsed.requestedPartText
+    )
   };
 
   const mergedIntakeSlots = mergeIntakeSlots({
@@ -2406,7 +2425,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     plate: normalizePlate(s(evidence.plate) || mergedIntakeSlots.plate || ''),
     vin: s(evidence.vin) || mergedIntakeSlots.vin || '',
     oe_code: s(evidence.oe_code) || mergedIntakeSlots.oe_code || '',
-    part_category: s(evidence.normalized_part_category) || mergedIntakeSlots.part_category || '',
+    part_category: normalizePartCategory(s(evidence.normalized_part_category) || mergedIntakeSlots.part_category, s(evidence.normalized_part_name) || s(evidence.requested_part_text) || mergedIntakeSlots.part_name || ''),
     part_name: s(evidence.normalized_part_name) || s(evidence.requested_part_text) || mergedIntakeSlots.part_name || '',
     glass_position: s(evidence.glass_position) || mergedIntakeSlots.glass_position || '',
     side: s(evidence.side) || mergedIntakeSlots.side || '',
@@ -2428,7 +2447,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     };
     const normalizedPart = {
       name: intakeSlots.part_name || parsed.requestedPartText,
-      category: intakeSlots.part_category || preliminaryNormalizedPart.category
+      category: normalizePartCategory(intakeSlots.part_category || preliminaryNormalizedPart.category, intakeSlots.part_name || parsed.requestedPartText)
     };
     return {
       status: 'OK',
@@ -2569,7 +2588,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     };
     const normalizedPart = {
       name: intakeSlots.part_name || parsed.requestedPartText,
-      category: intakeSlots.part_category || preliminaryNormalizedPart.category
+      category: normalizePartCategory(intakeSlots.part_category || preliminaryNormalizedPart.category, intakeSlots.part_name || parsed.requestedPartText)
     };
     const servicePlan = buildServiceExecutionPlan(intakeSlots, evidence.suggested_service || '', evidence, normalizedPart);
     const whatsappText = servicePlan.message
@@ -2639,7 +2658,10 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   };
   const normalizedPart = {
     name: s(ai.normalized_part_name) || s(evidence.normalized_part_name) || s(mediaAi?.normalized_part_name) || intakeSlots.part_name || parsed.requestedPartText,
-    category: s(ai.normalized_part_category) || s(evidence.normalized_part_category) || s(mediaAi?.normalized_part_category) || intakeSlots.part_category || preliminaryNormalizedPart.category
+    category: normalizePartCategory(
+      s(ai.normalized_part_category) || s(evidence.normalized_part_category) || s(mediaAi?.normalized_part_category) || intakeSlots.part_category || preliminaryNormalizedPart.category,
+      s(ai.normalized_part_name) || s(evidence.normalized_part_name) || s(mediaAi?.normalized_part_name) || intakeSlots.part_name || parsed.requestedPartText
+    )
   };
   const finalSlots = mergeIntakeSlots({
     parsed,
