@@ -2325,6 +2325,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   const earlyVin = extractVinFromText(text);
   const earlyOeCode = sanitizeOeCode(extractOeCodeFromText(text), earlyPlate);
   const earlyExplicitPart = deriveExplicitPartRequest(text, earlyPlate, earlyVin, earlyOeCode);
+  const selfContainedFreshRequest = !!earlyExplicitPart && !!(earlyPlate || earlyVin || earlyOeCode);
   const masterCase = classifyInboundCase({ text, mediaAi });
   const sessionIntent = detectSessionKeywordIntent(text);
   const currentPartSummary = buildCurrentPartSummary(previousIntakeState.slots || {}, previousContext);
@@ -2333,8 +2334,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   const noAnswer = /^(no|no grazie|annulla|non ora)$/i.test(normalizedAnswer);
   const variantsRequest = /^(mostra( tutte)?( le)? varianti|varianti|altre varianti)$/i.test(text);
   const numericSelection = text.match(/^\s*(\d{1,2})\s*$/);
-  const bypassPendingForFreshRequest = !!earlyExplicitPart
-    && !!(earlyPlate || earlyVin || earlyOeCode)
+  const bypassPendingForFreshRequest = selfContainedFreshRequest
     && ['ambiguous_code_type', 'session_action', 'quote_pdf_confirmation'].includes(String(previousIntakeState.pendingSlot || ''));
   const previousOptions = Array.isArray(previousIntakeState.slots?.proposed_glass_options)
     ? previousIntakeState.slots.proposed_glass_options
