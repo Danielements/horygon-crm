@@ -2492,6 +2492,68 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     };
   }
 
+  if (intakeDecision.ready && intakeSlots.part_category && intakeSlots.part_category !== 'cristalli') {
+    const parsed = {
+      originalText: effectiveText,
+      plate: intakeSlots.plate || '',
+      vin: intakeSlots.vin || '',
+      oeCode: intakeSlots.oe_code || '',
+      requestedPartText: intakeSlots.part_name || preliminaryParsed.requestedPartText,
+      confidence: 1
+    };
+    const normalizedPart = {
+      name: intakeSlots.part_name || parsed.requestedPartText,
+      category: intakeSlots.part_category || preliminaryNormalizedPart.category
+    };
+    const servicePlan = buildServiceExecutionPlan(intakeSlots, evidence.suggested_service || '', evidence, normalizedPart);
+    const whatsappText = servicePlan.message
+      || `Ho raccolto i dati per ${normalizedPart.name || 'il ricambio richiesto'}, ma al momento il servizio automatico per la categoria ${normalizedPart.category} non e ancora disponibile. La richiesta passa in verifica manuale al reparto tecnico.`;
+
+    return {
+      status: 'OK',
+      parsed,
+      vehicle: null,
+      normalizedPart,
+      dbrtResult: {},
+      glassCatalog: { status: 'SKIPPED', message: 'Servizio cristalli non applicabile a questa categoria', items: [] },
+      oeCatalog: {},
+      oeResults: [],
+      equivalents: {},
+      missingData: [],
+      whatsappText,
+      escalationRequired: true,
+      aiRequest: {
+        intent: evidence.intent || 'service_pending_manual_review',
+        request_is_valid: evidence.request_is_valid !== false,
+        suggested_service: servicePlan.service || evidence.suggested_service || 'MANUAL_REVIEW',
+        instruction: 'Categoria riconosciuta con dati tecnici sufficienti, ma servizio RTWS dedicato non ancora disponibile. Passaggio diretto a revisione manuale.',
+        availableSources: ['OPENAI', 'RULES', 'CONVERSATION_CONTEXT'],
+        parsed,
+        normalizedPart,
+        intakeSlots,
+        intakeDecision,
+        evidenceAnalysis: evidence,
+        mediaAnalysis: mediaAi,
+        openai: {
+          skipped: true,
+          error: null,
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          statusCode: null,
+          raw: null,
+          parsed: null
+        }
+      },
+      aiSummary: s(evidence.ai_summary) || null,
+      resolvedStatus: 'in_attesa_verifica_tecnica',
+      intakeState: {
+        stage: 'manual_review',
+        pendingSlot: null,
+        pendingQuestion: null,
+        slots: intakeSlots
+      }
+    };
+  }
+
   const aiPrompt = [
     `Messaggio cliente: ${text || '[vuoto]'}`,
     `Testo ricostruito da messaggio+immagine: ${effectiveText}`,
