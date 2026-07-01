@@ -773,12 +773,14 @@ function mergeIntakeSlots({ parsed, normalizedPart, context, intakeState }) {
 }
 
 function buildIntakeDecision(slots = {}) {
-  if (!slots.plate) {
+  const hasLookupKey = !!s(slots.plate) || !!s(slots.vin) || !!s(slots.oe_code);
+
+  if (!hasLookupKey) {
     return {
       ready: false,
-      stage: 'waiting_plate',
-      pendingSlot: 'plate',
-      question: 'Per proseguire ho bisogno della targa del veicolo.'
+      stage: 'waiting_vehicle_key',
+      pendingSlot: 'vehicle_key',
+      question: 'Per proseguire ho bisogno di almeno uno tra targa, VIN o codice OE del ricambio.'
     };
   }
 
@@ -789,7 +791,7 @@ function buildIntakeDecision(slots = {}) {
           ready: false,
           stage: 'waiting_glass_position',
           pendingSlot: 'glass_position',
-          question: 'Ho preso la targa. Dimmi quale cristallo ti serve: parabrezza, lunotto oppure vetro laterale.'
+          question: 'Ho preso i dati tecnici del veicolo. Dimmi quale cristallo ti serve: parabrezza, lunotto oppure vetro laterale.'
         };
       }
       return { ready: true, stage: 'ready_for_service', pendingSlot: null, question: null };
@@ -799,7 +801,7 @@ function buildIntakeDecision(slots = {}) {
           ready: false,
           stage: 'waiting_brake_component',
           pendingSlot: 'brake_component',
-          question: 'Ho preso la targa. Per i freni dimmi se ti servono pastiglie, dischi, pinza o altro.'
+          question: 'Ho preso i dati tecnici del veicolo. Per i freni dimmi se ti servono pastiglie, dischi, pinza o altro.'
         };
       }
       if (!slots.axle) {
@@ -817,7 +819,7 @@ function buildIntakeDecision(slots = {}) {
           ready: false,
           stage: 'waiting_filter_type',
           pendingSlot: 'filter_type',
-          question: 'Ho preso la targa. Dimmi quale filtro ti serve: aria, olio, abitacolo o carburante.'
+          question: 'Ho preso i dati tecnici del veicolo. Dimmi quale filtro ti serve: aria, olio, abitacolo o carburante.'
         };
       }
       return { ready: true, stage: 'ready_for_ai', pendingSlot: null, question: null };
@@ -827,7 +829,7 @@ function buildIntakeDecision(slots = {}) {
           ready: false,
           stage: 'waiting_side',
           pendingSlot: 'side',
-          question: 'Ho preso la targa. Mi serve sapere se il ricambio e destro o sinistro.'
+          question: 'Ho preso i dati tecnici del veicolo. Mi serve sapere se il ricambio e destro o sinistro.'
         };
       }
       return { ready: true, stage: 'ready_for_ai', pendingSlot: null, question: null };
@@ -837,7 +839,7 @@ function buildIntakeDecision(slots = {}) {
           ready: false,
           stage: 'waiting_side',
           pendingSlot: 'side',
-          question: 'Ho preso la targa. Mi confermi se ti serve lato destro o sinistro?'
+          question: 'Ho preso i dati tecnici del veicolo. Mi confermi se ti serve lato destro o sinistro?'
         };
       }
       return { ready: true, stage: 'ready_for_ai', pendingSlot: null, question: null };
@@ -847,7 +849,7 @@ function buildIntakeDecision(slots = {}) {
           ready: false,
           stage: 'waiting_part_name',
           pendingSlot: 'part_name',
-          question: 'Ho preso la targa. Dimmi meglio quale ricambio ti serve.'
+          question: 'Ho preso i dati tecnici del veicolo. Dimmi meglio quale ricambio ti serve.'
         };
       }
       return { ready: true, stage: 'ready_for_ai', pendingSlot: null, question: null };
@@ -1897,8 +1899,8 @@ async function resolvePartsMessage({ message, channel = 'whatsapp', context = nu
       whatsappText = whatsappText || 'Ho identificato una richiesta cristalli, ma dalla sola targa non emerge un risultato univoco. Indicami meglio quale vetro o allega una foto del ricambio.';
       status = 'in_attesa_verifica_tecnica';
     }
-  } else if (!parsed.plate) {
-    whatsappText = whatsappText || 'Per usare i servizi attivi oggi ho bisogno almeno della targa. Inviami targa e tipo di cristallo/ricambio richiesto.';
+  } else if (!parsed.plate && !parsed.vin && !parsed.oeCode) {
+    whatsappText = whatsappText || 'Per usare i servizi attivi oggi ho bisogno di almeno uno tra targa, VIN o codice OE, oltre al tipo di cristallo/ricambio richiesto.';
     status = 'in_attesa_dati_cliente';
   } else if (normalizedPart.category !== 'cristalli') {
     whatsappText = whatsappText || 'Al momento con i servizi RTWS attivi posso lavorare in automatico soprattutto sui cristalli da targa. Ho preso in carico la richiesta e la faccio verificare manualmente.';
