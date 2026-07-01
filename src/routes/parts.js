@@ -99,7 +99,7 @@ function enrichMediaAnalysisData(data = {}) {
   const requestedPartText = s(data.requested_part_text) || '';
   const normalizedPartName = s(data.normalized_part_name) || '';
   const extractionText = [visibleText, summary, requestedPartText, normalizedPartName].filter(Boolean).join(' ');
-  const derivedPartText = deriveRequestedPartText(extractionText, s(data.plate), s(data.vin), s(data.oe_code));
+  const derivedPartText = deriveExplicitPartRequest(extractionText, s(data.plate), s(data.vin), s(data.oe_code));
   const safeDerivedPartText = shouldOverridePartSelection(derivedPartText)
     && normalizePartCategory('', derivedPartText) !== 'ricambio_generico'
     ? derivedPartText
@@ -119,10 +119,10 @@ function enrichMediaAnalysisData(data = {}) {
     vin,
     oe_code: oeCode,
     normalized_part_category: normalizedPartCategory,
-    requested_part_text: shouldOverridePartSelection(requestedPartText) ? requestedPartText : safeDerivedPartText,
+    requested_part_text: deriveExplicitPartRequest(requestedPartText, plate, vin, oeCode) || safeDerivedPartText,
     normalized_part_name: shouldOverridePartSelection(normalizedPartName)
       ? normalizedPartName
-      : (shouldOverridePartSelection(requestedPartText) ? requestedPartText : safeDerivedPartText)
+      : (deriveExplicitPartRequest(requestedPartText, plate, vin, oeCode) || safeDerivedPartText)
   };
 }
 
@@ -179,15 +179,25 @@ function deriveRequestedPartText(value, plate = '', vin = '', oeCode = '') {
   return text || String(value || '').trim();
 }
 
+function deriveExplicitPartRequest(value, plate = '', vin = '', oeCode = '') {
+  const derived = s(deriveRequestedPartText(value, plate, vin, oeCode)) || '';
+  if (!shouldOverridePartSelection(derived)) return '';
+  if (isGenericVehicleDocumentLabel(derived)) return '';
+  if (normalizePartCategory('', derived) === 'ricambio_generico' && derived.split(/\s+/).length > 6) return '';
+  return derived;
+}
+
 function isGenericVehicleDocumentLabel(value) {
   const normalized = String(value || '').trim().toLowerCase();
   if (!normalized) return true;
   return [
+    '[evidenza immagine]',
     'foto ricevuta',
     'documento ricevuto',
     'audio ricevuto',
     'allegato ricevuto',
     'messaggio senza testo',
+    'evidenza immagine',
     'libretto',
     'carta di circolazione',
     'documento',
@@ -2423,14 +2433,19 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   const basePlate = normalizePlate(fallbackPlate || s(evidence.plate) || mediaAi?.plate || previousContext.plate || previousIntakeState.slots?.plate || '');
   const baseVin = fallbackVin || s(evidence.vin) || s(mediaAi?.vin) || s(previousContext.vin) || s(previousIntakeState.slots?.vin) || '';
   const baseOeCode = fallbackOeCode || s(evidence.oe_code) || s(mediaAi?.oe_code) || s(previousContext.oe_code) || s(previousIntakeState.slots?.oe_code) || '';
-  const baseRequestedPartText = deriveRequestedPartText(effectiveText, basePlate, baseVin, baseOeCode)
+  const explicitBodyPartText = deriveExplicitPartRequest(text, basePlate, baseVin, baseOeCode);
+  const explicitEffectivePartText = (!isSyntheticInboundPlaceholder(text) && text)
+    ? deriveExplicitPartRequest(effectiveText, basePlate, baseVin, baseOeCode)
+    : '';
+  const baseRequestedPartText = explicitBodyPartText
+    || explicitEffectivePartText
     || (useEvidencePartExtraction ? s(evidence.requested_part_text) : null)
     || (useEvidencePartExtraction ? s(evidence.normalized_part_name) : null)
     || (trustMediaPartExtraction ? s(mediaAi?.requested_part_text) : null)
     || (trustMediaPartExtraction ? s(mediaAi?.normalized_part_name) : null)
     || s(previousContext.requested_part_text)
     || s(previousContext.normalized_part_name)
-    || effectiveText;
+    || '';
 
   const preliminaryParsed = {
     originalText: effectiveText,
@@ -2462,8 +2477,11 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     plate: normalizePlate(s(evidence.plate) || mergedIntakeSlots.plate || ''),
     vin: s(evidence.vin) || mergedIntakeSlots.vin || '',
     oe_code: s(evidence.oe_code) || mergedIntakeSlots.oe_code || '',
-    part_category: normalizePartCategory(s(evidence.normalized_part_category) || mergedIntakeSlots.part_category, s(evidence.normalized_part_name) || s(evidence.requested_part_text) || mergedIntakeSlots.part_name || ''),
-    part_name: s(evidence.normalized_part_name) || s(evidence.requested_part_text) || mergedIntakeSlots.part_name || '',
+    part_category: normalizePartCategory(
+      (useEvidencePartExtraction ? s(evidence.normalized_part_category) : null) || mergedIntakeSlots.part_category,
+      (useEvidencePartExtraction ? (s(evidence.normalized_part_name) || s(evidence.requested_part_text)) : null) || mergedIntakeSlots.part_name || ''
+    ),
+    part_name: (useEvidencePartExtraction ? (s(evidence.normalized_part_name) || s(evidence.requested_part_text)) : null) || mergedIntakeSlots.part_name || '',
     glass_position: s(evidence.glass_position) || mergedIntakeSlots.glass_position || '',
     side: s(evidence.side) || mergedIntakeSlots.side || '',
     axle: s(evidence.axle) || mergedIntakeSlots.axle || '',
