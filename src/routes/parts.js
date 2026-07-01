@@ -1926,6 +1926,24 @@ function buildGlassOptions(items = [], requestedPartText = '') {
     options.push(entry.item);
   }
 
+  if (!options.length && items.length) {
+    const fallbackRanked = items
+      .map((item) => {
+        const haystack = `${item.description} ${item.oe_code} ${item.eurocode}`.toLowerCase();
+        const score = tokens.reduce((sum, token) => sum + (haystack.includes(token) ? 1 : 0), 0);
+        return { item, score };
+      })
+      .sort((a, b) => b.score - a.score);
+
+    for (const entry of fallbackRanked) {
+      const label = (entry.item.description || entry.item.oe_code || entry.item.eurocode || 'Ricambio cristalli').trim();
+      const key = label.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      options.push(entry.item);
+    }
+  }
+
   return options;
 }
 
