@@ -99,6 +99,11 @@ function enrichMediaAnalysisData(data = {}) {
   const requestedPartText = s(data.requested_part_text) || '';
   const normalizedPartName = s(data.normalized_part_name) || '';
   const extractionText = [visibleText, summary, requestedPartText, normalizedPartName].filter(Boolean).join(' ');
+  const derivedPartText = deriveRequestedPartText(extractionText, s(data.plate), s(data.vin), s(data.oe_code));
+  const safeDerivedPartText = shouldOverridePartSelection(derivedPartText)
+    && normalizePartCategory('', derivedPartText) !== 'ricambio_generico'
+    ? derivedPartText
+    : '';
 
   const plate = normalizePlate(s(data.plate) || extractPlateFromText(extractionText) || '');
   const vin = s(data.vin) || extractVinFromText(extractionText) || '';
@@ -114,8 +119,10 @@ function enrichMediaAnalysisData(data = {}) {
     vin,
     oe_code: oeCode,
     normalized_part_category: normalizedPartCategory,
-    requested_part_text: requestedPartText || deriveRequestedPartText(extractionText, plate, vin, oeCode),
-    normalized_part_name: normalizedPartName || requestedPartText || deriveRequestedPartText(extractionText, plate, vin, oeCode)
+    requested_part_text: shouldOverridePartSelection(requestedPartText) ? requestedPartText : safeDerivedPartText,
+    normalized_part_name: shouldOverridePartSelection(normalizedPartName)
+      ? normalizedPartName
+      : (shouldOverridePartSelection(requestedPartText) ? requestedPartText : safeDerivedPartText)
   };
 }
 
@@ -198,16 +205,18 @@ function shouldTrustMediaPartExtraction(mediaData = null, bodyText = '') {
   if (!mediaData) return false;
   if (!isSyntheticInboundPlaceholder(bodyText) && s(bodyText)) return true;
   if (s(mediaData?.oe_code)) return true;
-  const category = normalizePartCategory(mediaData?.normalized_part_category, `${mediaData?.normalized_part_name || ''} ${mediaData?.requested_part_text || ''}`.trim());
-  return !!category && category !== 'ricambio_generico';
+  const partName = s(mediaData?.normalized_part_name) || s(mediaData?.requested_part_text) || '';
+  const category = normalizePartCategory(mediaData?.normalized_part_category, partName);
+  return shouldOverridePartSelection(partName) && !!category && category !== 'ricambio_generico';
 }
 
 function shouldTrustEvidencePartExtraction(evidence = null, bodyText = '') {
   if (!evidence) return false;
   if (!isSyntheticInboundPlaceholder(bodyText) && s(bodyText)) return true;
   if (s(evidence?.oe_code)) return true;
-  const category = normalizePartCategory(evidence?.normalized_part_category, `${evidence?.normalized_part_name || ''} ${evidence?.requested_part_text || ''}`.trim());
-  return !!category && category !== 'ricambio_generico';
+  const partName = s(evidence?.normalized_part_name) || s(evidence?.requested_part_text) || '';
+  const category = normalizePartCategory(evidence?.normalized_part_category, partName);
+  return shouldOverridePartSelection(partName) && !!category && category !== 'ricambio_generico';
 }
 
 function shouldOverridePartSelection(value) {
