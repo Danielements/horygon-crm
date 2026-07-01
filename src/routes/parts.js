@@ -183,6 +183,11 @@ function shouldTrustEvidencePartExtraction(evidence = null, bodyText = '') {
   return !!category && category !== 'ricambio_generico';
 }
 
+function shouldOverridePartSelection(value) {
+  const normalized = s(value);
+  return !!normalized && normalized.length >= 3 && !isGenericVehicleDocumentLabel(normalized);
+}
+
 function xmlEscape(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -793,8 +798,16 @@ function detectFilterType(text) {
 function mergeIntakeSlots({ parsed, normalizedPart, context, intakeState }) {
   const existing = intakeState?.slots || {};
   const sourceText = `${parsed?.requestedPartText || ''} ${parsed?.originalText || ''} ${normalizedPart?.name || ''}`.trim();
-  const category = s(normalizedPart?.category) || s(existing.part_category) || s(context?.normalized_part_category) || guessPartCategory(sourceText);
-  const partName = s(normalizedPart?.name) || s(existing.part_name) || s(context?.normalized_part_name) || s(parsed?.requestedPartText);
+  const incomingPartName = shouldOverridePartSelection(normalizedPart?.name)
+    ? s(normalizedPart?.name)
+    : (shouldOverridePartSelection(parsed?.requestedPartText) ? s(parsed?.requestedPartText) : null);
+  const previousPartName = s(existing.part_name) || s(context?.normalized_part_name) || '';
+  const partChanged = !!incomingPartName && incomingPartName.toLowerCase() !== previousPartName.toLowerCase();
+  const category = partChanged
+    ? (s(normalizedPart?.category) || guessPartCategory(incomingPartName || sourceText))
+    : (s(normalizedPart?.category) || s(existing.part_category) || s(context?.normalized_part_category) || guessPartCategory(sourceText));
+  const partName = incomingPartName || previousPartName || s(parsed?.requestedPartText);
+  const keepExistingCategoryDetails = !partChanged;
 
   return {
     plate: s(parsed?.plate) || s(existing.plate) || s(context?.plate) || '',
@@ -802,11 +815,11 @@ function mergeIntakeSlots({ parsed, normalizedPart, context, intakeState }) {
     oe_code: s(parsed?.oeCode) || s(existing.oe_code) || s(context?.oe_code) || '',
     part_category: category || '',
     part_name: partName || '',
-    glass_position: detectGlassPosition(sourceText) || s(existing.glass_position) || '',
-    side: detectSide(sourceText) || s(existing.side) || '',
-    axle: detectAxle(sourceText) || s(existing.axle) || '',
-    brake_component: detectBrakeComponent(sourceText) || s(existing.brake_component) || '',
-    filter_type: detectFilterType(sourceText) || s(existing.filter_type) || ''
+    glass_position: detectGlassPosition(sourceText) || (keepExistingCategoryDetails ? s(existing.glass_position) : '') || '',
+    side: detectSide(sourceText) || (keepExistingCategoryDetails ? s(existing.side) : '') || '',
+    axle: detectAxle(sourceText) || (keepExistingCategoryDetails ? s(existing.axle) : '') || '',
+    brake_component: detectBrakeComponent(sourceText) || (keepExistingCategoryDetails ? s(existing.brake_component) : '') || '',
+    filter_type: detectFilterType(sourceText) || (keepExistingCategoryDetails ? s(existing.filter_type) : '') || ''
   };
 }
 
