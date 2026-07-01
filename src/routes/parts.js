@@ -62,8 +62,8 @@ function nowSql() {
 }
 
 function getActiveRequestWindowMinutes() {
-  const parsed = parseInt(process.env.PARTS_ACTIVE_REQUEST_WINDOW_MINUTES || '3', 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
+  const parsed = parseInt(process.env.PARTS_ACTIVE_REQUEST_WINDOW_MINUTES || '30', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 30;
 }
 
 function makeUuid() {
@@ -214,6 +214,127 @@ function isGenericVehicleDocumentLabel(value) {
 function isVehicleDocumentMediaKind(value) {
   const normalized = String(value || '').trim().toLowerCase();
   return /(libretto|carta di circolazione|documento|document)/.test(normalized);
+}
+
+function classifyInboundCase({ text = '', mediaAi = null }) {
+  const hasExplicitText = !!(String(text || '').trim() && !isSyntheticInboundPlaceholder(text));
+  const mediaKind = String(mediaAi?.media_kind || mediaAi?.detected_subject || '').trim().toLowerCase();
+  const hasMedia = !!mediaAi;
+  const isVehicleDocument = hasMedia && isVehicleDocumentMediaKind(mediaKind);
+  const hasMediaPartGuess = !!(s(mediaAi?.normalized_part_name) || s(mediaAi?.requested_part_text));
+  const hasMediaOe = !!s(mediaAi?.oe_code);
+
+  if (isVehicleDocument && hasExplicitText) return 'document_image_plus_text';
+  if (isVehicleDocument) return 'document_image_only';
+  if (hasMedia && hasExplicitText) return 'image_plus_text';
+  if (hasMedia && (hasMediaPartGuess || hasMediaOe)) return 'part_image_only';
+  if (hasMedia) return 'generic_image_only';
+  if (hasExplicitText) return 'text_only';
+  return 'empty';
+}
+
+function detectSessionKeywordIntent(text = '') {
+  const normalized = String(text || '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (/^(chiudi richiesta|chiudi sessione|fine|annulla|termina)$/.test(normalized)) return 'close';
+  if (/^(nuova richiesta|nuovo ricambio|nuovo pezzo)$/.test(normalized)) return 'new_request';
+  if (/^(aggiungi pezzo|aggiungi ricambio|altro pezzo|altro ricambio|aggiungi)$/.test(normalized)) return 'add_part';
+  if (/^(sostituisci|cambia pezzo|cambia ricambio)$/.test(normalized)) return 'replace_part';
+  if (/^(continua richiesta|continua|riprendi)$/.test(normalized)) return 'continue';
+  return '';
+}
+
+function buildCurrentPartSummary(slots = {}, context = {}) {
+  return s(slots.part_name) || s(context.normalized_part_name) || s(context.requested_part_text) || '';
+}
+
+function appendSessionPart(slots = {}, item = {}) {
+  const current = Array.isArray(slots.session_parts) ? slots.session_parts : [];
+  const name = s(item.part_name);
+  if (!name) return current;
+  return [
+    ...current,
+    {
+      part_name: name,
+      part_category: s(item.part_category) || '',
+      plate: s(item.plate) || '',
+      vin: s(item.vin) || '',
+      oe_code: s(item.oe_code) || '',
+      added_at: new Date().toISOString()
+    }
+  ];
+}
+
+function buildVehicleDocumentWaitingResponse({
+  text = '',
+  previousContext = {},
+  previousIntakeState = { slots: {} },
+  mediaAi = null
+}) {
+  const plate = normalizePlate(s(mediaAi?.plate) || s(previousIntakeState.slots?.plate) || s(previousContext.plate) || '');
+  const vin = s(mediaAi?.vin) || s(previousIntakeState.slots?.vin) || s(previousContext.vin) || '';
+  const oeCode = s(mediaAi?.oe_code) || s(previousIntakeState.slots?.oe_code) || s(previousContext.oe_code) || '';
+  const waitingQuestion = 'Ho raccolto i dati del veicolo. Dimmi ora quale ricambio ti serve.';
+  const parsed = {
+    originalText: text || '[foto ricevuta]',
+    plate,
+    vin,
+    oeCode,
+    requestedPartText: '',
+    confidence: Number(mediaAi?.confidence || 0)
+  };
+  const normalizedPart = {
+    name: '',
+    category: 'ricambio_generico'
+  };
+
+  return {
+    status: 'OK',
+    parsed,
+    vehicle: null,
+    normalizedPart,
+    dbrtResult: {},
+    glassCatalog: { status: 'SKIPPED', message: 'Documento veicolo acquisito, in attesa del ricambio richiesto', items: [] },
+    oeCatalog: {},
+    oeResults: [],
+    equivalents: {},
+    missingData: ['part_name'],
+    whatsappText: waitingQuestion,
+    aiRequest: {
+      intent: 'vehicle_document_intake',
+      request_is_valid: true,
+      suggested_service: 'WAITING_DATA',
+      instruction: 'Documento veicolo acquisito nel ramo dedicato. Raccolti i dati tecnici del veicolo, in attesa del ricambio richiesto prima di qualsiasi dispatch ai servizi.',
+      availableSources: ['OPENAI_VISION', 'RULES', 'CONVERSATION_CONTEXT'],
+      parsed,
+      normalizedPart,
+      masterCase: 'document_image_only',
+      mediaAnalysis: mediaAi,
+      openai: {
+        skipped: false,
+        error: null,
+        model: process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        statusCode: null,
+        raw: null,
+        parsed: mediaAi
+      }
+    },
+    aiSummary: s(mediaAi?.summary) || 'Documento veicolo acquisito e dati tecnici estratti.',
+    resolvedStatus: 'in_attesa_dati_cliente',
+    intakeState: {
+      stage: 'waiting_part_name',
+      pendingSlot: 'part_name',
+      pendingQuestion: waitingQuestion,
+      slots: {
+        ...previousIntakeState.slots,
+        plate,
+        vin,
+        oe_code: oeCode,
+        part_category: '',
+        part_name: ''
+      }
+    }
+  };
 }
 
 function shouldTrustMediaPartExtraction(mediaData = null, bodyText = '') {
@@ -2111,6 +2232,9 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
 
   const previousContext = context || {};
   const previousIntakeState = intakeState || { slots: {} };
+  const masterCase = classifyInboundCase({ text, mediaAi });
+  const sessionIntent = detectSessionKeywordIntent(text);
+  const currentPartSummary = buildCurrentPartSummary(previousIntakeState.slots || {}, previousContext);
   const normalizedAnswer = text.toLowerCase();
   const yesAnswer = /^(si|sì|yes|ok|va bene|procedi|confermo)$/i.test(normalizedAnswer);
   const noAnswer = /^(no|no grazie|annulla|non ora)$/i.test(normalizedAnswer);
@@ -2119,6 +2243,208 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   const previousOptions = Array.isArray(previousIntakeState.slots?.proposed_glass_options)
     ? previousIntakeState.slots.proposed_glass_options
     : [];
+
+  if (sessionIntent === 'close') {
+    return {
+      status: 'OK',
+      parsed: {
+        originalText: text,
+        plate: s(previousIntakeState.slots?.plate) || s(previousContext.plate) || '',
+        vin: s(previousIntakeState.slots?.vin) || s(previousContext.vin) || '',
+        oeCode: s(previousIntakeState.slots?.oe_code) || s(previousContext.oe_code) || '',
+        requestedPartText: currentPartSummary,
+        confidence: 1
+      },
+      vehicle: null,
+      normalizedPart: {
+        name: currentPartSummary,
+        category: normalizePartCategory(s(previousIntakeState.slots?.part_category) || s(previousContext.normalized_part_category), currentPartSummary)
+      },
+      dbrtResult: {},
+      glassCatalog: { status: 'SKIPPED', message: 'Sessione chiusa da keyword utente', items: [] },
+      oeCatalog: {},
+      oeResults: [],
+      equivalents: {},
+      missingData: [],
+      whatsappText: currentPartSummary
+        ? `Chiudo la sessione aperta per ${currentPartSummary}. Se ti serve altro puoi inviarmi una nuova richiesta.`
+        : 'Chiudo la sessione aperta. Se ti serve altro puoi inviarmi una nuova richiesta.',
+      aiRequest: {
+        intent: 'session_close',
+        request_is_valid: true,
+        suggested_service: 'WAITING_DATA',
+        instruction: 'Chiusura esplicita della sessione tramite keyword utente.',
+        availableSources: ['KEYWORDS', 'CONVERSATION_CONTEXT'],
+        masterCase,
+        sessionIntent,
+        openai: { skipped: true, error: null, model: null, statusCode: null, raw: null, parsed: null }
+      },
+      aiSummary: 'Sessione chiusa da keyword utente.',
+      resolvedStatus: 'completata',
+      intakeState: {
+        stage: 'session_closed',
+        pendingSlot: null,
+        pendingQuestion: null,
+        slots: {
+          ...previousIntakeState.slots,
+          session_closed_at: new Date().toISOString()
+        }
+      }
+    };
+  }
+
+  if (previousIntakeState.pendingSlot === 'session_action') {
+    const proposedPartName = s(previousIntakeState.slots?.proposed_next_part_name) || '';
+    const proposedCategory = s(previousIntakeState.slots?.proposed_next_part_category) || '';
+    const baseSlots = previousIntakeState.slots || {};
+
+    if (sessionIntent === 'replace_part') {
+      return {
+        status: 'OK',
+        parsed: {
+          originalText: text,
+          plate: s(baseSlots.plate) || s(previousContext.plate) || '',
+          vin: s(baseSlots.vin) || s(previousContext.vin) || '',
+          oeCode: s(baseSlots.oe_code) || s(previousContext.oe_code) || '',
+          requestedPartText: proposedPartName,
+          confidence: 1
+        },
+        vehicle: null,
+        normalizedPart: {
+          name: proposedPartName,
+          category: normalizePartCategory(proposedCategory, proposedPartName)
+        },
+        dbrtResult: {},
+        glassCatalog: { status: 'SKIPPED', message: 'Sostituzione ricambio confermata', items: [] },
+        oeCatalog: {},
+        oeResults: [],
+        equivalents: {},
+        missingData: [],
+        whatsappText: `Perfetto, sostituisco il ricambio corrente con ${proposedPartName}. Procedo con questa nuova ricerca.`,
+        aiRequest: {
+          intent: 'session_replace_part',
+          request_is_valid: true,
+          suggested_service: 'WAITING_DATA',
+          instruction: 'L utente ha scelto di sostituire il ricambio della sessione aperta.',
+          availableSources: ['KEYWORDS', 'CONVERSATION_CONTEXT'],
+          masterCase,
+          sessionIntent,
+          openai: { skipped: true, error: null, model: null, statusCode: null, raw: null, parsed: null }
+        },
+        aiSummary: 'Ricambio corrente sostituito nella sessione aperta.',
+        resolvedStatus: 'in_lavorazione',
+        intakeState: {
+          stage: 'part_replaced',
+          pendingSlot: null,
+          pendingQuestion: null,
+          slots: {
+            ...baseSlots,
+            part_name: proposedPartName,
+            part_category: normalizePartCategory(proposedCategory, proposedPartName),
+            proposed_next_part_name: '',
+            proposed_next_part_category: '',
+            proposed_next_part_source: ''
+          }
+        }
+      };
+    }
+
+    if (sessionIntent === 'add_part') {
+      const sessionParts = appendSessionPart(baseSlots, {
+        part_name: currentPartSummary,
+        part_category: s(baseSlots.part_category) || s(previousContext.normalized_part_category) || '',
+        plate: s(baseSlots.plate) || s(previousContext.plate) || '',
+        vin: s(baseSlots.vin) || s(previousContext.vin) || '',
+        oe_code: s(baseSlots.oe_code) || s(previousContext.oe_code) || ''
+      });
+      return {
+        status: 'OK',
+        parsed: {
+          originalText: text,
+          plate: s(baseSlots.plate) || s(previousContext.plate) || '',
+          vin: s(baseSlots.vin) || s(previousContext.vin) || '',
+          oeCode: s(baseSlots.oe_code) || s(previousContext.oe_code) || '',
+          requestedPartText: proposedPartName,
+          confidence: 1
+        },
+        vehicle: null,
+        normalizedPart: {
+          name: proposedPartName,
+          category: normalizePartCategory(proposedCategory, proposedPartName)
+        },
+        dbrtResult: {},
+        glassCatalog: { status: 'SKIPPED', message: 'Aggiunta nuovo ricambio alla stessa sessione', items: [] },
+        oeCatalog: {},
+        oeResults: [],
+        equivalents: {},
+        missingData: [],
+        whatsappText: `Perfetto, tengo aperta la richiesta precedente e aggiungo anche ${proposedPartName}. Procedo con il nuovo ricambio.`,
+        aiRequest: {
+          intent: 'session_add_part',
+          request_is_valid: true,
+          suggested_service: 'WAITING_DATA',
+          instruction: 'L utente ha scelto di aggiungere un nuovo ricambio nella stessa sessione.',
+          availableSources: ['KEYWORDS', 'CONVERSATION_CONTEXT'],
+          masterCase,
+          sessionIntent,
+          openai: { skipped: true, error: null, model: null, statusCode: null, raw: null, parsed: null }
+        },
+        aiSummary: 'Nuovo ricambio aggiunto nella stessa sessione.',
+        resolvedStatus: 'in_lavorazione',
+        intakeState: {
+          stage: 'part_added',
+          pendingSlot: null,
+          pendingQuestion: null,
+          slots: {
+            ...baseSlots,
+            session_parts: sessionParts,
+            part_name: proposedPartName,
+            part_category: normalizePartCategory(proposedCategory, proposedPartName),
+            proposed_next_part_name: '',
+            proposed_next_part_category: '',
+            proposed_next_part_source: ''
+          }
+        }
+      };
+    }
+
+    return {
+      status: 'OK',
+      parsed: {
+        originalText: text,
+        plate: s(baseSlots.plate) || s(previousContext.plate) || '',
+        vin: s(baseSlots.vin) || s(previousContext.vin) || '',
+        oeCode: s(baseSlots.oe_code) || s(previousContext.oe_code) || '',
+        requestedPartText: proposedPartName || currentPartSummary,
+        confidence: 0
+      },
+      vehicle: null,
+      normalizedPart: {
+        name: proposedPartName || currentPartSummary,
+        category: normalizePartCategory(proposedCategory || s(baseSlots.part_category), proposedPartName || currentPartSummary)
+      },
+      dbrtResult: {},
+      glassCatalog: { status: 'SKIPPED', message: 'In attesa della scelta aggiungi/sostituisci', items: [] },
+      oeCatalog: {},
+      oeResults: [],
+      equivalents: {},
+      missingData: ['session_action'],
+      whatsappText: `Hai una richiesta aperta per ${currentPartSummary || 'questo ricambio'}. Vuoi sostituirlo con ${proposedPartName || 'il nuovo pezzo'} oppure aggiungerlo alla stessa richiesta? Rispondi SOSTITUISCI oppure AGGIUNGI.`,
+      aiRequest: {
+        intent: 'session_action_repeat',
+        request_is_valid: true,
+        suggested_service: 'WAITING_DATA',
+        instruction: 'Ripetizione della scelta di sessione tra sostituzione o aggiunta del nuovo ricambio.',
+        availableSources: ['KEYWORDS', 'CONVERSATION_CONTEXT'],
+        masterCase,
+        sessionIntent,
+        openai: { skipped: true, error: null, model: null, statusCode: null, raw: null, parsed: null }
+      },
+      aiSummary: 'In attesa della scelta utente per gestire il nuovo ricambio nella stessa sessione.',
+      resolvedStatus: 'in_attesa_dati_cliente',
+      intakeState: previousIntakeState
+    };
+  }
   if (previousIntakeState.pendingSlot === 'quote_pdf_confirmation') {
     if (variantsRequest && previousOptions.length) {
       const parsed = {
@@ -2443,6 +2769,15 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     }
   }
 
+  if (masterCase === 'document_image_only') {
+    return buildVehicleDocumentWaitingResponse({
+      text,
+      previousContext,
+      previousIntakeState,
+      mediaAi
+    });
+  }
+
   const evidenceResult = await analyzeInboundEvidenceWithOpenAI({
     messageText: text,
     mediaAnalysis,
@@ -2471,6 +2806,61 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     || s(previousContext.requested_part_text)
     || s(previousContext.normalized_part_name)
     || '';
+
+  const previousOpenPart = buildCurrentPartSummary(previousIntakeState.slots || {}, previousContext);
+  const incomingExplicitPart = explicitBodyPartText || explicitEffectivePartText || '';
+  if (
+    previousOpenPart
+    && incomingExplicitPart
+    && previousOpenPart.toLowerCase() !== incomingExplicitPart.toLowerCase()
+    && previousIntakeState.pendingSlot !== 'quote_pdf_confirmation'
+  ) {
+    return {
+      status: 'OK',
+      parsed: {
+        originalText: text,
+        plate: s(previousIntakeState.slots?.plate) || s(previousContext.plate) || '',
+        vin: s(previousIntakeState.slots?.vin) || s(previousContext.vin) || '',
+        oeCode: s(previousIntakeState.slots?.oe_code) || s(previousContext.oe_code) || '',
+        requestedPartText: incomingExplicitPart,
+        confidence: 1
+      },
+      vehicle: null,
+      normalizedPart: {
+        name: incomingExplicitPart,
+        category: normalizePartCategory('', incomingExplicitPart)
+      },
+      dbrtResult: {},
+      glassCatalog: { status: 'SKIPPED', message: 'Nuovo ricambio rilevato durante una sessione aperta', items: [] },
+      oeCatalog: {},
+      oeResults: [],
+      equivalents: {},
+      missingData: ['session_action'],
+      whatsappText: `Hai una richiesta aperta per ${previousOpenPart}. Vuoi sostituirlo con ${incomingExplicitPart} oppure aggiungerlo alla stessa richiesta? Rispondi SOSTITUISCI oppure AGGIUNGI.`,
+      aiRequest: {
+        intent: 'session_action_needed',
+        request_is_valid: true,
+        suggested_service: 'WAITING_DATA',
+        instruction: 'Rilevato un nuovo ricambio esplicito in una sessione ancora aperta. Chiedere se sostituire o aggiungere.',
+        availableSources: ['RULES', 'CONVERSATION_CONTEXT'],
+        masterCase,
+        openai: { skipped: true, error: null, model: null, statusCode: null, raw: null, parsed: null }
+      },
+      aiSummary: 'Nuovo ricambio rilevato durante una sessione aperta: in attesa della scelta sostituisci/aggiungi.',
+      resolvedStatus: 'in_attesa_dati_cliente',
+      intakeState: {
+        stage: 'waiting_session_action',
+        pendingSlot: 'session_action',
+        pendingQuestion: `Hai una richiesta aperta per ${previousOpenPart}. Vuoi sostituirlo con ${incomingExplicitPart} oppure aggiungerlo alla stessa richiesta? Rispondi SOSTITUISCI oppure AGGIUNGI.`,
+        slots: {
+          ...previousIntakeState.slots,
+          proposed_next_part_name: incomingExplicitPart,
+          proposed_next_part_category: normalizePartCategory('', incomingExplicitPart),
+          proposed_next_part_source: masterCase
+        }
+      }
+    };
+  }
 
   const preliminaryParsed = {
     originalText: effectiveText,
