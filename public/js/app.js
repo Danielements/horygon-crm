@@ -1194,6 +1194,9 @@ async function openPartsConversation(id) {
   target.innerHTML = (data.messages || []).length ? data.messages.map(message => {
     const tone = message.internal_note ? 'internal' : message.direction === 'outbound' ? 'outbound' : 'inbound';
     const title = message.internal_note ? 'Nota interna' : message.direction === 'outbound' ? 'Operatore' : 'Cliente';
+    const mediaAction = message.media_url
+      ? `<div style="margin-top:8px"><button class="btn btn-outline btn-sm" onclick="openPartsMessageMedia(${Number(message.id)})">Apri allegato</button></div>`
+      : '';
     return `
       <div class="ricambi-chat-bubble ${tone}">
         <div class="ricambi-chat-bubble-head">
@@ -1201,9 +1204,30 @@ async function openPartsConversation(id) {
           <span>${escapeHtml(formatDateTimeIt(message.created_at))}</span>
         </div>
         <p>${escapeHtml(message.body_text || '[messaggio senza testo]')}</p>
+        ${mediaAction}
       </div>
     `;
   }).join('') : `<div class="ricambi-detail-empty">Nessun messaggio in questa conversazione.</div>`;
+}
+
+async function openPartsMessageMedia(messageId) {
+  try {
+    const res = await fetch('/api/parts/messages/' + encodeURIComponent(String(messageId)) + '/media', {
+      headers: { 'Authorization': `Bearer ${TOKEN}` },
+      cache: 'no-store'
+    });
+    if (res.status === 401) { logout(); return; }
+    if (!res.ok) {
+      const raw = await res.text();
+      throw new Error(raw || `Errore HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank', 'noopener');
+    window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (error) {
+    toast(error.message || 'Impossibile aprire l allegato', 'error');
+  }
 }
 
 async function sendPartsMessage() {

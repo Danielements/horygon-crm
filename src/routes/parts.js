@@ -296,8 +296,15 @@ function isLikelyVehicleDocumentAnalysis(mediaAi = null) {
     mediaAi?.summary,
     mediaAi?.visible_text
   ].filter(Boolean).join(' ').toLowerCase();
-  const hasVehicleIds = !!(s(mediaAi?.plate) || s(mediaAi?.vin));
-  return isVehicleDocumentMediaKind(signals) || (hasVehicleIds && !s(mediaAi?.requested_part_text) && !s(mediaAi?.normalized_part_name));
+  const plate = s(mediaAi?.plate) || '';
+  const vin = s(mediaAi?.vin) || '';
+  const hasVehicleIds = !!(plate || vin);
+  const hasBothVehicleIds = !!plate && !!vin;
+  const hasDocumentKeywords = /(libretto|carta di circolazione|numero di telaio|targa|immatricolazione|registration|registration document|vehicle registration|circulation)/.test(signals);
+  return hasDocumentKeywords
+    || isVehicleDocumentMediaKind(signals)
+    || hasBothVehicleIds
+    || (hasVehicleIds && !s(mediaAi?.requested_part_text) && !s(mediaAi?.normalized_part_name));
 }
 
 function classifyInboundCase({ text = '', mediaAi = null }) {
@@ -349,15 +356,59 @@ function appendSessionPart(slots = {}, item = {}) {
   ];
 }
 
-function buildVehicleDocumentWaitingResponse({
+async function buildVehicleDocumentWaitingResponse({
   text = '',
+  channel = 'whatsapp',
   previousContext = {},
   previousIntakeState = { slots: {} },
   mediaAi = null
 }) {
-  const plate = normalizePlate(s(mediaAi?.plate) || s(previousIntakeState.slots?.plate) || s(previousContext.plate) || '');
-  const vin = s(mediaAi?.vin) || s(previousIntakeState.slots?.vin) || s(previousContext.vin) || '';
-  const oeCode = s(mediaAi?.oe_code) || s(previousIntakeState.slots?.oe_code) || s(previousContext.oe_code) || '';
+  const existingSlots = previousIntakeState.slots || {};
+  const plate = normalizePlate(s(mediaAi?.plate) || s(existingSlots.plate) || s(previousContext.plate) || '');
+  const vin = s(mediaAi?.vin) || s(existingSlots.vin) || s(previousContext.vin) || '';
+  const oeCode = sanitizeOeCode(s(mediaAi?.oe_code) || s(existingSlots.oe_code) || s(previousContext.oe_code) || '', plate);
+  const carriedPartName = shouldOverridePartSelection(existingSlots.part_name)
+    ? s(existingSlots.part_name)
+    : (shouldOverridePartSelection(previousContext.normalized_part_name) ? s(previousContext.normalized_part_name) : '');
+  const carriedPartCategory = normalizePartCategory(s(existingSlots.part_category) || s(previousContext.normalized_part_category), carriedPartName || '');
+  const carriedText = carriedPartName || '';
+
+  if (carriedPartName) {
+    return resolvePartsMessageV2({
+      message: carriedPartName,
+      channel,
+      context: {
+        ...previousContext,
+        plate: plate || s(previousContext.plate) || '',
+        vin: vin || s(previousContext.vin) || '',
+        oe_code: oeCode || s(previousContext.oe_code) || '',
+        requested_part_text: carriedPartName,
+        normalized_part_name: carriedPartName,
+        normalized_part_category: carriedPartCategory
+      },
+      intakeState: {
+        ...previousIntakeState,
+        stage: 'document_vehicle_data_completed',
+        pendingSlot: null,
+        pendingQuestion: null,
+        slots: {
+          ...existingSlots,
+          plate,
+          vin,
+          oe_code: oeCode,
+          part_name: carriedPartName,
+          part_category: carriedPartCategory,
+          glass_position: detectGlassPosition(carriedText) || s(existingSlots.glass_position) || '',
+          side: detectSide(carriedText) || s(existingSlots.side) || '',
+          axle: detectAxle(carriedText) || s(existingSlots.axle) || '',
+          brake_component: detectBrakeComponent(carriedText) || s(existingSlots.brake_component) || '',
+          filter_type: detectFilterType(carriedText) || s(existingSlots.filter_type) || ''
+        }
+      },
+      mediaAnalysis: null
+    });
+  }
+
   const waitingQuestion = 'Ho raccolto i dati del veicolo. Dimmi ora quale ricambio ti serve.';
   const parsed = {
     originalText: text || '[foto ricevuta]',
@@ -1221,6 +1272,14 @@ function buildServiceExecutionPlan(slots = {}, suggestedService = '', evidence =
     };
   }
 
+  if (category === 'ricambio_generico' && !hasOe) {
+    return {
+      mode: 'waiting_data',
+      missing: ['part_name_clarification'],
+      question: s(evidence?.next_best_question) || 'Ho preso i dati del veicolo. Ora dimmi il nome del ricambio oppure mandami una foto piu chiara del pezzo o del codice OE.'
+    };
+  }
+
   if (category === 'cristalli' && !hasPlate) {
     return {
       mode: 'waiting_data',
@@ -1687,6 +1746,14 @@ async function downloadTelegramInboundMedia(fileId, mediaMetadata = null) {
     filename: explicitFilename || filePath.split('/').pop() || guessFilenameFromMimeType(mimeType, `telegram-${fileId}`),
     metadata: fileInfoBody?.result || null
   };
+}
+
+async function downloadStoredConversationMedia(message = null) {
+  if (!message?.media_url) return { ok: false, error: 'media_non_disponibile' };
+  const metadata = json(message.media_metadata_json, null) || null;
+  if (message.channel === 'whatsapp') return downloadWhatsAppInboundMedia(message.media_url);
+  if (message.channel === 'telegram') return downloadTelegramInboundMedia(message.media_url, metadata);
+  return { ok: false, error: 'canale_media_non_supportato' };
 }
 
 async function downloadInboundMediaForAi({ channel, mediaUrl, mediaMimeType, mediaMetadata, messageType }) {
@@ -2999,6 +3066,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   if (masterCase === 'document_image_only') {
     return buildVehicleDocumentWaitingResponse({
       text,
+      channel,
       previousContext,
       previousIntakeState,
       mediaAi
@@ -4382,6 +4450,25 @@ router.get('/parts/conversations/:id/messages', requirePermesso('ricambi', 'read
     ORDER BY created_at ASC, id ASC
   `).all(conversation.id);
   res.json({ conversation, messages });
+});
+
+router.get('/parts/messages/:id/media', requirePermesso('ricambi', 'read'), async (req, res) => {
+  const message = db.prepare('SELECT * FROM whatsapp_messages WHERE id = ?').get(Number(req.params.id));
+  if (!message) return res.status(404).json({ error: 'Messaggio non trovato' });
+  if (!message.media_url) return res.status(404).json({ error: 'Nessun allegato disponibile per questo messaggio' });
+
+  const downloaded = await downloadStoredConversationMedia(message);
+  if (!downloaded?.ok || !downloaded?.buffer?.length) {
+    return res.status(502).json({ error: downloaded?.error || 'Download allegato fallito' });
+  }
+
+  const mimeType = choosePreferredImageMimeType(downloaded.mimeType, message.media_mime_type) || downloaded.mimeType || message.media_mime_type || 'application/octet-stream';
+  const filename = downloaded.filename || guessFilenameFromMimeType(mimeType, `parts-message-${message.id}`);
+  const safeFilename = String(filename || `parts-message-${message.id}`).replace(/[^A-Za-z0-9._-]/g, '_');
+  const disposition = looksLikeImageMimeType(mimeType) ? 'inline' : 'attachment';
+  res.setHeader('Content-Type', mimeType);
+  res.setHeader('Content-Disposition', `${disposition}; filename="${safeFilename}"`);
+  return res.end(downloaded.buffer);
 });
 
 router.post('/parts/conversations/:id/messages', requirePermesso('ricambi', 'edit'), async (req, res) => {
