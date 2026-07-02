@@ -339,6 +339,22 @@ function buildCurrentPartSummary(slots = {}, context = {}) {
   return s(slots.part_name) || s(context.normalized_part_name) || s(context.requested_part_text) || '';
 }
 
+function hasMeaningfulIntakeSlots(slots = {}) {
+  if (!slots || typeof slots !== 'object') return false;
+  return !!(
+    s(slots.plate)
+    || s(slots.vin)
+    || s(slots.oe_code)
+    || s(slots.part_name)
+    || s(slots.part_category)
+    || s(slots.glass_position)
+    || s(slots.side)
+    || s(slots.axle)
+    || s(slots.brake_component)
+    || s(slots.filter_type)
+  );
+}
+
 function appendSessionPart(slots = {}, item = {}) {
   const current = Array.isArray(slots.session_parts) ? slots.session_parts : [];
   const name = s(item.part_name);
@@ -1237,7 +1253,6 @@ function buildIntakeDecision(slots = {}) {
 }
 
 function buildFallbackMissingDataQuestion(slots = {}, evidence = null) {
-  if (s(evidence?.next_best_question)) return s(evidence.next_best_question);
   if (!slots.plate && !slots.vin && !slots.oe_code) {
     return 'Per procedere ho bisogno di almeno uno tra targa, VIN o codice OE del ricambio.';
   }
@@ -1276,7 +1291,7 @@ function buildServiceExecutionPlan(slots = {}, suggestedService = '', evidence =
     return {
       mode: 'waiting_data',
       missing: ['part_name_clarification'],
-      question: s(evidence?.next_best_question) || 'Ho preso i dati del veicolo. Ora dimmi il nome del ricambio oppure mandami una foto piu chiara del pezzo o del codice OE.'
+      question: 'Ho preso i dati del veicolo. Ora dimmi il nome del ricambio oppure mandami una foto piu chiara del pezzo o del codice OE.'
     };
   }
 
@@ -2388,6 +2403,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
 
   const previousContext = context || {};
   const previousIntakeState = intakeState || { slots: {} };
+  const mediaVehicleKeyDetected = !!(s(mediaAi?.plate) || s(mediaAi?.vin));
   const earlyPlate = normalizePlate(extractPlateFromText(text));
   const earlyVin = extractVinFromText(text);
   const earlyOeCode = sanitizeOeCode(extractOeCodeFromText(text), earlyPlate);
@@ -2403,9 +2419,21 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   const numericSelection = text.match(/^\s*(\d{1,2})\s*$/);
   const bypassPendingForFreshRequest = selfContainedFreshRequest
     && ['ambiguous_code_type', 'session_action', 'quote_pdf_confirmation'].includes(String(previousIntakeState.pendingSlot || ''));
+  const currentRequestAwaitingClarification = ['part_name', 'glass_position', 'vehicle_key', 'plate', 'part_name_clarification'].includes(String(previousIntakeState.pendingSlot || ''))
+    || ['waiting_part_name', 'waiting_glass_position', 'waiting_vehicle_key', 'waiting_service_key', 'document_vehicle_data_completed'].includes(String(previousIntakeState.stage || ''));
   const previousOptions = Array.isArray(previousIntakeState.slots?.proposed_glass_options)
     ? previousIntakeState.slots.proposed_glass_options
     : [];
+
+  if (mediaVehicleKeyDetected && !text) {
+    return buildVehicleDocumentWaitingResponse({
+      text,
+      channel,
+      previousContext,
+      previousIntakeState,
+      mediaAi
+    });
+  }
 
   if (sessionIntent === 'close') {
     return {
@@ -3114,6 +3142,8 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   const incomingExplicitPart = explicitBodyPartText || explicitEffectivePartText || '';
   if (
     !selfContainedFreshRequest
+    &&
+    !currentRequestAwaitingClarification
     &&
     previousOpenPart
     && incomingExplicitPart
@@ -3894,8 +3924,10 @@ async function processInboundPartsMessage({
 
     upsertConversationState(conversation.id);
     logPartEvent(partsRequestId, 'richiesta_ricevuta', `Richiesta ricevuta da webhook ${channel}`, `${channel}_webhook`, { userKey, externalMessageId });
-    const conversationContext = getLatestConversationContext(userKey, partsRequestId);
     const intakeState = getIntakeState(partsRequestId);
+    const conversationContext = hasMeaningfulIntakeSlots(intakeState?.slots)
+      ? null
+      : getLatestConversationContext(userKey, partsRequestId);
     const mediaAnalysis = mediaUrl
       ? await analyzeInboundMediaWithOpenAI({
         channel,
