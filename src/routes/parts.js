@@ -214,6 +214,21 @@ function detectAmbiguousIdentifierCandidate({
   return candidate;
 }
 
+function shouldConfirmUnlabeledPlateCandidate({
+  text = '',
+  plate = '',
+  vin = '',
+  oeCode = '',
+  partName = ''
+} = {}) {
+  if (!plate || vin || oeCode) return false;
+  if (!shouldOverridePartSelection(partName)) return false;
+  if (hasExplicitPlateLabel(text) || hasExplicitOeLabel(text)) return false;
+  const candidate = extractStandaloneMixedCodeCandidate(text);
+  if (!candidate) return false;
+  return normalizePlate(candidate) === normalizePlate(plate);
+}
+
 function deriveRequestedPartText(value, plate = '', vin = '', oeCode = '') {
   if (isSyntheticInboundPlaceholder(value)) return '';
   let text = String(value || '');
@@ -237,6 +252,59 @@ function deriveExplicitPartRequest(value, plate = '', vin = '', oeCode = '') {
   if (isGenericVehicleDocumentLabel(derived)) return '';
   if (normalizePartCategory('', derived) === 'ricambio_generico' && derived.split(/\s+/).length > 6) return '';
   return derived;
+}
+
+function tokenizePartSpecificity(value = '') {
+  return String(value || '')
+    .toLowerCase()
+    .split(/[^a-z0-9Ã Ã¨Ã©Ã¬Ã²Ã¹]+/i)
+    .filter((token) => token.length >= 3);
+}
+
+function scorePartCandidate(name = '', category = '', { preferDeterministic = false } = {}) {
+  if (!shouldOverridePartSelection(name)) return -1;
+  const normalizedName = s(name) || '';
+  const normalizedCategory = normalizePartCategory(category, normalizedName);
+  const tokens = tokenizePartSpecificity(normalizedName);
+  let score = Math.min(normalizedName.length, 40) + (tokens.length * 6);
+
+  if (normalizedCategory && normalizedCategory !== 'ricambio_generico') score += 30;
+  if (detectGlassPosition(normalizedName)) score += 10;
+  if (detectBrakeComponent(normalizedName)) score += 8;
+  if (detectFilterType(normalizedName)) score += 8;
+  if (detectSide(normalizedName)) score += 4;
+  if (detectAxle(normalizedName)) score += 4;
+  if (preferDeterministic) score += 15;
+
+  return score;
+}
+
+function choosePreferredPartCandidate(candidates = []) {
+  const ranked = candidates
+    .map((candidate) => {
+      const name = s(candidate?.name) || '';
+      if (!name) return null;
+      const category = normalizePartCategory(candidate?.category, name);
+      const score = scorePartCandidate(name, category, {
+        preferDeterministic: !!candidate?.preferDeterministic
+      });
+      if (score < 0) return null;
+      return {
+        ...candidate,
+        name,
+        category,
+        score
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score || b.name.length - a.name.length);
+
+  return ranked[0] || {
+    name: '',
+    category: '',
+    score: -1,
+    source: ''
+  };
 }
 
 function isGenericVehicleDocumentLabel(value) {
@@ -504,7 +572,6 @@ async function buildVehicleDocumentWaitingResponse({
 
 function shouldTrustMediaPartExtraction(mediaData = null, bodyText = '') {
   if (!mediaData) return false;
-  if (!isSyntheticInboundPlaceholder(bodyText) && s(bodyText)) return true;
   if (isVehicleDocumentMediaKind(mediaData?.media_kind)) return false;
   if (s(mediaData?.oe_code)) return true;
   const partName = s(mediaData?.normalized_part_name) || s(mediaData?.requested_part_text) || '';
@@ -514,7 +581,6 @@ function shouldTrustMediaPartExtraction(mediaData = null, bodyText = '') {
 
 function shouldTrustEvidencePartExtraction(evidence = null, bodyText = '') {
   if (!evidence) return false;
-  if (!isSyntheticInboundPlaceholder(bodyText) && s(bodyText)) return true;
   if (isVehicleDocumentMediaKind(evidence?.detected_subject) || isVehicleDocumentMediaKind(evidence?.media_kind)) return false;
   if (s(evidence?.oe_code)) return true;
   const partName = s(evidence?.normalized_part_name) || s(evidence?.requested_part_text) || '';
@@ -2539,6 +2605,56 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   if (previousIntakeState.pendingSlot === 'ambiguous_code_type' && !bypassPendingForFreshRequest) {
     const pendingValue = String(previousIntakeState.slots?.pending_ambiguous_code || '').toUpperCase();
     const resolvedCodeType = detectAmbiguousCodeTypeAnswer(text);
+    if (pendingValue && noAnswer) {
+      const clarificationQuestion = `Va bene. Allora ${pendingValue} non lo confermo come targa. Dimmi se e un codice OE oppure inviami la targa corretta.`;
+      return {
+        status: 'OK',
+        parsed: {
+          originalText: text,
+          plate: '',
+          vin: s(previousIntakeState.slots?.vin) || s(previousContext.vin) || '',
+          oeCode: '',
+          requestedPartText: s(previousIntakeState.slots?.pending_ambiguous_part_name) || s(previousIntakeState.slots?.part_name) || '',
+          confidence: 0
+        },
+        vehicle: null,
+        normalizedPart: {
+          name: s(previousIntakeState.slots?.pending_ambiguous_part_name) || s(previousIntakeState.slots?.part_name) || '',
+          category: normalizePartCategory(
+            s(previousIntakeState.slots?.part_category) || s(previousContext.normalized_part_category),
+            s(previousIntakeState.slots?.pending_ambiguous_part_name) || s(previousIntakeState.slots?.part_name) || ''
+          )
+        },
+        dbrtResult: {},
+        glassCatalog: { status: 'SKIPPED', message: 'In attesa di chiarimento aggiuntivo sul codice ambiguo', items: [] },
+        oeCatalog: {},
+        oeResults: [],
+        equivalents: {},
+        missingData: ['ambiguous_code_type'],
+        whatsappText: clarificationQuestion,
+        aiRequest: {
+          intent: 'ambiguous_code_type_negative_confirmation',
+          request_is_valid: true,
+          suggested_service: 'WAITING_DATA',
+          instruction: 'Il cliente ha negato che il valore ambiguo sia una targa. Richiedere se si tratta di codice OE oppure la targa corretta.',
+          availableSources: ['RULES', 'CONVERSATION_CONTEXT'],
+          masterCase,
+          openai: { skipped: true, error: null, model: null, statusCode: null, raw: null, parsed: null }
+        },
+        aiSummary: 'Il cliente non conferma il valore ambiguo come targa.',
+        resolvedStatus: 'in_attesa_dati_cliente',
+        intakeState: {
+          ...previousIntakeState,
+          pendingSlot: 'ambiguous_code_type',
+          pendingQuestion: clarificationQuestion,
+          slots: {
+            ...previousIntakeState.slots,
+            plate: '',
+            oe_code: ''
+          }
+        }
+      };
+    }
     if (pendingValue && resolvedCodeType) {
       const nextSlots = {
         ...previousIntakeState.slots,
@@ -3180,15 +3296,44 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   const currentMessageAxle = detectAxle(`${explicitBodyPartText || ''} ${explicitEffectivePartText || ''} ${text}`.trim());
   const currentMessageBrakeComponent = detectBrakeComponent(`${explicitBodyPartText || ''} ${explicitEffectivePartText || ''} ${text}`.trim());
   const currentMessageFilterType = detectFilterType(`${explicitBodyPartText || ''} ${explicitEffectivePartText || ''} ${text}`.trim());
-  const baseRequestedPartText = explicitBodyPartText
-    || explicitEffectivePartText
-    || (useEvidencePartExtraction ? s(evidence.requested_part_text) : null)
-    || (useEvidencePartExtraction ? s(evidence.normalized_part_name) : null)
-    || (trustMediaPartExtraction ? s(mediaAi?.requested_part_text) : null)
-    || (trustMediaPartExtraction ? s(mediaAi?.normalized_part_name) : null)
+  const preferredPartCandidate = choosePreferredPartCandidate([
+    {
+      name: explicitBodyPartText,
+      category: normalizePartCategory('', explicitBodyPartText),
+      source: 'explicit_body_text',
+      preferDeterministic: true
+    },
+    {
+      name: explicitEffectivePartText,
+      category: normalizePartCategory('', explicitEffectivePartText),
+      source: 'explicit_effective_text',
+      preferDeterministic: true
+    },
+    useEvidencePartExtraction ? {
+      name: s(evidence.normalized_part_name) || s(evidence.requested_part_text) || '',
+      category: s(evidence.normalized_part_category) || '',
+      source: 'openai_evidence'
+    } : null,
+    trustMediaPartExtraction ? {
+      name: s(mediaAi?.normalized_part_name) || s(mediaAi?.requested_part_text) || '',
+      category: s(mediaAi?.normalized_part_category) || '',
+      source: 'media_analysis'
+    } : null,
+    {
+      name: s(previousContext.normalized_part_name) || s(previousContext.requested_part_text) || '',
+      category: s(previousContext.normalized_part_category) || '',
+      source: 'previous_context'
+    }
+  ].filter(Boolean));
+  const baseRequestedPartText = preferredPartCandidate.name
     || s(previousContext.requested_part_text)
     || s(previousContext.normalized_part_name)
     || '';
+  const baseRequestedPartCategory = preferredPartCandidate.category
+    || normalizePartCategory(
+      s(evidence.normalized_part_category) || s(mediaAi?.normalized_part_category) || s(previousContext.normalized_part_category),
+      baseRequestedPartText
+    );
 
   const previousOpenPart = buildCurrentPartSummary(previousIntakeState.slots || {}, previousContext);
   const incomingExplicitPart = explicitBodyPartText || explicitEffectivePartText || '';
@@ -3260,14 +3405,8 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     confidence: 0
   };
   const preliminaryNormalizedPart = {
-    name: (useEvidencePartExtraction ? s(evidence.normalized_part_name) : null)
-      || (trustMediaPartExtraction ? s(mediaAi?.normalized_part_name) : null)
-      || s(previousContext.normalized_part_name)
-      || preliminaryParsed.requestedPartText,
-    category: normalizePartCategory(
-      s(evidence.normalized_part_category) || s(mediaAi?.normalized_part_category) || s(previousContext.normalized_part_category),
-      preliminaryParsed.requestedPartText
-    )
+    name: preferredPartCandidate.name || s(previousContext.normalized_part_name) || preliminaryParsed.requestedPartText,
+    category: baseRequestedPartCategory
   };
 
   const ambiguousCandidate = detectAmbiguousIdentifierCandidate({
@@ -3336,10 +3475,10 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     vin: s(evidence.vin) || mergedIntakeSlots.vin || '',
     oe_code: sanitizeOeCode(s(evidence.oe_code) || mergedIntakeSlots.oe_code || '', normalizePlate(s(evidence.plate) || mergedIntakeSlots.plate || '')),
     part_category: normalizePartCategory(
-      (useEvidencePartExtraction ? s(evidence.normalized_part_category) : null) || mergedIntakeSlots.part_category,
-      (useEvidencePartExtraction ? (s(evidence.normalized_part_name) || s(evidence.requested_part_text)) : null) || mergedIntakeSlots.part_name || ''
+      preferredPartCandidate.category || mergedIntakeSlots.part_category,
+      preferredPartCandidate.name || mergedIntakeSlots.part_name || ''
     ),
-    part_name: (useEvidencePartExtraction ? (s(evidence.normalized_part_name) || s(evidence.requested_part_text)) : null) || mergedIntakeSlots.part_name || '',
+    part_name: preferredPartCandidate.name || mergedIntakeSlots.part_name || '',
     glass_position: currentMessageGlassPosition || s(evidence.glass_position) || mergedIntakeSlots.glass_position || '',
     side: currentMessageSide || s(evidence.side) || mergedIntakeSlots.side || '',
     axle: currentMessageAxle || s(evidence.axle) || mergedIntakeSlots.axle || '',
@@ -3486,6 +3625,65 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     } else if (glassCatalog.status === 'ERROR') {
       whatsappText = 'Ho ricevuto la richiesta del cristallo e sto verificando i dati tecnici. Ti aggiorno appena completo il controllo.';
       status = 'errore_integrazione';
+    } else if (shouldConfirmUnlabeledPlateCandidate({
+      text,
+      plate: parsed.plate,
+      vin: parsed.vin,
+      oeCode: parsed.oeCode,
+      partName: parsed.requestedPartText
+    })) {
+      const ambiguousQuestion = `Ho letto ${parsed.plate} come targa, ma non ho trovato un risultato univoco. Confermi che e la targa? Se no, dimmi se e un codice OE.`;
+      return {
+        status: 'OK',
+        parsed: {
+          ...parsed,
+          plate: '',
+          oeCode: ''
+        },
+        vehicle: null,
+        normalizedPart,
+        dbrtResult: {},
+        glassCatalog,
+        oeCatalog: {},
+        oeResults: glassCatalog.items || [],
+        equivalents: {},
+        missingData: ['ambiguous_code_type'],
+        whatsappText: ambiguousQuestion,
+        aiRequest: {
+          intent: 'ambiguous_plate_or_oe_after_empty_rtws',
+          request_is_valid: true,
+          suggested_service: 'WAITING_DATA',
+          instruction: 'La ricerca RTWS non ha dato esito e il codice alfanumerico senza etichetta potrebbe essere una targa oppure un codice OE. Chiedere conferma al cliente.',
+          availableSources: ['RULES', 'RTWS_LISTINI', 'CONVERSATION_CONTEXT'],
+          parsed,
+          normalizedPart,
+          intakeSlots,
+          intakeDecision,
+          servicePlan,
+          openai: {
+            skipped: true,
+            error: null,
+            model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+            statusCode: null,
+            raw: null,
+            parsed: null
+          }
+        },
+        aiSummary: 'Codice alfanumerico da confermare come targa o come codice OE dopo esito vuoto RTWS.',
+        resolvedStatus: 'in_attesa_dati_cliente',
+        intakeState: {
+          stage: 'waiting_ambiguous_code_type',
+          pendingSlot: 'ambiguous_code_type',
+          pendingQuestion: ambiguousQuestion,
+          slots: {
+            ...intakeSlots,
+            plate: '',
+            oe_code: '',
+            pending_ambiguous_code: parsed.plate,
+            pending_ambiguous_part_name: parsed.requestedPartText
+          }
+        }
+      };
     } else {
       whatsappText = 'Ho identificato una richiesta cristalli, ma dalla sola targa non emerge un risultato univoco. Indicami meglio quale vetro o allega una foto del ricambio.';
       status = 'in_attesa_verifica_tecnica';

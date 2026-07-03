@@ -1,25 +1,40 @@
-#!/bin/bash
-# deploy.sh — esegui sul VPS dopo git pull
-set -e
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
-echo "🚀 Deploy Horygon CRM..."
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT_DIR"
 
-# Pull ultimo codice
-git pull origin main
+BRANCH="${1:-codex/ricambi-area}"
+SERVICE="${2:-horygon-crm}"
 
-# Build Docker
-docker compose down
-docker compose build --no-cache
-docker compose up -d
+echo "[deploy] Avvio deploy Horygon CRM"
+echo "[deploy] Repo: $ROOT_DIR"
+echo "[deploy] Branch: $BRANCH"
 
-# Setup Nginx (solo prima volta)
-if [ ! -f /etc/nginx/sites-enabled/horygon-crm ]; then
-  echo "📋 Configuro Nginx..."
-  cp nginx/horygon-crm.conf /etc/nginx/sites-available/horygon-crm
-  ln -s /etc/nginx/sites-available/horygon-crm /etc/nginx/sites-enabled/horygon-crm
-  nginx -t && systemctl reload nginx
-  echo "🔒 Ora esegui: certbot --nginx -d crm.horygon.it"
+if [[ -n "$(git status --short)" ]]; then
+  echo "[deploy] Worktree sporca: fai commit, stash o ripristino prima del deploy."
+  git status --short
+  exit 1
 fi
 
-echo "✅ Deploy completato"
+echo "[deploy] Aggiorno il repository"
+git fetch origin
+
+CURRENT_BRANCH="$(git branch --show-current)"
+if [[ "$CURRENT_BRANCH" != "$BRANCH" ]]; then
+  git switch "$BRANCH" || git switch -c "$BRANCH" --track "origin/$BRANCH"
+fi
+
+git pull --ff-only origin "$BRANCH"
+
+echo "[deploy] Ricreo il container"
+docker compose down
+docker compose up -d --build --force-recreate
+
+echo "[deploy] Stato servizi"
 docker compose ps
+
+echo "[deploy] Ultimi log"
+docker compose logs --tail=120 "$SERVICE"
+
+echo "[deploy] Deploy completato"
