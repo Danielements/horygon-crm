@@ -327,12 +327,26 @@ function classifyInboundCase({ text = '', mediaAi = null }) {
 function detectSessionKeywordIntent(text = '') {
   const normalized = String(text || '').trim().toLowerCase();
   if (!normalized) return '';
+  if (/^(info|informazioni|aiuto|help)$/.test(normalized)) return 'info';
   if (/^(chiudi richiesta|chiudi sessione|fine|annulla|termina)$/.test(normalized)) return 'close';
   if (/^(nuova richiesta|nuovo ricambio|nuovo pezzo)$/.test(normalized)) return 'new_request';
   if (/^(aggiungi pezzo|aggiungi ricambio|altro pezzo|altro ricambio|aggiungi)$/.test(normalized)) return 'add_part';
   if (/^(sostituisci|cambia pezzo|cambia ricambio)$/.test(normalized)) return 'replace_part';
   if (/^(continua richiesta|continua|riprendi)$/.test(normalized)) return 'continue';
   return '';
+}
+
+function buildInfoKeywordReplyText() {
+  return [
+    'Per trovare il ricambio piu in fretta, usa uno di questi 6 formati:',
+    '1. Targa o VIN + codice OE',
+    '2. Targa o VIN + nome ricambio',
+    '3. Foto etichetta/codice + targa o VIN',
+    '4. Foto libretto + testo ricambio',
+    '5. Foto pezzo + testo descrittivo',
+    '6. Solo foto del pezzo o solo testo libero',
+    'Esempio: FP781GE filtro olio oppure foto libretto + "parabrezza anteriore".'
+  ].join('\n');
 }
 
 function buildCurrentPartSummary(slots = {}, context = {}) {
@@ -2435,6 +2449,44 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     });
   }
 
+  if (sessionIntent === 'info') {
+    return {
+      status: 'OK',
+      parsed: {
+        originalText: text,
+        plate: s(previousIntakeState.slots?.plate) || s(previousContext.plate) || '',
+        vin: s(previousIntakeState.slots?.vin) || s(previousContext.vin) || '',
+        oeCode: s(previousIntakeState.slots?.oe_code) || s(previousContext.oe_code) || '',
+        requestedPartText: currentPartSummary,
+        confidence: 1
+      },
+      vehicle: null,
+      normalizedPart: {
+        name: currentPartSummary,
+        category: normalizePartCategory(s(previousIntakeState.slots?.part_category) || s(previousContext.normalized_part_category), currentPartSummary)
+      },
+      dbrtResult: {},
+      glassCatalog: { status: 'SKIPPED', message: 'Messaggio informativo richiesto da keyword utente', items: [] },
+      oeCatalog: {},
+      oeResults: [],
+      equivalents: {},
+      missingData: [],
+      whatsappText: buildInfoKeywordReplyText(),
+      aiRequest: {
+        intent: 'info_keyword',
+        request_is_valid: true,
+        suggested_service: 'WAITING_DATA',
+        instruction: 'Messaggio informativo richiesto da keyword utente senza modificare la sessione corrente.',
+        availableSources: ['KEYWORDS'],
+        masterCase,
+        sessionIntent,
+        openai: { skipped: true, error: null, model: null, statusCode: null, raw: null, parsed: null }
+      },
+      aiSummary: 'Messaggio informativo richiesto da keyword utente.',
+      resolvedStatus: null
+    };
+  }
+
   if (sessionIntent === 'close') {
     return {
       status: 'OK',
@@ -3788,6 +3840,7 @@ function buildFlowMessageCode(resolved = {}) {
   const stage = String(resolved?.intakeState?.stage || '').toLowerCase();
   const suggestedService = String(resolved?.aiRequest?.suggested_service || '').toUpperCase();
 
+  if (intent.includes('info_keyword')) return 'HPS2-INFO';
   if (intent.includes('vehicle_document')) return 'HPS2-DOC';
   if (intent.includes('ambiguous_code')) return 'HPS2-CODE';
   if (intent.includes('session_') || stage.includes('session')) return 'HPS2-SESSION';
