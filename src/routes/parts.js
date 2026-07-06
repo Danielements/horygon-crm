@@ -497,6 +497,271 @@ function buildTelegramReplyKeyboard(rows = [], inputPlaceholder = '', options = 
   return { reply_markup: replyMarkup };
 }
 
+function truncateMetaText(value, maxLength) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return text.length > maxLength ? text.slice(0, Math.max(0, maxLength - 1)).trimEnd() : text;
+}
+
+function normalizeWhatsAppInteractiveRow(row, fallbackIndex = 0) {
+  if (!row) return null;
+  if (typeof row === 'string') {
+    const title = truncateMetaText(row, 24);
+    if (!title) return null;
+    return {
+      id: `row_${slugToken(title || fallbackIndex, 'ROW').toLowerCase()}`,
+      title
+    };
+  }
+  const title = truncateMetaText(row.title || row.label || row.text || '', 24);
+  if (!title) return null;
+  return {
+    id: truncateMetaText(String(row.id || `row_${slugToken(title || fallbackIndex, 'ROW').toLowerCase()}`), 200),
+    title,
+    ...(s(row.description) ? { description: truncateMetaText(row.description, 72) } : {})
+  };
+}
+
+function buildWhatsAppReplyButtonsOptions(buttons = [], extra = {}) {
+  const includeCloseSession = extra?.includeCloseSession !== false;
+  const normalizedButtons = buttons
+    .map((button, index) => {
+      if (!button) return null;
+      if (typeof button === 'string') {
+        const title = truncateMetaText(button, 20);
+        if (!title) return null;
+        return {
+          type: 'reply',
+          reply: {
+            id: `btn_${slugToken(title || index, 'BTN').toLowerCase()}`,
+            title
+          }
+        };
+      }
+      const title = truncateMetaText(button.title || button.label || button.text || '', 20);
+      if (!title) return null;
+      return {
+        type: 'reply',
+        reply: {
+          id: truncateMetaText(String(button.id || `btn_${slugToken(title || index, 'BTN').toLowerCase()}`), 256),
+          title
+        }
+      };
+    })
+    .filter(Boolean);
+  const hasCloseButton = normalizedButtons.some((button) => /^chiudi sessione$/i.test(s(button?.reply?.title) || ''));
+  if (includeCloseSession && !hasCloseButton && normalizedButtons.length < 3) {
+    normalizedButtons.push({
+      type: 'reply',
+      reply: {
+        id: 'btn_chiudi_sessione',
+        title: 'Chiudi sessione'
+      }
+    });
+  }
+  if (!normalizedButtons.length) return null;
+  return {
+    whatsappInteractive: {
+      type: 'button',
+      headerText: truncateMetaText(extra.headerText || '', 60),
+      footerText: truncateMetaText(extra.footerText || '', 60),
+      buttons: normalizedButtons.slice(0, 3)
+    }
+  };
+}
+
+function buildWhatsAppListOptions(rows = [], extra = {}) {
+  const includeCloseSession = extra?.includeCloseSession !== false;
+  const normalizedRows = rows
+    .map((row, index) => normalizeWhatsAppInteractiveRow(row, index + 1))
+    .filter(Boolean);
+  const hasCloseRow = normalizedRows.some((row) => /^chiudi sessione$/i.test(s(row?.title) || ''));
+  if (includeCloseSession && !hasCloseRow) {
+    normalizedRows.push({
+      id: 'row_chiudi_sessione',
+      title: 'Chiudi sessione'
+    });
+  }
+  if (!normalizedRows.length) return null;
+  return {
+    whatsappInteractive: {
+      type: 'list',
+      headerText: truncateMetaText(extra.headerText || '', 60),
+      footerText: truncateMetaText(extra.footerText || '', 60),
+      buttonText: truncateMetaText(extra.buttonText || 'Apri menu', 20) || 'Apri menu',
+      sections: [
+        {
+          title: truncateMetaText(extra.sectionTitle || 'Scelte', 24) || 'Scelte',
+          rows: normalizedRows.slice(0, 10)
+        }
+      ]
+    }
+  };
+}
+
+function buildWhatsAppRootMenuOptions(extra = {}) {
+  return buildWhatsAppListOptions([
+    { id: 'vehicle_key', title: 'Targa o VIN', description: 'Scrivi targa o VIN del veicolo' },
+    { id: 'vehicle_document_photo', title: 'Foto libretto', description: 'Invia il documento del veicolo' },
+    { id: 'part_photo', title: 'Foto pezzo', description: 'Invia foto pezzo o etichetta' },
+    { id: 'oe_code', title: 'Codice OE', description: 'Invia il codice ricambio' },
+    { id: 'free_text_request', title: 'Testo libero', description: 'Scrivi la richiesta completa' },
+    { id: 'info', title: 'Info', description: 'Vedi come cercare meglio il ricambio' }
+  ], {
+    headerText: extra.headerText || 'Vera',
+    footerText: extra.footerText || 'Horygon Parts',
+    buttonText: extra.buttonText || 'Apri menu',
+    sectionTitle: extra.sectionTitle || 'Come vuoi iniziare',
+    includeCloseSession: extra.includeCloseSession !== false
+  });
+}
+
+function buildWhatsAppCategoryMenuOptions(extra = {}) {
+  return buildWhatsAppListOptions([
+    { id: 'categoria_cristalli', title: 'Cristalli', description: 'Parabrezza, lunotto, vetri laterali' },
+    { id: 'categoria_filtri', title: 'Filtri', description: 'Olio, aria, abitacolo, carburante' },
+    { id: 'categoria_freni', title: 'Freni', description: 'Pastiglie, dischi, pinze' },
+    { id: 'categoria_retrovisori', title: 'Retrovisori', description: 'Specchi e calotte' },
+    { id: 'categoria_illuminazione', title: 'Illuminazione', description: 'Fari, stop, lampade' },
+    { id: 'categoria_altro', title: 'Altro', description: 'Ricambio non ancora classificato' },
+    { id: 'info', title: 'Info', description: 'Suggerimenti per cercare il ricambio' }
+  ], {
+    headerText: extra.headerText || 'Ricambi',
+    footerText: extra.footerText || 'Horygon Parts',
+    buttonText: extra.buttonText || 'Categorie',
+    sectionTitle: extra.sectionTitle || 'Scegli la categoria',
+    includeCloseSession: extra.includeCloseSession !== false
+  });
+}
+
+function buildWhatsAppReplyOptionsForResolved(resolved = {}) {
+  const stage = String(resolved?.intakeState?.stage || '').toLowerCase();
+  const pendingSlot = String(resolved?.intakeState?.pendingSlot || '').toLowerCase();
+  const intent = String(resolved?.aiRequest?.intent || '').toLowerCase();
+
+  if (intent.includes('assistant_wake') || intent.includes('root_menu') || intent.includes('info_keyword') || stage === 'guided_root_menu') {
+    return buildWhatsAppRootMenuOptions({
+      headerText: 'Vera',
+      sectionTitle: 'Come vuoi iniziare',
+      buttonText: 'Apri menu',
+      includeCloseSession: stage !== 'session_closed'
+    });
+  }
+
+  if (pendingSlot === 'session_action' || stage.includes('session_action')) {
+    return buildWhatsAppReplyButtonsOptions(['SOSTITUISCI', 'AGGIUNGI', 'NO'], {
+      headerText: 'Sessione aperta',
+      includeCloseSession: false
+    });
+  }
+
+  if (pendingSlot === 'quote_pdf_confirmation' || stage.includes('quote')) {
+    return buildWhatsAppReplyButtonsOptions(['SI', 'NO'], {
+      headerText: 'Preventivo PDF',
+      footerText: 'Puoi anche chiudere la sessione'
+    });
+  }
+
+  if (pendingSlot === 'ambiguous_code_type' || stage.includes('ambiguous_code')) {
+    return buildWhatsAppListOptions([
+      { id: 'ambiguous_plate', title: 'Targa', description: 'Conferma che il codice e la targa' },
+      { id: 'ambiguous_oe', title: 'Codice OE', description: 'Conferma che il codice e OE' },
+      { id: 'ambiguous_no', title: 'No', description: 'Nessuna delle due opzioni' }
+    ], {
+      headerText: 'Conferma codice',
+      buttonText: 'Scegli',
+      sectionTitle: 'Che tipo di codice e?'
+    });
+  }
+
+  if (pendingSlot === 'glass_position' || stage.includes('glass_position')) {
+    return buildWhatsAppListOptions([
+      { id: 'glass_parabrezza', title: 'Parabrezza', description: 'Vetro anteriore' },
+      { id: 'glass_lunotto', title: 'Lunotto', description: 'Vetro posteriore' },
+      { id: 'glass_laterale', title: 'Vetro laterale', description: 'Laterale destro o sinistro' },
+      { id: 'glass_raschiavetro', title: 'Raschiavetro', description: 'Guarnizione o raschiavetro' }
+    ], {
+      headerText: 'Cristalli',
+      buttonText: 'Apri elenco',
+      sectionTitle: 'Quale cristallo ti serve?'
+    });
+  }
+
+  if (pendingSlot === 'filter_type' || stage.includes('filter_type')) {
+    return buildWhatsAppListOptions([
+      { id: 'filter_olio', title: 'Olio', description: 'Filtro olio motore' },
+      { id: 'filter_aria', title: 'Aria', description: 'Filtro aria motore' },
+      { id: 'filter_abitacolo', title: 'Abitacolo', description: 'Filtro aria abitacolo' },
+      { id: 'filter_carburante', title: 'Carburante', description: 'Filtro carburante' }
+    ], {
+      headerText: 'Filtri',
+      buttonText: 'Apri elenco',
+      sectionTitle: 'Quale filtro ti serve?'
+    });
+  }
+
+  if (pendingSlot === 'brake_component' || stage.includes('brake_component')) {
+    return buildWhatsAppListOptions([
+      { id: 'brake_pastiglie', title: 'Pastiglie', description: 'Pastiglie freno' },
+      { id: 'brake_dischi', title: 'Dischi', description: 'Dischi freno' },
+      { id: 'brake_pinza', title: 'Pinza', description: 'Pinza freno' },
+      { id: 'brake_altro', title: 'Altro', description: 'Altro componente freni' }
+    ], {
+      headerText: 'Freni',
+      buttonText: 'Apri elenco',
+      sectionTitle: 'Quale componente ti serve?'
+    });
+  }
+
+  if (pendingSlot === 'axle' || stage.includes('waiting_axle')) {
+    return buildWhatsAppReplyButtonsOptions(['Anteriori', 'Posteriori'], {
+      headerText: 'Asse'
+    });
+  }
+
+  if (pendingSlot === 'side' || stage.includes('waiting_side')) {
+    return buildWhatsAppReplyButtonsOptions(['Destro', 'Sinistro'], {
+      headerText: 'Lato'
+    });
+  }
+
+  if (
+    pendingSlot === 'vehicle_key'
+    || pendingSlot === 'plate'
+    || stage.includes('waiting_vehicle_key')
+    || stage.includes('waiting_service_key')
+    || stage === 'guided_waiting_document_photo'
+    || stage === 'guided_waiting_part_photo'
+    || stage === 'guided_waiting_oe_code'
+    || stage === 'guided_waiting_free_text'
+  ) {
+    return buildWhatsAppRootMenuOptions({
+      headerText: 'Vera',
+      sectionTitle: 'Dati utili',
+      buttonText: 'Apri menu'
+    });
+  }
+
+  if (pendingSlot === 'part_name' || stage.includes('waiting_part_name') || stage.includes('document_vehicle_data_completed')) {
+    return buildWhatsAppCategoryMenuOptions({
+      headerText: 'Ricambi',
+      buttonText: 'Apri categorie',
+      sectionTitle: 'Che ricambio ti serve?'
+    });
+  }
+
+  if (stage === 'session_closed') {
+    return buildWhatsAppRootMenuOptions({
+      headerText: 'Vera',
+      sectionTitle: 'Nuova richiesta',
+      buttonText: 'Apri menu',
+      includeCloseSession: false
+    });
+  }
+
+  return null;
+}
+
 function buildTelegramReplyOptionsForResolved(resolved = {}) {
   const stage = String(resolved?.intakeState?.stage || '').toLowerCase();
   const pendingSlot = String(resolved?.intakeState?.pendingSlot || '').toLowerCase();
@@ -619,7 +884,7 @@ function buildTelegramReplyOptionsForResolved(resolved = {}) {
   return null;
 }
 
-function buildTelegramGuidedChoiceResponse({ choice = '', text = '', previousContext = {}, previousIntakeState = { slots: {} } }) {
+function buildGuidedChoiceResponse({ choice = '', text = '', previousContext = {}, previousIntakeState = { slots: {} }, channel = 'telegram' }) {
   const currentPart = buildCurrentPartSummary(previousIntakeState.slots || {}, previousContext);
   const currentCategory = normalizePartCategory(
     s(previousIntakeState.slots?.part_category) || s(previousContext.normalized_part_category),
@@ -653,21 +918,21 @@ function buildTelegramGuidedChoiceResponse({ choice = '', text = '', previousCon
     vehicle: null,
     normalizedPart: baseNormalizedPart,
     dbrtResult: {},
-    glassCatalog: { status: 'SKIPPED', message: 'Scelta guidata Telegram acquisita', items: [] },
+    glassCatalog: { status: 'SKIPPED', message: `Scelta guidata ${channel} acquisita`, items: [] },
     oeCatalog: {},
     oeResults: [],
     equivalents: {},
     missingData: selected.pendingSlot ? [selected.pendingSlot] : [],
     whatsappText: selected.question,
     aiRequest: {
-      intent: `telegram_guided_${choice || 'root_menu'}`,
+      intent: `${channel}_guided_${choice || 'root_menu'}`,
       request_is_valid: true,
       suggested_service: 'WAITING_DATA',
-      instruction: 'Scelta guidata acquisita da tastiera Telegram prima del triage completo della richiesta.',
-      availableSources: ['TELEGRAM_KEYBOARD', 'CONVERSATION_CONTEXT'],
+      instruction: 'Scelta guidata acquisita tramite interazione chat prima del triage completo della richiesta.',
+      availableSources: [channel === 'telegram' ? 'TELEGRAM_KEYBOARD' : 'WHATSAPP_INTERACTIVE', 'CONVERSATION_CONTEXT'],
       openai: { skipped: true, error: null, model: null, statusCode: null, raw: null, parsed: null }
     },
-    aiSummary: 'Scelta guidata Telegram acquisita.',
+    aiSummary: `Scelta guidata ${channel} acquisita.`,
     resolvedStatus: selected.pendingSlot ? 'in_attesa_dati_cliente' : null,
     intakeState: {
       stage: selected.stage,
@@ -2152,18 +2417,12 @@ function isWhatsappConfigured() {
   return !!(process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID);
 }
 
-function sendWhatsAppText(to, bodyText, options = {}) {
+function postWhatsAppJsonPayload(payload) {
   return new Promise((resolve) => {
     if (!isWhatsappConfigured()) return resolve({ skipped: true, reason: 'whatsapp_non_configurato' });
     const version = process.env.WHATSAPP_API_VERSION || 'v20.0';
     const endpoint = new URL(`https://graph.facebook.com/${version}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`);
-    const payload = JSON.stringify({
-      messaging_product: 'whatsapp',
-      recipient_type: 'individual',
-      to: String(to || ''),
-      type: 'text',
-      text: { preview_url: false, body: String(bodyText || '') }
-    });
+    const rawPayload = JSON.stringify(payload || {});
     const req = https.request({
       protocol: endpoint.protocol,
       hostname: endpoint.hostname,
@@ -2173,7 +2432,7 @@ function sendWhatsAppText(to, bodyText, options = {}) {
       timeout: Number(process.env.RTWS_TIMEOUT_MS || 12000),
       headers: {
         'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(payload),
+        'Content-Length': Buffer.byteLength(rawPayload),
         Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`
       }
     }, (res) => {
@@ -2188,9 +2447,103 @@ function sendWhatsAppText(to, bodyText, options = {}) {
     });
     req.on('timeout', () => req.destroy(new Error('timeout')));
     req.on('error', (error) => resolve({ skipped: false, error: error.message }));
-    req.write(payload);
+    req.write(rawPayload);
     req.end();
   });
+}
+
+function buildWhatsAppTextPayload(to, bodyText) {
+  return {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: String(to || ''),
+    type: 'text',
+    text: {
+      preview_url: false,
+      body: String(bodyText || '')
+    }
+  };
+}
+
+function buildWhatsAppInteractivePayload(to, bodyText, options = {}) {
+  const interactive = options?.whatsappInteractive || null;
+  if (!interactive) return buildWhatsAppTextPayload(to, bodyText);
+  const basePayload = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: String(to || ''),
+    type: 'interactive'
+  };
+  const body = {
+    text: truncateMetaText(bodyText || '', 1024)
+  };
+  const headerText = truncateMetaText(interactive.headerText || '', 60);
+  const footerText = truncateMetaText(interactive.footerText || '', 60);
+
+  if (interactive.type === 'button') {
+    const buttons = Array.isArray(interactive.buttons) ? interactive.buttons.slice(0, 3) : [];
+    if (!buttons.length) return buildWhatsAppTextPayload(to, bodyText);
+    return {
+      ...basePayload,
+      interactive: {
+        type: 'button',
+        ...(headerText ? { header: { type: 'text', text: headerText } } : {}),
+        body,
+        ...(footerText ? { footer: { text: footerText } } : {}),
+        action: {
+          buttons
+        }
+      }
+    };
+  }
+
+  if (interactive.type === 'list') {
+    const sections = Array.isArray(interactive.sections)
+      ? interactive.sections
+        .slice(0, 10)
+        .map((section, sectionIndex) => ({
+          title: truncateMetaText(section?.title || `Scelte ${sectionIndex + 1}`, 24) || `Scelte ${sectionIndex + 1}`,
+          rows: Array.isArray(section?.rows)
+            ? section.rows.map((row, rowIndex) => normalizeWhatsAppInteractiveRow(row, rowIndex + 1)).filter(Boolean).slice(0, 10)
+            : []
+        }))
+        .filter((section) => section.rows.length)
+      : [];
+    if (!sections.length) return buildWhatsAppTextPayload(to, bodyText);
+    return {
+      ...basePayload,
+      interactive: {
+        type: 'list',
+        ...(headerText ? { header: { type: 'text', text: headerText } } : {}),
+        body,
+        ...(footerText ? { footer: { text: footerText } } : {}),
+        action: {
+          button: truncateMetaText(interactive.buttonText || 'Apri menu', 20) || 'Apri menu',
+          sections
+        }
+      }
+    };
+  }
+
+  return buildWhatsAppTextPayload(to, bodyText);
+}
+
+async function sendWhatsAppText(to, bodyText, options = {}) {
+  if (!isWhatsappConfigured()) return { skipped: true, reason: 'whatsapp_non_configurato' };
+  const wantsInteractive = !!options?.whatsappInteractive;
+  const primaryPayload = wantsInteractive
+    ? buildWhatsAppInteractivePayload(to, bodyText, options)
+    : buildWhatsAppTextPayload(to, bodyText);
+  const primaryResult = await postWhatsAppJsonPayload(primaryPayload);
+  const failedPrimary = primaryResult.error || !primaryResult.statusCode || primaryResult.statusCode < 200 || primaryResult.statusCode >= 300;
+  if (!wantsInteractive || !failedPrimary) return primaryResult;
+
+  const fallbackResult = await postWhatsAppJsonPayload(buildWhatsAppTextPayload(to, bodyText));
+  return {
+    ...fallbackResult,
+    fallbackFromInteractive: true,
+    interactiveAttempt: primaryResult
+  };
 }
 
 async function sendWhatsAppDocumentBuffer(to, buffer, filename, caption = '') {
@@ -3206,8 +3559,10 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   const earlyExplicitPart = deriveExplicitPartRequest(text, earlyPlate, earlyVin, earlyOeCode);
   const selfContainedFreshRequest = !!earlyExplicitPart && !!(earlyPlate || earlyVin || earlyOeCode);
   const masterCase = classifyInboundCase({ text, mediaAi });
-  const guidedChoice = channel === 'telegram' ? detectGuidedIntakeChoice(text) : '';
   const assistantWakeIntent = detectAssistantWakeIntent(text);
+  const guidedChoice = (channel === 'telegram' || (channel === 'whatsapp' && !assistantWakeIntent))
+    ? detectGuidedIntakeChoice(text)
+    : '';
   const sessionIntent = detectSessionKeywordIntent(text);
   const currentPartSummary = buildCurrentPartSummary(previousIntakeState.slots || {}, previousContext);
   const normalizedAnswer = text.toLowerCase();
@@ -3225,11 +3580,12 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   const guidedDocumentRequested = String(previousIntakeState.pendingSlot || '') === 'vehicle_document_photo';
 
   if (guidedChoice) {
-    return buildTelegramGuidedChoiceResponse({
+    return buildGuidedChoiceResponse({
       choice: guidedChoice,
       text,
       previousContext,
-      previousIntakeState
+      previousIntakeState,
+      channel
     });
   }
 
@@ -4959,6 +5315,12 @@ function buildFlowMessageCode(resolved = {}) {
   return 'HPS2-ASK';
 }
 
+function detectOutboundAutoReplyMessageType(channel = '', replyOptions = null) {
+  if (channel === 'whatsapp' && replyOptions?.whatsappInteractive) return 'interactive';
+  if (channel === 'telegram' && replyOptions?.reply_markup) return 'interactive';
+  return 'text';
+}
+
 function decorateFlowReplyText(bodyText, resolved = {}) {
   const text = s(bodyText);
   if (!text) return '';
@@ -5131,7 +5493,7 @@ async function processInboundPartsMessage({
     }
     const channelReplyOptions = channel === 'telegram'
       ? buildTelegramReplyOptionsForResolved(resolved)
-      : null;
+      : (channel === 'whatsapp' ? buildWhatsAppReplyOptionsForResolved(resolved) : null);
 
     if (resolved.status === 'ERROR') {
       db.prepare(`UPDATE parts_requests SET status = 'errore_integrazione', updated_at = datetime('now') WHERE id = ?`).run(partsRequestId);
@@ -5172,16 +5534,20 @@ async function processInboundPartsMessage({
 
       if (resolved.whatsappText) {
         const outboundResult = await sendText(outboundTarget, resolved.whatsappText, channelReplyOptions || undefined);
+        const outboundMessageType = outboundResult?.fallbackFromInteractive
+          ? 'text'
+          : detectOutboundAutoReplyMessageType(channel, channelReplyOptions);
         db.prepare(`
           INSERT INTO whatsapp_messages (
             conversation_id, direction, channel, external_message_id, message_type,
             body_text, delivery_status, error_message, source_system, raw_payload_json
           )
-          VALUES (?, 'outbound', ?, ?, 'text', ?, ?, ?, 'openai_auto_reply', ?)
+          VALUES (?, 'outbound', ?, ?, ?, ?, ?, ?, 'openai_auto_reply', ?)
         `).run(
           conversation.id,
           channel,
           extractOutboundMessageId(channel, outboundResult),
+          outboundMessageType,
           resolved.whatsappText,
           outboundResult.error ? 'error' : (outboundResult.statusCode >= 200 && outboundResult.statusCode < 300 ? 'sent' : 'error'),
           outboundResult.error || s(outboundResult.body?.error?.message) || s(outboundResult.body?.description),
@@ -5376,6 +5742,9 @@ router.post('/webhook/whatsapp', async (req, res) => {
           || s(message?.document?.caption)
           || s(message?.button?.text)
           || s(message?.interactive?.button_reply?.title)
+          || s(message?.interactive?.list_reply?.title)
+          || s(message?.interactive?.button_reply?.id)
+          || s(message?.interactive?.list_reply?.id)
           || '';
         const externalMessageId = s(message?.id);
         enqueueInboundPartsMessage({
