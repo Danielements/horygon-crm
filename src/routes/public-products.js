@@ -1,4 +1,6 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const db = require('../db/database');
 const { createPreventivoPdfBuffer } = require('../services/document-pdf');
 
@@ -41,6 +43,10 @@ function renderDocumentLabel(tipo) {
   return tipo || 'Allegato';
 }
 
+function getPublicMediaUrl(productId, mediaId) {
+  return `/prodotto/${productId}/media/${mediaId}`;
+}
+
 router.get('/api/public/preventivi/:token/pdf', async (req, res) => {
   const token = String(req.params.token || '').trim();
   if (!token) return res.status(404).json({ error: 'Preventivo non trovato' });
@@ -62,6 +68,27 @@ router.get('/api/public/prodotti/:id', (req, res) => {
   const product = getPublicProduct(Number(req.params.id));
   if (!product) return res.status(404).json({ error: 'Prodotto non trovato' });
   res.json(product);
+});
+
+router.get('/prodotto/:id/media/:mediaId', (req, res) => {
+  const productId = Number(req.params.id);
+  const mediaId = Number(req.params.mediaId);
+  const product = getPublicProduct(productId);
+  if (!product) return res.status(404).send('Prodotto non trovato');
+  const media = (product.media || []).find((item) => Number(item.id) === mediaId);
+  if (!media?.path) return res.status(404).send('Documento non trovato');
+
+  const uploadsRoot = path.resolve(process.cwd(), 'uploads');
+  const relativePath = String(media.path || '').replace(/^\/+/, '');
+  const absolutePath = path.resolve(process.cwd(), relativePath);
+  if (!absolutePath.startsWith(uploadsRoot) || !fs.existsSync(absolutePath)) {
+    return res.status(404).send('Documento non disponibile');
+  }
+
+  if (media.nome_file) {
+    res.setHeader('Content-Disposition', `inline; filename="${path.basename(media.nome_file)}"`);
+  }
+  res.sendFile(absolutePath);
 });
 
 router.get('/prodotto/:id', (req, res) => {
@@ -94,14 +121,14 @@ router.get('/prodotto/:id', (req, res) => {
   const heroImage = immagini[0]?.path || '';
   const galleryHtml = immagini.length
     ? immagini.map((item) => `
-        <a class="gallery-card" href="${escapeHtml(item.path)}" target="_blank" rel="noopener">
-          <img src="${escapeHtml(item.path)}" alt="${escapeHtml(item.nome_file || product.nome)}">
+        <a class="gallery-card" href="${escapeHtml(getPublicMediaUrl(product.id, item.id))}" target="_blank" rel="noopener">
+          <img src="${escapeHtml(getPublicMediaUrl(product.id, item.id))}" alt="${escapeHtml(item.nome_file || product.nome)}">
         </a>
       `).join('')
     : '<div class="empty-box">Nessuna foto disponibile</div>';
   const docsHtml = documenti.length
     ? documenti.map((item) => `
-        <a class="doc-row" href="${escapeHtml(item.path)}" target="_blank" rel="noopener">
+        <a class="doc-row" href="${escapeHtml(getPublicMediaUrl(product.id, item.id))}" target="_blank" rel="noopener">
           <div>
             <strong>${escapeHtml(renderDocumentLabel(item.tipo))}</strong>
             <span>${escapeHtml(item.nome_file || 'Apri allegato')}</span>

@@ -2346,9 +2346,10 @@ async function getQR(id) {
     api('GET', `/prodotti/${id}`)
   ]);
   if (!data || !product) return;
+  const publicMediaUrl = (mediaId) => `/prodotto/${id}/media/${mediaId}`;
   const docs = (product.media || []).filter((item) => item.tipo === 'certificazione' || item.tipo === 'scheda_tecnica' || item.tipo === 'pdf');
   const docsHtml = docs.length
-    ? docs.map((item) => `<p style="margin:8px 0"><a href="${item.path}" target="_blank" rel="noopener">${item.tipo === 'certificazione' ? 'Certificazione' : item.tipo === 'scheda_tecnica' ? 'Scheda tecnica' : 'Documento'}: ${escapeHtml(item.nome_file || 'Apri allegato')}</a></p>`).join('')
+    ? docs.map((item) => `<p style="margin:8px 0"><a href="${publicMediaUrl(item.id)}" target="_blank" rel="noopener">${item.tipo === 'certificazione' ? 'Certificazione' : item.tipo === 'scheda_tecnica' ? 'Scheda tecnica' : 'Documento'}: ${escapeHtml(item.nome_file || 'Apri allegato')}</a></p>`).join('')
     : '<p style="font-size:12px;color:#64748b">Nessuna certificazione o scheda tecnica allegata</p>';
   const win = window.open('', '_blank', 'width=400,height=450');
   win.document.write(`<html><body style="background:#f4f6f9;font-family:Inter,sans-serif;padding:30px;text-align:center">
