@@ -475,9 +475,17 @@ function detectGuidedIntakeChoice(text = '') {
   return '';
 }
 
-function buildTelegramReplyKeyboard(rows = [], inputPlaceholder = '') {
-  const keyboard = rows
-    .map((row) => Array.isArray(row) ? row.map((label) => ({ text: String(label || '').trim() })).filter((item) => item.text) : [])
+function buildTelegramReplyKeyboard(rows = [], inputPlaceholder = '', options = {}) {
+  const includeCloseSession = options?.includeCloseSession !== false;
+  const normalizedRows = rows
+    .map((row) => Array.isArray(row) ? row.map((label) => String(label || '').trim()).filter(Boolean) : [])
+    .filter((row) => row.length);
+  const hasCloseSessionButton = normalizedRows.some((row) => row.some((label) => /^chiudi sessione$/i.test(label)));
+  if (includeCloseSession && !hasCloseSessionButton) {
+    normalizedRows.push(['Chiudi sessione']);
+  }
+  const keyboard = normalizedRows
+    .map((row) => row.map((label) => ({ text: label })))
     .filter((row) => row.length);
   if (!keyboard.length) return null;
   const replyMarkup = {
@@ -605,7 +613,7 @@ function buildTelegramReplyOptionsForResolved(resolved = {}) {
       ['Targa o VIN', 'Foto libretto'],
       ['Foto pezzo', 'Codice OE'],
       ['Testo libero', 'Info']
-    ], 'Inizia una nuova richiesta');
+    ], 'Inizia una nuova richiesta', { includeCloseSession: false });
   }
 
   return null;
