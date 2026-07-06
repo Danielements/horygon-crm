@@ -1507,6 +1507,21 @@ function getPendingCategoryService(category = '', slots = {}) {
   }
 }
 
+function resolvePlannedService(category = '', suggestedService = '', slots = {}) {
+  const normalizedCategory = normalizePartCategory(category, slots.part_name || '');
+  const normalizedSuggested = String(s(suggestedService) || '').toUpperCase();
+  const fallbackService = getPendingCategoryService(normalizedCategory, slots);
+
+  if (!normalizedSuggested || normalizedSuggested === 'MANUAL_REVIEW' || normalizedSuggested === 'WAITING_DATA') {
+    return fallbackService;
+  }
+  if (normalizedSuggested === 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2' && normalizedCategory !== 'cristalli') {
+    return fallbackService;
+  }
+
+  return normalizedSuggested;
+}
+
 function buildPendingCategoryMessage(category = '', partName = '', slots = {}) {
   const normalizedCategory = normalizePartCategory(category, partName);
   const partLabel = s(partName) || 'il ricambio richiesto';
@@ -1533,6 +1548,26 @@ function buildPendingCategoryMessage(category = '', partName = '', slots = {}) {
         return `Ho riconosciuto la richiesta per ${partLabel}.${lookupText} La instrado sul ramo OE/equivalenti: il catalogo automatico dedicato non e ancora attivo, quindi passa al reparto tecnico.`;
       }
       return `Ho raccolto i dati per ${partLabel}.${lookupText} La richiesta passa al reparto tecnico per usare il ramo piu adatto appena disponibile.`;
+  }
+}
+
+function buildVehicleAwarePendingCategoryMessage(category = '', partName = '', slots = {}, vehicle = null) {
+  const normalizedCategory = normalizePartCategory(category, partName);
+  const baseVehicleLabel = buildVehicleSummaryLabel(vehicle);
+  const vehicleLabel = baseVehicleLabel || 'il veicolo associato alla targa';
+  const plateText = s(slots.plate) ? ` dalla targa ${s(slots.plate)}` : '';
+
+  switch (normalizedCategory) {
+    case 'filtri':
+      return `Ho riconosciuto una richiesta filtri per ${s(partName) || 'il ricambio richiesto'}. Ho identificato ${vehicleLabel}${plateText}. Il ramo filtri e pronto per la lavorazione tecnica senza usare il flusso cristalli.`;
+    case 'freni':
+      return `Ho riconosciuto una richiesta freni per ${s(partName) || 'il ricambio richiesto'}. Ho identificato ${vehicleLabel}${plateText}. Il ramo freni e pronto per la lavorazione tecnica senza usare il flusso cristalli.`;
+    case 'retrovisori':
+      return `Ho riconosciuto una richiesta retrovisori per ${s(partName) || 'il ricambio richiesto'}. Ho identificato ${vehicleLabel}${plateText}. Il ramo retrovisori e pronto per la lavorazione tecnica senza usare il flusso cristalli.`;
+    case 'illuminazione':
+      return `Ho riconosciuto una richiesta illuminazione per ${s(partName) || 'il ricambio richiesto'}. Ho identificato ${vehicleLabel}${plateText}. Il ramo illuminazione e pronto per la lavorazione tecnica senza usare il flusso cristalli.`;
+    default:
+      return `Ho identificato ${vehicleLabel}${plateText} e ho raccolto i dati della richiesta per ${s(partName) || 'il ricambio richiesto'}. La richiesta passa al reparto tecnico sul ramo corretto.`;
   }
 }
 
@@ -1584,9 +1619,17 @@ function buildServiceExecutionPlan(slots = {}, suggestedService = '', evidence =
     };
   }
 
+  if (category !== 'cristalli' && hasPlate && partName && isRtwsIdentificationConfigured()) {
+    return {
+      mode: 'execute_service',
+      service: 'RTWS_IDENTIFICATION_GET_RT_TARGA_MIN',
+      category
+    };
+  }
+
   return {
     mode: 'escalate_service_pending',
-    service: s(suggestedService) || getPendingCategoryService(category, slots),
+    service: resolvePlannedService(category, suggestedService, slots),
     category,
     message: buildPendingCategoryMessage(category, partName, slots)
   };
@@ -1614,6 +1657,15 @@ function isRtwsConfigured() {
     process.env.RTWS_AZIENDA_NAME &&
     process.env.RTWS_PASSWORD &&
     process.env.RTWS_PRODUCT_LISTINI
+  );
+}
+
+function isRtwsIdentificationConfigured() {
+  return !!(
+    getRtwsServiceUrl() &&
+    process.env.RTWS_AZIENDA_NAME &&
+    process.env.RTWS_PASSWORD &&
+    process.env.RTWS_PRODUCT_IDENTIFICATION
   );
 }
 
@@ -1700,6 +1752,31 @@ function parseRtwsGlassItems(rawXml) {
   })).filter((item) => item.oe_code || item.eurocode || item.description);
 }
 
+function parseRtwsVehicleAllestimenti(rawXml) {
+  return collectXmlBlocks(getXmlTagBlock(rawXml, 'Allestimenti'), 'AllestimentoEsteso').map((block) => ({
+    category: getXmlTagValue(block, 'Category') || '',
+    id_marca: getXmlTagValue(block, 'IdMar') || '',
+    id_modello: getXmlTagValue(block, 'IdMod') || '',
+    id_versione: getXmlTagValue(block, 'IdVer') || '',
+    make: getXmlTagValue(block, 'DsMar') || '',
+    model: getXmlTagValue(block, 'DsMod') || '',
+    version: getXmlTagValue(block, 'DsVer') || '',
+    infocar_code: getXmlTagValue(block, 'CodiceInfocarAM') || '',
+    link_type: getXmlTagValue(block, 'TipologiaLink') || '',
+    id_par: getXmlTagValue(block, 'IdPar') || '',
+    start_commercialization: getXmlTagValue(block, 'InizioCommercializzazione') || '',
+    end_commercialization: getXmlTagValue(block, 'FineCommercializzazione') || ''
+  })).filter((item) => item.make || item.model || item.version || item.id_marca || item.infocar_code);
+}
+
+function buildVehicleSummaryLabel(vehicle = {}) {
+  return [
+    s(vehicle.make),
+    s(vehicle.model),
+    s(vehicle.version)
+  ].filter(Boolean).join(' ').trim();
+}
+
 async function rtwsCheckEurocodeDaTargaOE2({ plate, oeCode = '', eurocode = '', ricercaVin = 0 }) {
   if (!isRtwsConfigured()) {
     return { status: 'NOT_CONFIGURED', message: 'RTWS non configurato', items: [] };
@@ -1734,6 +1811,68 @@ async function rtwsCheckEurocodeDaTargaOE2({ plate, oeCode = '', eurocode = '', 
     rawXml: result.rawXml,
     stateCode: stateCode || '',
     warning: isWarning
+  };
+}
+
+async function rtwsGetVehicleByPlate({ plate, ricercaAvanzata = true }) {
+  if (!isRtwsIdentificationConfigured()) {
+    return { status: 'NOT_CONFIGURED', message: 'RTWS identificazione non configurato', vehicle: null, allestimenti: [] };
+  }
+
+  const sessionId = await getRtwsSession(process.env.RTWS_PRODUCT_IDENTIFICATION);
+  const body = `
+    <sessionId>${xmlEscape(sessionId)}</sessionId>
+    <context>
+      <Targa>${xmlEscape(normalizePlate(plate))}</Targa>
+      <RicercaAvanzata>${ricercaAvanzata ? 'true' : 'false'}</RicercaAvanzata>
+    </context>
+  `;
+  const result = await callRtwsSoap('GetRTDaTargaMin', body);
+  if (!result.ok) {
+    return { status: 'ERROR', message: result.error || 'Chiamata RTWS identificazione fallita', vehicle: null, allestimenti: [], rawXml: result.rawXml || '' };
+  }
+
+  const allestimenti = parseRtwsVehicleAllestimenti(result.rawXml);
+  const selected = allestimenti[0] || {};
+  const plateValue = getXmlTagValue(result.rawXml, 'targa') || normalizePlate(plate);
+  const vin = getXmlTagValue(result.rawXml, 'telaio') || '';
+  const engineCode = getXmlTagValue(result.rawXml, 'codiceMotore') || '';
+  const errCode = getXmlTagValue(result.rawXml, 'AllestimentiErrCode') || '';
+  const errMessage = getXmlTagValue(result.rawXml, 'AllestimentiErrMessage') || '';
+  const vehicle = (selected.make || selected.model || selected.version || vin || plateValue)
+    ? {
+        make: selected.make || '',
+        model: selected.model || '',
+        version: selected.version || '',
+        engine_code: engineCode || '',
+        ktype: '',
+        infocar_code: selected.infocar_code || '',
+        vehicle_source: 'rtws_identification_targa',
+        raw_payload_json: {
+          plate: plateValue,
+          vin,
+          engine_code: engineCode,
+          err_code: errCode,
+          err_message: errMessage,
+          selected_allestimento: selected,
+          allestimenti
+        }
+      }
+    : null;
+
+  const status = vehicle ? 'READY' : 'EMPTY';
+  return {
+    status,
+    message: vehicle
+      ? 'Veicolo identificato da targa tramite RTWS_IDENTIFICATION.'
+      : (errMessage || 'Nessun veicolo identificato da targa tramite RTWS_IDENTIFICATION.'),
+    vehicle,
+    allestimenti,
+    rawXml: result.rawXml,
+    errorCode: errCode,
+    errorMessage: errMessage,
+    plate: plateValue,
+    vin
   };
 }
 
@@ -4060,6 +4199,69 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     };
   }
 
+  if (servicePlan.mode === 'execute_service' && servicePlan.service === 'RTWS_IDENTIFICATION_GET_RT_TARGA_MIN' && intakeSlots.part_category !== 'cristalli') {
+    const identification = await rtwsGetVehicleByPlate({ plate: intakeSlots.plate });
+    const vehicle = identification.vehicle || null;
+    const identifiedMessage = vehicle
+      ? buildVehicleAwarePendingCategoryMessage(normalizedPart.category, normalizedPart.name, intakeSlots, vehicle)
+      : null;
+    const fallbackMessage = servicePlan.message
+      || buildPendingCategoryMessage(normalizedPart.category, normalizedPart.name, intakeSlots);
+    const whatsappText = identifiedMessage
+      || (identification.status === 'ERROR'
+        ? `${fallbackMessage} La verifica automatica del veicolo da targa non si e completata, quindi la richiesta passa comunque al reparto tecnico.`
+        : fallbackMessage);
+
+    return {
+      status: 'OK',
+      parsed,
+      vehicle,
+      normalizedPart,
+      dbrtResult: {},
+      glassCatalog: { status: 'SKIPPED', message: 'Servizio cristalli non applicabile a questa categoria', items: [] },
+      identificationCatalog: identification,
+      oeCatalog: {},
+      oeResults: [],
+      equivalents: {},
+      missingData: [],
+      whatsappText,
+      escalationRequired: true,
+      aiRequest: {
+        intent: 'service_pending_manual_review',
+        request_is_valid: evidence.request_is_valid !== false,
+        suggested_service: servicePlan.service,
+        instruction: 'Flusso server categoria non cristalli: identificazione veicolo da targa eseguita prima del passaggio al reparto tecnico.',
+        availableSources: ['RTWS_IDENTIFICATION', 'RULES', 'CONVERSATION_CONTEXT'],
+        parsed,
+        normalizedPart,
+        intakeSlots,
+        intakeDecision,
+        servicePlan,
+        identification,
+        evidenceAnalysis: evidence,
+        mediaAnalysis: mediaAi,
+        openai: {
+          skipped: !!evidenceResult.skipped,
+          error: evidenceResult.error || null,
+          model: evidenceResult.meta?.model || process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          statusCode: evidenceResult.meta?.statusCode || null,
+          raw: evidenceResult.meta?.content || evidenceResult.meta?.raw || evidenceResult.raw || null,
+          parsed: evidenceResult.data || evidenceResult.meta?.parsed || null
+        }
+      },
+      aiSummary: vehicle
+        ? `Veicolo identificato da targa per richiesta ${normalizedPart.category || 'ricambi'}: ${buildVehicleSummaryLabel(vehicle) || intakeSlots.plate || 'veicolo acquisito'}.`
+        : (s(evidence.ai_summary) || null),
+      resolvedStatus: 'in_attesa_verifica_tecnica',
+      intakeState: {
+        stage: 'manual_review',
+        pendingSlot: null,
+        pendingQuestion: null,
+        slots: intakeSlots
+      }
+    };
+  }
+
   const manualReviewMessage = servicePlan.message
     || `Ho raccolto i dati per ${normalizedPart.name || 'il ricambio richiesto'}, ma al momento il servizio automatico per la categoria ${normalizedPart.category || 'ricambio_generico'} non e ancora disponibile. La richiesta passa in verifica manuale al reparto tecnico.`;
 
@@ -4113,6 +4315,7 @@ function persistResolvedPayload(partsRequestId, resolved) {
   const parsed = resolved?.parsed || {};
   const normalizedPart = resolved?.normalizedPart || {};
   const items = Array.isArray(resolved?.oeResults) ? resolved.oeResults : [];
+  const vehicle = resolved?.vehicle || null;
 
   db.prepare(`
     UPDATE parts_requests
@@ -4155,6 +4358,34 @@ function persistResolvedPayload(partsRequestId, resolved) {
       JSON.stringify(item)
     );
   });
+
+  if (vehicle && (vehicle.make || vehicle.model || vehicle.version || vehicle.engine_code || vehicle.ktype || vehicle.infocar_code || vehicle.raw_payload_json)) {
+    db.prepare(`
+      INSERT INTO parts_request_vehicle_data (
+        parts_request_id, make, model, version, engine_code, ktype, infocar_code, vehicle_source, raw_payload_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(parts_request_id) DO UPDATE SET
+        make = COALESCE(excluded.make, parts_request_vehicle_data.make),
+        model = COALESCE(excluded.model, parts_request_vehicle_data.model),
+        version = COALESCE(excluded.version, parts_request_vehicle_data.version),
+        engine_code = COALESCE(excluded.engine_code, parts_request_vehicle_data.engine_code),
+        ktype = COALESCE(excluded.ktype, parts_request_vehicle_data.ktype),
+        infocar_code = COALESCE(excluded.infocar_code, parts_request_vehicle_data.infocar_code),
+        vehicle_source = COALESCE(excluded.vehicle_source, parts_request_vehicle_data.vehicle_source),
+        raw_payload_json = COALESCE(excluded.raw_payload_json, parts_request_vehicle_data.raw_payload_json),
+        updated_at = datetime('now')
+    `).run(
+      partsRequestId,
+      s(vehicle.make),
+      s(vehicle.model),
+      s(vehicle.version),
+      s(vehicle.engine_code),
+      s(vehicle.ktype),
+      s(vehicle.infocar_code),
+      s(vehicle.vehicle_source),
+      vehicle.raw_payload_json ? JSON.stringify(vehicle.raw_payload_json) : null
+    );
+  }
 
   if (resolved?.intakeState) {
     saveIntakeState(partsRequestId, resolved.intakeState);
@@ -4562,6 +4793,22 @@ async function processInboundPartsMessage({
         });
       } else if (resolved.glassCatalog?.status === 'ERROR') {
         logPartEvent(partsRequestId, 'errore_integrazione', resolved.glassCatalog.message || 'Errore RTWS_LISTINI', 'rtws_listini', resolved.glassCatalog);
+      }
+
+      if (resolved.identificationCatalog?.status === 'READY') {
+        logPartEvent(partsRequestId, 'rtws_identification', resolved.identificationCatalog.message || 'RTWS_IDENTIFICATION eseguito', 'rtws_identification', {
+          vehicle: resolved.vehicle || null,
+          allestimenti: resolved.identificationCatalog.allestimenti?.slice(0, 10) || [],
+          errorCode: resolved.identificationCatalog.errorCode || ''
+        });
+      } else if (resolved.identificationCatalog?.status === 'EMPTY') {
+        logPartEvent(partsRequestId, 'rtws_identification_empty', resolved.identificationCatalog.message || 'RTWS_IDENTIFICATION senza risultati', 'rtws_identification', {
+          plate: resolved.identificationCatalog.plate || null,
+          errorCode: resolved.identificationCatalog.errorCode || '',
+          errorMessage: resolved.identificationCatalog.errorMessage || ''
+        });
+      } else if (resolved.identificationCatalog?.status === 'ERROR') {
+        logPartEvent(partsRequestId, 'rtws_identification_error', resolved.identificationCatalog.message || 'Errore RTWS_IDENTIFICATION', 'rtws_identification', resolved.identificationCatalog);
       }
 
       if (resolved.whatsappText) {
