@@ -351,9 +351,20 @@ function isOperationalFeedbackMessage(value) {
   ].includes(normalized);
 }
 
+function hasVehicleDocumentTextHints(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return false;
+  if (/(libretto|carta di circolazione|documento di circolazione|vehicle registration|registration document|numero di telaio|telaio|immatricolazione|targa|plate|vin|circulation)/.test(normalized)) return true;
+  if (/\b(cognome|nome|residenza|indirizzo|massa|cilindrata|potenza|kw|cv|uso proprio|alimentazione|fabbrica|tipo|variante|versione)\b/.test(normalized)) return true;
+  if (/\b[a-e]\b/.test(normalized) && /(targa|telaio|vin|immatricolazione|plate)/.test(normalized)) return true;
+  const fieldMatches = normalized.match(/\b(immatricolazione|cilindrata|potenza|massa|alimentazione|telaio|vin|targa)\b/g) || [];
+  return fieldMatches.length >= 2;
+}
+
 function isVehicleDocumentMediaKind(value) {
   const normalized = String(value || '').trim().toLowerCase();
-  return /(libretto|carta di circolazione|documento|document|registration|vehicle registration|registration document|circulation)/.test(normalized);
+  return /(libretto|carta di circolazione|documento|document|registration|vehicle registration|registration document|circulation)/.test(normalized)
+    || hasVehicleDocumentTextHints(normalized);
 }
 
 function isLikelyVehicleDocumentAnalysis(mediaAi = null) {
@@ -368,7 +379,7 @@ function isLikelyVehicleDocumentAnalysis(mediaAi = null) {
   const vin = s(mediaAi?.vin) || '';
   const hasVehicleIds = !!(plate || vin);
   const hasBothVehicleIds = !!plate && !!vin;
-  const hasDocumentKeywords = /(libretto|carta di circolazione|numero di telaio|targa|immatricolazione|registration|registration document|vehicle registration|circulation)/.test(signals);
+  const hasDocumentKeywords = hasVehicleDocumentTextHints(signals);
   return hasDocumentKeywords
     || isVehicleDocumentMediaKind(signals)
     || hasBothVehicleIds
@@ -385,7 +396,7 @@ function shouldRetryVehicleDocumentOcr(mediaAi = null) {
     mediaAi?.visible_text
   ].filter(Boolean).join(' ').toLowerCase();
   const visibleText = String(mediaAi?.visible_text || '').replace(/\s+/g, ' ').trim();
-  const hasDocumentKeywords = /(libretto|carta di circolazione|documento|registration|vehicle registration|numero di telaio|immatricolazione|circulation)/.test(signals);
+  const hasDocumentKeywords = hasVehicleDocumentTextHints(signals);
   const textHeavyImage = visibleText.length >= 20;
   return hasDocumentKeywords || textHeavyImage;
 }
@@ -419,6 +430,26 @@ function detectSessionKeywordIntent(text = '') {
   return '';
 }
 
+function detectAssistantWakeIntent(text = '') {
+  const normalized = String(text || '').trim().toLowerCase().replace(/[!?.,:;]+$/g, '');
+  if (!normalized) return '';
+  if (/^(vera|ciao vera|hey vera|ehi vera|ok vera|pronto vera)$/.test(normalized)) return 'wake';
+  return '';
+}
+
+function buildAssistantWakeReplyText() {
+  return [
+    'Ciao, sono Vera, l assistente ricambi di Horygon.',
+    'Per iniziare puoi inviarmi:',
+    '1. Targa o VIN',
+    '2. Foto libretto',
+    '3. Foto pezzo o etichetta',
+    '4. Codice OE',
+    '5. Testo libero con il ricambio',
+    'Esempio: FP781GE parabrezza anteriore.'
+  ].join('\n');
+}
+
 function buildInfoKeywordReplyText() {
   return [
     'Per trovare il ricambio piu in fretta, usa uno di questi 6 formati:',
@@ -430,6 +461,215 @@ function buildInfoKeywordReplyText() {
     '6. Solo foto del pezzo o solo testo libero',
     'Esempio: FP781GE filtro olio oppure foto libretto + "parabrezza anteriore".'
   ].join('\n');
+}
+
+function detectGuidedIntakeChoice(text = '') {
+  const normalized = String(text || '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (/^\/start(?:@\w+)?$/.test(normalized) || /^\/help(?:@\w+)?$/.test(normalized) || detectAssistantWakeIntent(normalized)) return 'root_menu';
+  if (/^(targa o vin|targa\/vin|targa vin|vin o targa)$/.test(normalized)) return 'vehicle_key';
+  if (/^(foto libretto|libretto|foto documento|documento veicolo)$/.test(normalized)) return 'vehicle_document_photo';
+  if (/^(foto pezzo|foto ricambio|foto etichetta|foto codice)$/.test(normalized)) return 'part_photo';
+  if (/^(codice oe|oe|codice oem|codice ricambio)$/.test(normalized)) return 'oe_code';
+  if (/^(testo libero|scrivo io|testo|messaggio libero)$/.test(normalized)) return 'free_text_request';
+  return '';
+}
+
+function buildTelegramReplyKeyboard(rows = [], inputPlaceholder = '') {
+  const keyboard = rows
+    .map((row) => Array.isArray(row) ? row.map((label) => ({ text: String(label || '').trim() })).filter((item) => item.text) : [])
+    .filter((row) => row.length);
+  if (!keyboard.length) return null;
+  const replyMarkup = {
+    keyboard,
+    resize_keyboard: true,
+    one_time_keyboard: false
+  };
+  if (inputPlaceholder) replyMarkup.input_field_placeholder = String(inputPlaceholder).slice(0, 64);
+  return { reply_markup: replyMarkup };
+}
+
+function buildTelegramReplyOptionsForResolved(resolved = {}) {
+  const stage = String(resolved?.intakeState?.stage || '').toLowerCase();
+  const pendingSlot = String(resolved?.intakeState?.pendingSlot || '').toLowerCase();
+  const intent = String(resolved?.aiRequest?.intent || '').toLowerCase();
+  const slots = resolved?.intakeState?.slots || {};
+  const hasVehicleKey = !!(s(slots.plate) || s(slots.vin) || s(slots.oe_code));
+
+  if (intent.includes('root_menu') || stage === 'guided_root_menu' || intent.includes('info_keyword')) {
+    return buildTelegramReplyKeyboard([
+      ['Targa o VIN', 'Foto libretto'],
+      ['Foto pezzo', 'Codice OE'],
+      ['Testo libero', 'Info']
+    ], 'Scegli come vuoi iniziare');
+  }
+
+  if (pendingSlot === 'session_action' || stage.includes('session_action')) {
+    return buildTelegramReplyKeyboard([
+      ['SOSTITUISCI', 'AGGIUNGI'],
+      ['NO']
+    ], 'Scegli come gestire il nuovo ricambio');
+  }
+
+  if (pendingSlot === 'quote_pdf_confirmation' || stage.includes('quote')) {
+    return buildTelegramReplyKeyboard([
+      ['SI', 'NO']
+    ], 'Vuoi il preventivo PDF?');
+  }
+
+  if (pendingSlot === 'ambiguous_code_type' || stage.includes('ambiguous_code')) {
+    return buildTelegramReplyKeyboard([
+      ['Targa', 'Codice OE'],
+      ['No']
+    ], 'Conferma il tipo di codice');
+  }
+
+  if (pendingSlot === 'glass_position' || stage.includes('glass_position')) {
+    return buildTelegramReplyKeyboard([
+      ['Parabrezza', 'Lunotto'],
+      ['Vetro laterale', 'Raschiavetro']
+    ], 'Scegli il cristallo');
+  }
+
+  if (pendingSlot === 'filter_type' || stage.includes('filter_type')) {
+    return buildTelegramReplyKeyboard([
+      ['Olio', 'Aria'],
+      ['Abitacolo', 'Carburante']
+    ], 'Scegli il filtro');
+  }
+
+  if (pendingSlot === 'brake_component' || stage.includes('brake_component')) {
+    return buildTelegramReplyKeyboard([
+      ['Pastiglie', 'Dischi'],
+      ['Pinza', 'Altro']
+    ], 'Scegli il componente freni');
+  }
+
+  if (pendingSlot === 'axle' || stage.includes('waiting_axle')) {
+    return buildTelegramReplyKeyboard([
+      ['Anteriori', 'Posteriori']
+    ], 'Scegli l asse');
+  }
+
+  if (pendingSlot === 'side' || stage.includes('waiting_side')) {
+    return buildTelegramReplyKeyboard([
+      ['Destro', 'Sinistro']
+    ], 'Scegli il lato');
+  }
+
+  if (pendingSlot === 'vehicle_key' || pendingSlot === 'plate' || stage.includes('waiting_vehicle_key') || stage.includes('waiting_service_key')) {
+    return buildTelegramReplyKeyboard([
+      ['Targa o VIN', 'Foto libretto'],
+      ['Foto pezzo', 'Codice OE'],
+      ['Testo libero', 'Info']
+    ], 'Invia targa, VIN, foto o codice OE');
+  }
+
+  if (pendingSlot === 'part_name' || stage.includes('waiting_part_name') || stage.includes('document_vehicle_data_completed') || (hasVehicleKey && !s(slots.part_name))) {
+    return buildTelegramReplyKeyboard([
+      ['Cristalli', 'Filtri', 'Freni'],
+      ['Retrovisori', 'Illuminazione', 'Altro'],
+      ['Chiudi sessione', 'Info']
+    ], 'Scegli la categoria del ricambio');
+  }
+
+  if (stage === 'guided_waiting_document_photo') {
+    return buildTelegramReplyKeyboard([
+      ['Foto libretto', 'Targa o VIN'],
+      ['Info']
+    ], 'Invia la foto del libretto');
+  }
+
+  if (stage === 'guided_waiting_part_photo') {
+    return buildTelegramReplyKeyboard([
+      ['Foto pezzo', 'Targa o VIN'],
+      ['Codice OE', 'Info']
+    ], 'Invia la foto del pezzo');
+  }
+
+  if (stage === 'guided_waiting_oe_code') {
+    return buildTelegramReplyKeyboard([
+      ['Codice OE', 'Targa o VIN'],
+      ['Info']
+    ], 'Invia il codice OE');
+  }
+
+  if (stage === 'guided_waiting_free_text') {
+    return buildTelegramReplyKeyboard([
+      ['Testo libero', 'Info']
+    ], 'Scrivi la richiesta completa');
+  }
+
+  if (stage === 'session_closed') {
+    return buildTelegramReplyKeyboard([
+      ['Targa o VIN', 'Foto libretto'],
+      ['Foto pezzo', 'Codice OE'],
+      ['Testo libero', 'Info']
+    ], 'Inizia una nuova richiesta');
+  }
+
+  return null;
+}
+
+function buildTelegramGuidedChoiceResponse({ choice = '', text = '', previousContext = {}, previousIntakeState = { slots: {} } }) {
+  const currentPart = buildCurrentPartSummary(previousIntakeState.slots || {}, previousContext);
+  const currentCategory = normalizePartCategory(
+    s(previousIntakeState.slots?.part_category) || s(previousContext.normalized_part_category),
+    currentPart
+  );
+  const baseParsed = {
+    originalText: text,
+    plate: s(previousIntakeState.slots?.plate) || s(previousContext.plate) || '',
+    vin: s(previousIntakeState.slots?.vin) || s(previousContext.vin) || '',
+    oeCode: s(previousIntakeState.slots?.oe_code) || s(previousContext.oe_code) || '',
+    requestedPartText: currentPart,
+    confidence: 1
+  };
+  const baseNormalizedPart = {
+    name: currentPart,
+    category: currentCategory
+  };
+  const stageMap = {
+    root_menu: { stage: 'guided_root_menu', pendingSlot: null, question: 'Scegli come vuoi iniziare la richiesta: targa o VIN, foto libretto, foto pezzo, codice OE oppure testo libero.' },
+    vehicle_key: { stage: 'guided_waiting_vehicle_key', pendingSlot: 'vehicle_key', question: 'Perfetto. Inviami targa o VIN e, se vuoi, anche il ricambio in un solo messaggio.' },
+    vehicle_document_photo: { stage: 'guided_waiting_document_photo', pendingSlot: 'vehicle_document_photo', question: 'Perfetto. Inviami la foto del libretto: se riesco a leggerlo salvo subito targa e VIN.' },
+    part_photo: { stage: 'guided_waiting_part_photo', pendingSlot: 'part_photo', question: 'Perfetto. Inviami la foto del pezzo o dell etichetta. Se puoi aggiungi anche targa o VIN.' },
+    oe_code: { stage: 'guided_waiting_oe_code', pendingSlot: 'oe_code', question: 'Perfetto. Inviami il codice OE. Se puoi, aggiungi anche targa o VIN per ridurre gli errori.' },
+    free_text_request: { stage: 'guided_waiting_free_text', pendingSlot: 'free_text_request', question: 'Scrivimi pure tutto in una riga. Esempio: FP781GE parabrezza anteriore.' }
+  };
+  const selected = stageMap[choice] || stageMap.root_menu;
+
+  return {
+    status: 'OK',
+    parsed: baseParsed,
+    vehicle: null,
+    normalizedPart: baseNormalizedPart,
+    dbrtResult: {},
+    glassCatalog: { status: 'SKIPPED', message: 'Scelta guidata Telegram acquisita', items: [] },
+    oeCatalog: {},
+    oeResults: [],
+    equivalents: {},
+    missingData: selected.pendingSlot ? [selected.pendingSlot] : [],
+    whatsappText: selected.question,
+    aiRequest: {
+      intent: `telegram_guided_${choice || 'root_menu'}`,
+      request_is_valid: true,
+      suggested_service: 'WAITING_DATA',
+      instruction: 'Scelta guidata acquisita da tastiera Telegram prima del triage completo della richiesta.',
+      availableSources: ['TELEGRAM_KEYBOARD', 'CONVERSATION_CONTEXT'],
+      openai: { skipped: true, error: null, model: null, statusCode: null, raw: null, parsed: null }
+    },
+    aiSummary: 'Scelta guidata Telegram acquisita.',
+    resolvedStatus: selected.pendingSlot ? 'in_attesa_dati_cliente' : null,
+    intakeState: {
+      stage: selected.stage,
+      pendingSlot: selected.pendingSlot,
+      pendingQuestion: selected.question,
+      slots: {
+        ...previousIntakeState.slots
+      }
+    }
+  };
 }
 
 function buildCurrentPartSummary(slots = {}, context = {}) {
@@ -1655,6 +1895,7 @@ function isRtwsConfigured() {
   return !!(
     getRtwsServiceUrl() &&
     process.env.RTWS_AZIENDA_NAME &&
+    process.env.RTWS_CLIENT_NAME &&
     process.env.RTWS_PASSWORD &&
     process.env.RTWS_PRODUCT_LISTINI
   );
@@ -1664,6 +1905,7 @@ function isRtwsIdentificationConfigured() {
   return !!(
     getRtwsServiceUrl() &&
     process.env.RTWS_AZIENDA_NAME &&
+    process.env.RTWS_CLIENT_NAME &&
     process.env.RTWS_PASSWORD &&
     process.env.RTWS_PRODUCT_IDENTIFICATION
   );
@@ -1818,62 +2060,75 @@ async function rtwsGetVehicleByPlate({ plate, ricercaAvanzata = true }) {
   if (!isRtwsIdentificationConfigured()) {
     return { status: 'NOT_CONFIGURED', message: 'RTWS identificazione non configurato', vehicle: null, allestimenti: [] };
   }
+  try {
+    const sessionId = await getRtwsSession(process.env.RTWS_PRODUCT_IDENTIFICATION);
+    const body = `
+      <sessionId>${xmlEscape(sessionId)}</sessionId>
+      <context>
+        <Targa>${xmlEscape(normalizePlate(plate))}</Targa>
+        <RicercaAvanzata>${ricercaAvanzata ? 'true' : 'false'}</RicercaAvanzata>
+      </context>
+    `;
+    const result = await callRtwsSoap('GetRTDaTargaMin', body);
+    if (!result.ok) {
+      return { status: 'ERROR', message: result.error || 'Chiamata RTWS identificazione fallita', vehicle: null, allestimenti: [], rawXml: result.rawXml || '' };
+    }
 
-  const sessionId = await getRtwsSession(process.env.RTWS_PRODUCT_IDENTIFICATION);
-  const body = `
-    <sessionId>${xmlEscape(sessionId)}</sessionId>
-    <context>
-      <Targa>${xmlEscape(normalizePlate(plate))}</Targa>
-      <RicercaAvanzata>${ricercaAvanzata ? 'true' : 'false'}</RicercaAvanzata>
-    </context>
-  `;
-  const result = await callRtwsSoap('GetRTDaTargaMin', body);
-  if (!result.ok) {
-    return { status: 'ERROR', message: result.error || 'Chiamata RTWS identificazione fallita', vehicle: null, allestimenti: [], rawXml: result.rawXml || '' };
-  }
-
-  const allestimenti = parseRtwsVehicleAllestimenti(result.rawXml);
-  const selected = allestimenti[0] || {};
-  const plateValue = getXmlTagValue(result.rawXml, 'targa') || normalizePlate(plate);
-  const vin = getXmlTagValue(result.rawXml, 'telaio') || '';
-  const engineCode = getXmlTagValue(result.rawXml, 'codiceMotore') || '';
-  const errCode = getXmlTagValue(result.rawXml, 'AllestimentiErrCode') || '';
-  const errMessage = getXmlTagValue(result.rawXml, 'AllestimentiErrMessage') || '';
-  const vehicle = (selected.make || selected.model || selected.version || vin || plateValue)
-    ? {
-        make: selected.make || '',
-        model: selected.model || '',
-        version: selected.version || '',
-        engine_code: engineCode || '',
-        ktype: '',
-        infocar_code: selected.infocar_code || '',
-        vehicle_source: 'rtws_identification_targa',
-        raw_payload_json: {
-          plate: plateValue,
-          vin,
-          engine_code: engineCode,
-          err_code: errCode,
-          err_message: errMessage,
-          selected_allestimento: selected,
-          allestimenti
+    const allestimenti = parseRtwsVehicleAllestimenti(result.rawXml);
+    const selected = allestimenti[0] || {};
+    const plateValue = getXmlTagValue(result.rawXml, 'targa') || normalizePlate(plate);
+    const vin = getXmlTagValue(result.rawXml, 'telaio') || '';
+    const engineCode = getXmlTagValue(result.rawXml, 'codiceMotore') || '';
+    const errCode = getXmlTagValue(result.rawXml, 'AllestimentiErrCode') || '';
+    const errMessage = getXmlTagValue(result.rawXml, 'AllestimentiErrMessage') || '';
+    const vehicle = (selected.make || selected.model || selected.version || vin || plateValue)
+      ? {
+          make: selected.make || '',
+          model: selected.model || '',
+          version: selected.version || '',
+          engine_code: engineCode || '',
+          ktype: '',
+          infocar_code: selected.infocar_code || '',
+          vehicle_source: 'rtws_identification_targa',
+          raw_payload_json: {
+            plate: plateValue,
+            vin,
+            engine_code: engineCode,
+            err_code: errCode,
+            err_message: errMessage,
+            selected_allestimento: selected,
+            allestimenti
+          }
         }
-      }
-    : null;
+      : null;
 
-  const status = vehicle ? 'READY' : 'EMPTY';
-  return {
-    status,
-    message: vehicle
-      ? 'Veicolo identificato da targa tramite RTWS_IDENTIFICATION.'
-      : (errMessage || 'Nessun veicolo identificato da targa tramite RTWS_IDENTIFICATION.'),
-    vehicle,
-    allestimenti,
-    rawXml: result.rawXml,
-    errorCode: errCode,
-    errorMessage: errMessage,
-    plate: plateValue,
-    vin
-  };
+    const status = vehicle ? 'READY' : 'EMPTY';
+    return {
+      status,
+      message: vehicle
+        ? 'Veicolo identificato da targa tramite RTWS_IDENTIFICATION.'
+        : (errMessage || 'Nessun veicolo identificato da targa tramite RTWS_IDENTIFICATION.'),
+      vehicle,
+      allestimenti,
+      rawXml: result.rawXml,
+      errorCode: errCode,
+      errorMessage: errMessage,
+      plate: plateValue,
+      vin
+    };
+  } catch (error) {
+    return {
+      status: 'ERROR',
+      message: error?.message || 'Eccezione RTWS identificazione',
+      vehicle: null,
+      allestimenti: [],
+      rawXml: '',
+      errorCode: 'EXCEPTION',
+      errorMessage: error?.message || 'Eccezione RTWS identificazione',
+      plate: normalizePlate(plate),
+      vin: ''
+    };
+  }
 }
 
 function parseWhatsappResponseBody(raw) {
@@ -1889,7 +2144,7 @@ function isWhatsappConfigured() {
   return !!(process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID);
 }
 
-function sendWhatsAppText(to, bodyText) {
+function sendWhatsAppText(to, bodyText, options = {}) {
   return new Promise((resolve) => {
     if (!isWhatsappConfigured()) return resolve({ skipped: true, reason: 'whatsapp_non_configurato' });
     const version = process.env.WHATSAPP_API_VERSION || 'v20.0';
@@ -2016,10 +2271,11 @@ async function callTelegramApi(method, body, isMultipart = false) {
   };
 }
 
-async function sendTelegramText(chatId, bodyText) {
+async function sendTelegramText(chatId, bodyText, options = {}) {
   return callTelegramApi('sendMessage', {
     chat_id: String(chatId || ''),
-    text: String(bodyText || '')
+    text: String(bodyText || ''),
+    ...(options?.reply_markup ? { reply_markup: options.reply_markup } : {})
   });
 }
 
@@ -2277,7 +2533,7 @@ async function analyzeInboundMediaWithOpenAI({ channel, bodyText, mediaUrl, medi
       messages: [
         {
           role: 'system',
-          content: 'Analizza immagini ricevute per richieste ricambi auto. L immagine puo mostrare targa, libretto, etichetta OE oppure il pezzo stesso. Se vedi un libretto o una carta di circolazione, devi trascrivere quanto piu testo utile possibile in visible_text ed estrarre separatamente sia targa sia VIN quando leggibili. Non fermarti al primo identificativo trovato: raccogli tutti i dati tecnici utili presenti nell immagine. Estrai con prudenza solo dati leggibili o altamente probabili. Se l immagine non basta per completare la richiesta, imposta needs_followup=true e scrivi una domanda breve e utile per il riparatore. Usa normalized_part_category tra cristalli, freni, filtri, retrovisori, illuminazione, ricambio_generico.'
+          content: 'Analizza immagini ricevute per richieste ricambi auto. L immagine puo mostrare targa, libretto, carta di circolazione, etichetta OE oppure il pezzo stesso. Se vedi un libretto o una carta di circolazione italiana, priorita assoluta: trascrivi quanto piu testo utile possibile in visible_text ed estrai separatamente sia targa sia VIN quando leggibili. Cerca in modo attivo i campi tipici del libretto come targa, numero di telaio, immatricolazione, cilindrata, potenza, alimentazione, variante e versione. Non fermarti al primo identificativo trovato: raccogli tutti i dati tecnici utili presenti nell immagine. Se la targa o il VIN sono presenti ma poco nitidi, prova comunque a dedurli solo se altamente probabili; altrimenti lascia stringa vuota. Estrai con prudenza solo dati leggibili o altamente probabili. Se l immagine non basta per completare la richiesta, imposta needs_followup=true e scrivi una domanda breve e utile per il riparatore. Usa normalized_part_category tra cristalli, freni, filtri, retrovisori, illuminazione, ricambio_generico.'
         },
         {
           role: 'user',
@@ -2353,7 +2609,7 @@ async function analyzeInboundMediaWithOpenAI({ channel, bodyText, mediaUrl, medi
           messages: [
             {
               role: 'system',
-              content: 'Sei un OCR specialist per documenti veicolo. Controlla se l immagine mostra un libretto o una carta di circolazione. Devi trascrivere il testo visibile piu utile e cercare in modo specifico targa e VIN. Se li trovi scrivili nei campi dedicati. Se non sono leggibili, lascia stringa vuota e spiega in followup_question cosa manca. Non inventare.'
+              content: 'Sei un OCR specialist per documenti veicolo. Controlla se l immagine mostra un libretto o una carta di circolazione, in particolare italiana. Devi trascrivere il testo visibile piu utile e cercare in modo specifico targa e VIN. Cerca anche segnali tipici del libretto: immatricolazione, numero di telaio, cilindrata, potenza, alimentazione, variante, versione, massa, cognome e nome intestatario. Se trovi targa o VIN scrivili nei campi dedicati. Se non sono leggibili, lascia stringa vuota e spiega in followup_question cosa manca. Non inventare.'
             },
             {
               role: 'user',
@@ -2380,10 +2636,23 @@ async function analyzeInboundMediaWithOpenAI({ channel, bodyText, mediaUrl, medi
       if (retryResponse.ok && retryContent) {
         try {
           const retryData = JSON.parse(retryContent);
+          const retrySignals = [
+            retryData?.media_kind,
+            retryData?.summary,
+            retryData?.visible_text,
+            retryData?.followup_question
+          ].filter(Boolean).join(' ');
+          const retryLooksDocument = hasVehicleDocumentTextHints(retrySignals)
+            || isVehicleDocumentMediaKind(retryData?.media_kind)
+            || !!(s(retryData?.plate) || s(retryData?.vin));
           parsedData = enrichMediaAnalysisData({
             ...parsedData,
-            media_kind: s(parsedData.media_kind) || s(retryData.media_kind) || '',
-            summary: s(parsedData.summary) || s(retryData.summary) || '',
+            media_kind: retryLooksDocument
+              ? (s(retryData.media_kind) || s(parsedData.media_kind) || '')
+              : (s(parsedData.media_kind) || s(retryData.media_kind) || ''),
+            summary: retryLooksDocument
+              ? (s(retryData.summary) || s(parsedData.summary) || '')
+              : (s(parsedData.summary) || s(retryData.summary) || ''),
             visible_text: (String(retryData.visible_text || '').trim().length > String(parsedData.visible_text || '').trim().length)
               ? retryData.visible_text
               : parsedData.visible_text,
@@ -2915,12 +3184,22 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   const previousContext = context || {};
   const previousIntakeState = intakeState || { slots: {} };
   const mediaVehicleKeyDetected = !!(s(mediaAi?.plate) || s(mediaAi?.vin));
+  const mediaDocumentDetected = !!(mediaAi && (
+    isLikelyVehicleDocumentAnalysis(mediaAi)
+    || hasVehicleDocumentTextHints([
+      mediaAi?.summary,
+      mediaAi?.visible_text,
+      mediaAi?.followup_question
+    ].filter(Boolean).join(' '))
+  ));
   const earlyPlate = normalizePlate(extractPlateFromText(text));
   const earlyVin = extractVinFromText(text);
   const earlyOeCode = sanitizeOeCode(extractOeCodeFromText(text), earlyPlate);
   const earlyExplicitPart = deriveExplicitPartRequest(text, earlyPlate, earlyVin, earlyOeCode);
   const selfContainedFreshRequest = !!earlyExplicitPart && !!(earlyPlate || earlyVin || earlyOeCode);
   const masterCase = classifyInboundCase({ text, mediaAi });
+  const guidedChoice = channel === 'telegram' ? detectGuidedIntakeChoice(text) : '';
+  const assistantWakeIntent = detectAssistantWakeIntent(text);
   const sessionIntent = detectSessionKeywordIntent(text);
   const currentPartSummary = buildCurrentPartSummary(previousIntakeState.slots || {}, previousContext);
   const normalizedAnswer = text.toLowerCase();
@@ -2935,8 +3214,76 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   const previousOptions = Array.isArray(previousIntakeState.slots?.proposed_glass_options)
     ? previousIntakeState.slots.proposed_glass_options
     : [];
+  const guidedDocumentRequested = String(previousIntakeState.pendingSlot || '') === 'vehicle_document_photo';
 
-  if (mediaVehicleKeyDetected && !text) {
+  if (guidedChoice) {
+    return buildTelegramGuidedChoiceResponse({
+      choice: guidedChoice,
+      text,
+      previousContext,
+      previousIntakeState
+    });
+  }
+
+  if (assistantWakeIntent && channel !== 'telegram') {
+    const quoteMeta = getLinkedQuoteMeta(previousIntakeState.slots || {}, previousContext);
+    const activeSessionText = currentPartSummary
+      ? (quoteMeta.id || quoteMeta.code
+        ? `Ciao, sono Vera. Hai gia una richiesta aperta per ${currentPartSummary} collegata al preventivo ${quoteMeta.code || `#${quoteMeta.id}`}. Puoi inviarmi subito un nuovo ricambio, scrivere INFO oppure CHIUDI SESSIONE.`
+        : `Ciao, sono Vera. Hai gia una richiesta aperta per ${currentPartSummary}. Puoi inviarmi subito un nuovo ricambio, scrivere INFO oppure CHIUDI SESSIONE.`)
+      : buildAssistantWakeReplyText();
+    return {
+      status: 'OK',
+      parsed: {
+        originalText: text,
+        plate: s(previousIntakeState.slots?.plate) || s(previousContext.plate) || '',
+        vin: s(previousIntakeState.slots?.vin) || s(previousContext.vin) || '',
+        oeCode: s(previousIntakeState.slots?.oe_code) || s(previousContext.oe_code) || '',
+        requestedPartText: currentPartSummary,
+        confidence: 1
+      },
+      vehicle: null,
+      normalizedPart: {
+        name: currentPartSummary,
+        category: normalizePartCategory(s(previousIntakeState.slots?.part_category) || s(previousContext.normalized_part_category), currentPartSummary)
+      },
+      dbrtResult: {},
+      glassCatalog: { status: 'SKIPPED', message: 'Keyword di avvio Vera riconosciuta', items: [] },
+      oeCatalog: {},
+      oeResults: [],
+      equivalents: {},
+      missingData: currentPartSummary ? [] : ['vehicle_key', 'part_name'],
+      whatsappText: activeSessionText,
+      aiRequest: {
+        intent: currentPartSummary ? 'assistant_wake_active_session' : 'assistant_wake',
+        request_is_valid: true,
+        suggested_service: 'WAITING_DATA',
+        instruction: 'Keyword Vera riconosciuta come ingresso esplicito nel flusso assistente.',
+        availableSources: ['KEYWORDS', 'CONVERSATION_CONTEXT'],
+        masterCase,
+        openai: { skipped: true, error: null, model: null, statusCode: null, raw: null, parsed: null }
+      },
+      aiSummary: currentPartSummary
+        ? 'Keyword Vera ricevuta con sessione aperta.'
+        : 'Keyword Vera ricevuta come avvio del flusso guidato.',
+      resolvedStatus: currentPartSummary ? (s(previousContext.status) || 'in_lavorazione') : null,
+      intakeState: currentPartSummary
+        ? {
+          ...previousIntakeState,
+          pendingQuestion: activeSessionText
+        }
+        : {
+          stage: 'guided_root_menu',
+          pendingSlot: null,
+          pendingQuestion: activeSessionText,
+          slots: {
+            ...(previousIntakeState.slots || {})
+          }
+        }
+    };
+  }
+
+  if (!text && (mediaVehicleKeyDetected || mediaDocumentDetected || guidedDocumentRequested)) {
     return buildVehicleDocumentWaitingResponse({
       text,
       channel,
@@ -4592,6 +4939,7 @@ function buildFlowMessageCode(resolved = {}) {
   const stage = String(resolved?.intakeState?.stage || '').toLowerCase();
   const suggestedService = String(resolved?.aiRequest?.suggested_service || '').toUpperCase();
 
+  if (intent.includes('assistant_wake') || intent.includes('root_menu') || stage === 'guided_root_menu') return 'HPS2-START';
   if (intent.includes('info_keyword')) return 'HPS2-INFO';
   if (intent.includes('vehicle_document')) return 'HPS2-DOC';
   if (intent.includes('ambiguous_code')) return 'HPS2-CODE';
@@ -4773,6 +5121,9 @@ async function processInboundPartsMessage({
     if (resolved?.whatsappText) {
       resolved.whatsappText = decorateFlowReplyText(resolved.whatsappText, resolved);
     }
+    const channelReplyOptions = channel === 'telegram'
+      ? buildTelegramReplyOptionsForResolved(resolved)
+      : null;
 
     if (resolved.status === 'ERROR') {
       db.prepare(`UPDATE parts_requests SET status = 'errore_integrazione', updated_at = datetime('now') WHERE id = ?`).run(partsRequestId);
@@ -4812,7 +5163,7 @@ async function processInboundPartsMessage({
       }
 
       if (resolved.whatsappText) {
-        const outboundResult = await sendText(outboundTarget, resolved.whatsappText);
+        const outboundResult = await sendText(outboundTarget, resolved.whatsappText, channelReplyOptions || undefined);
         db.prepare(`
           INSERT INTO whatsapp_messages (
             conversation_id, direction, channel, external_message_id, message_type,
