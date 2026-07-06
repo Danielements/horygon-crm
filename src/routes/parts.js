@@ -1325,7 +1325,7 @@ function buildIntakeDecision(slots = {}) {
           ready: false,
           stage: 'waiting_part_name',
           pendingSlot: 'part_name',
-          question: 'Ho preso i dati tecnici del veicolo. Dimmi meglio quale ricambio ti serve.'
+          question: 'Dimmi meglio quale ricambio ti serve.'
         };
       }
       return { ready: true, stage: 'ready_for_ai', pendingSlot: null, question: null };
@@ -1337,7 +1337,7 @@ function buildFallbackMissingDataQuestion(slots = {}, evidence = null) {
     return 'Per procedere ho bisogno di almeno uno tra targa, VIN o codice OE del ricambio.';
   }
   if (!slots.part_name) {
-    return 'Ho preso i dati tecnici principali. Dimmi ora quale ricambio ti serve esattamente.';
+    return 'Dimmi ora quale ricambio ti serve esattamente.';
   }
   return 'Ho raccolto parte dei dati, ma mi serve ancora un dettaglio in piu per procedere correttamente.';
 }
@@ -1371,7 +1371,7 @@ function buildServiceExecutionPlan(slots = {}, suggestedService = '', evidence =
     return {
       mode: 'waiting_data',
       missing: ['part_name_clarification'],
-      question: 'Ho preso i dati del veicolo. Ora dimmi il nome del ricambio oppure mandami una foto piu chiara del pezzo o del codice OE.'
+      question: 'Per aiutarti meglio, dimmi il nome del ricambio oppure mandami una foto piu chiara del pezzo o del codice OE.'
     };
   }
 
