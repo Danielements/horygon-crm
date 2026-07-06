@@ -107,6 +107,7 @@ function renderAnalyticsApiIntro(data, mepaStato, cigStato, apiSummary) {
             <div style="font-size:13px;color:var(--text-muted)">API Consip, storico MEPA e opportunita per capire cosa proporre alle PA.</div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-outline btn-sm" type="button" onclick="openModal('modal-import-anac')">Upload CSV MEPA</button>
             ${formatApiLink('https://dati.consip.it/api/3/action/datastore_search', 'datastore_search')}
             ${formatApiLink('https://dati.consip.it/api/3/action/datastore_search_sql', 'search_sql')}
             ${formatApiLink('https://dati.consip.it/api/3/action/package_search', 'package_search')}

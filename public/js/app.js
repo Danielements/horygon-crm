@@ -2341,14 +2341,22 @@ async function deleteKit(id, nome) {
 }
 
 async function getQR(id) {
-  const data = await api('GET', `/prodotti/${id}/qr`);
-  if (!data) return;
+  const [data, product] = await Promise.all([
+    api('GET', `/prodotti/${id}/qr`),
+    api('GET', `/prodotti/${id}`)
+  ]);
+  if (!data || !product) return;
+  const docs = (product.media || []).filter((item) => item.tipo === 'certificazione' || item.tipo === 'scheda_tecnica' || item.tipo === 'pdf');
+  const docsHtml = docs.length
+    ? docs.map((item) => `<p style="margin:8px 0"><a href="${item.path}" target="_blank" rel="noopener">${item.tipo === 'certificazione' ? 'Certificazione' : item.tipo === 'scheda_tecnica' ? 'Scheda tecnica' : 'Documento'}: ${escapeHtml(item.nome_file || 'Apri allegato')}</a></p>`).join('')
+    : '<p style="font-size:12px;color:#64748b">Nessuna certificazione o scheda tecnica allegata</p>';
   const win = window.open('', '_blank', 'width=400,height=450');
   win.document.write(`<html><body style="background:#f4f6f9;font-family:Inter,sans-serif;padding:30px;text-align:center">
     <h3>${data.codice}</h3><img src="${data.qr}" style="width:200px"><br>
     <p>${data.nome}</p>
     <p><a href="${data.url}" target="_blank" rel="noopener">Apri pagina prodotto</a></p>
     <p style="font-size:12px;color:#475569;word-break:break-all">${data.url}</p>
+    <div style="margin-top:18px;padding-top:12px;border-top:1px solid #cbd5e1;text-align:left">${docsHtml}</div>
     <p><a href="/api/etichetta/${id}/pdf">PDF etichetta</a></p>
   </body></html>`);
 }

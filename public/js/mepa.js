@@ -814,16 +814,26 @@ async function importAnacCSV(input) {
   const res = document.getElementById('anac-import-result');
   if (res) { res.style.display = 'block'; res.textContent = 'Caricamento ' + files.length + ' file...'; }
   let ok = 0, totRighe = 0, totValore = 0;
+  const failed = [];
   for (const file of Array.from(files)) {
     const fd = new FormData(); fd.append('file', file);
     try {
       const result = await apiForm('POST', '/mepa/upload', fd);
       if (result && result.ok) { ok++; totRighe += result.horygon || 0; totValore += result.valoreHorygon || 0; }
-    } catch {}
+      else failed.push(file.name + ': risposta non valida');
+    } catch (e) {
+      failed.push(file.name + ': ' + (e.message || 'errore import'));
+    }
   }
-  if (res) { res.style.background = 'rgba(16,185,129,0.1)'; res.innerHTML = ok + '/' + files.length + ' file importati - ' + totRighe.toLocaleString('it') + ' righe - ' + formatEuro(totValore); }
-  toast(ok + ' file MEPA importati', 'success');
-  setTimeout(() => { closeAllModals(); loadMepa(); }, 1500);
+  if (res) {
+    const hasFailures = failed.length > 0;
+    res.style.background = hasFailures ? 'rgba(239,68,68,0.08)' : 'rgba(16,185,129,0.1)';
+    res.innerHTML = ok + '/' + files.length + ' file importati - ' + totRighe.toLocaleString('it') + ' righe - ' + formatEuro(totValore)
+      + (hasFailures ? '<div style="margin-top:8px;color:#b91c1c;font-size:12px">' + failed.map(msg => escapeHtml(msg)).join('<br>') + '</div>' : '');
+  }
+  if (failed.length) toast('Import completato con errori su ' + failed.length + ' file', 'error');
+  else toast(ok + ' file MEPA importati', 'success');
+  setTimeout(() => { if (!failed.length) closeAllModals(); loadMepa(); }, 1500);
 }
 
 function checkSyncStatus() { loadMepa(); }
