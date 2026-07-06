@@ -5321,6 +5321,30 @@ function detectOutboundAutoReplyMessageType(channel = '', replyOptions = null) {
   return 'text';
 }
 
+function getSendResultError(sendResult = null) {
+  return s(sendResult?.error)
+    || s(sendResult?.body?.error?.message)
+    || s(sendResult?.body?.error?.error_data?.details)
+    || s(sendResult?.body?.description)
+    || null;
+}
+
+function isSendResultSuccessful(sendResult = null) {
+  if (!sendResult || sendResult.skipped) return false;
+  if (getSendResultError(sendResult)) return false;
+  return Number(sendResult.statusCode || 0) >= 200 && Number(sendResult.statusCode || 0) < 300;
+}
+
+function detectConversationChannelFromUserKey(userKey = '') {
+  return String(userKey || '').startsWith('telegram:') ? 'telegram' : 'whatsapp';
+}
+
+function extractOutboundTargetFromUserKey(userKey = '') {
+  const value = String(userKey || '');
+  if (value.startsWith('telegram:')) return value.slice('telegram:'.length);
+  return value;
+}
+
 function decorateFlowReplyText(bodyText, resolved = {}) {
   const text = s(bodyText);
   if (!text) return '';
@@ -5537,6 +5561,8 @@ async function processInboundPartsMessage({
         const outboundMessageType = outboundResult?.fallbackFromInteractive
           ? 'text'
           : detectOutboundAutoReplyMessageType(channel, channelReplyOptions);
+        const outboundError = getSendResultError(outboundResult);
+        const outboundSuccess = isSendResultSuccessful(outboundResult);
         db.prepare(`
           INSERT INTO whatsapp_messages (
             conversation_id, direction, channel, external_message_id, message_type,
@@ -5549,15 +5575,15 @@ async function processInboundPartsMessage({
           extractOutboundMessageId(channel, outboundResult),
           outboundMessageType,
           resolved.whatsappText,
-          outboundResult.error ? 'error' : (outboundResult.statusCode >= 200 && outboundResult.statusCode < 300 ? 'sent' : 'error'),
-          outboundResult.error || s(outboundResult.body?.error?.message) || s(outboundResult.body?.description),
+          outboundSuccess ? 'sent' : 'error',
+          outboundError,
           JSON.stringify(outboundResult)
         );
         upsertConversationState(conversation.id);
         logPartEvent(
           partsRequestId,
-          outboundResult.error ? 'errore_integrazione' : `messaggio_${channel}_inviato`,
-          outboundResult.error ? `Invio ${channel} fallito: ${outboundResult.error}` : `Risposta automatica ${channel} inviata`,
+          outboundSuccess ? `messaggio_${channel}_inviato` : 'errore_integrazione',
+          outboundSuccess ? `Risposta automatica ${channel} inviata` : `Invio ${channel} fallito: ${outboundError || 'errore non specificato'}`,
           channel,
           outboundResult
         );
@@ -5573,6 +5599,8 @@ async function processInboundPartsMessage({
             artifacts.pdf.filename,
             buildQuotePdfCaption(artifacts.quote)
           );
+          const documentError = getSendResultError(documentSend);
+          const documentSuccess = isSendResultSuccessful(documentSend);
           db.prepare(`
             INSERT INTO whatsapp_messages (
               conversation_id, direction, channel, external_message_id, message_type,
@@ -5592,15 +5620,15 @@ async function processInboundPartsMessage({
               preventivoId: artifacts.quote.preventivoId,
               codicePreventivo: artifacts.quote.codicePreventivo
             }),
-            documentSend.error ? 'error' : (documentSend.statusCode >= 200 && documentSend.statusCode < 300 ? 'sent' : 'error'),
-            documentSend.error || s(documentSend.body?.error?.message) || s(documentSend.body?.description),
+            documentSuccess ? 'sent' : 'error',
+            documentError,
             JSON.stringify(documentSend)
           );
           upsertConversationState(conversation.id);
           logPartEvent(
             partsRequestId,
-            documentSend.error ? 'errore_integrazione' : 'preventivo_pdf_inviato',
-            documentSend.error ? `Invio PDF ${channel} fallito: ${documentSend.error}` : `Preventivo PDF inviato automaticamente su ${channel}`,
+            documentSuccess ? 'preventivo_pdf_inviato' : 'errore_integrazione',
+            documentSuccess ? `Preventivo PDF inviato automaticamente su ${channel}` : `Invio PDF ${channel} fallito: ${documentError || 'errore non specificato'}`,
             channel,
             {
               ...documentSend,
@@ -5612,6 +5640,8 @@ async function processInboundPartsMessage({
 
           const publicLinkText = buildPublicPdfLinkMessage(artifacts.quote, artifacts.publicPdfUrl);
           const linkSend = await sendText(outboundTarget, publicLinkText);
+          const linkError = getSendResultError(linkSend);
+          const linkSuccess = isSendResultSuccessful(linkSend);
           db.prepare(`
             INSERT INTO whatsapp_messages (
               conversation_id, direction, channel, external_message_id, message_type,
@@ -5623,15 +5653,15 @@ async function processInboundPartsMessage({
             channel,
             extractOutboundMessageId(channel, linkSend),
             publicLinkText,
-            linkSend.error ? 'error' : (linkSend.statusCode >= 200 && linkSend.statusCode < 300 ? 'sent' : 'error'),
-            linkSend.error || s(linkSend.body?.error?.message) || s(linkSend.body?.description),
+            linkSuccess ? 'sent' : 'error',
+            linkError,
             JSON.stringify(linkSend)
           );
           upsertConversationState(conversation.id);
           logPartEvent(
             partsRequestId,
-            linkSend.error ? 'errore_integrazione' : 'link_preventivo_inviato',
-            linkSend.error ? `Invio link preventivo ${channel} fallito: ${linkSend.error}` : `Link pubblico preventivo inviato su ${channel}`,
+            linkSuccess ? 'link_preventivo_inviato' : 'errore_integrazione',
+            linkSuccess ? `Link pubblico preventivo inviato su ${channel}` : `Invio link preventivo ${channel} fallito: ${linkError || 'errore non specificato'}`,
             channel,
             {
               ...linkSend,
@@ -6062,20 +6092,26 @@ router.post('/parts/conversations/:id/messages', requirePermesso('ricambi', 'edi
   const internalNote = req.body?.internal_note ? 1 : 0;
   if (!bodyText) return res.status(400).json({ error: 'Testo messaggio obbligatorio' });
 
-  const outboundResult = internalNote ? { skipped: true } : await sendWhatsAppText(conversation.user_phone, bodyText);
+  const conversationChannel = detectConversationChannelFromUserKey(conversation.user_phone);
+  const outboundTarget = extractOutboundTargetFromUserKey(conversation.user_phone);
+  const sendText = conversationChannel === 'telegram' ? sendTelegramText : sendWhatsAppText;
+  const outboundResult = internalNote ? { skipped: true } : await sendText(outboundTarget, bodyText);
+  const outboundError = internalNote ? null : getSendResultError(outboundResult);
+  const outboundSuccess = internalNote ? false : isSendResultSuccessful(outboundResult);
   const result = db.prepare(`
     INSERT INTO whatsapp_messages (
       conversation_id, direction, channel, external_message_id, message_type, body_text,
       delivery_status, error_message, source_system, raw_payload_json, internal_note
     )
-    VALUES (?, ?, 'whatsapp', ?, 'text', ?, ?, ?, 'crm_operator', ?, ?)
+    VALUES (?, ?, ?, ?, 'text', ?, ?, ?, 'crm_operator', ?, ?)
   `).run(
     conversation.id,
     internalNote ? 'internal' : 'outbound',
-    internalNote ? null : s(outboundResult.body?.messages?.[0]?.id),
+    conversationChannel,
+    internalNote ? null : extractOutboundMessageId(conversationChannel, outboundResult),
     bodyText,
-    internalNote ? 'saved' : (outboundResult.error ? 'error' : (outboundResult.statusCode >= 200 && outboundResult.statusCode < 300 ? 'sent' : 'error')),
-    internalNote ? null : (outboundResult.error || s(outboundResult.body?.error?.message)),
+    internalNote ? 'saved' : (outboundSuccess ? 'sent' : 'error'),
+    internalNote ? null : outboundError,
     internalNote ? null : JSON.stringify(outboundResult),
     internalNote
   );
@@ -6090,14 +6126,14 @@ router.post('/parts/conversations/:id/messages', requirePermesso('ricambi', 'edi
     `).run(internalNote ? null : bodyText, conversation.parts_request_id);
     logPartEvent(
       conversation.parts_request_id,
-      internalNote ? 'nota_chat_interna' : 'messaggio_whatsapp_inviato',
-      internalNote ? 'Nota interna salvata in conversazione' : (outboundResult.error ? `Invio WhatsApp fallito: ${outboundResult.error}` : 'Messaggio outbound inviato via WhatsApp Meta'),
+      internalNote ? 'nota_chat_interna' : `messaggio_${conversationChannel}_inviato`,
+      internalNote ? 'Nota interna salvata in conversazione' : (outboundSuccess ? `Messaggio outbound inviato via ${conversationChannel}` : `Invio ${conversationChannel} fallito: ${outboundError || 'errore non specificato'}`),
       'crm',
       { userId: req.user.id, conversationId: conversation.id }
     );
   }
 
-  res.json({ id: Number(result.lastInsertRowid), sent: !internalNote && !outboundResult.error, error: outboundResult.error || null });
+  res.json({ id: Number(result.lastInsertRowid), sent: outboundSuccess, error: outboundError || null, channel: conversationChannel });
 });
 
 router.get('/parts/stats', requirePermesso('ricambi', 'read'), (req, res) => {
