@@ -1477,6 +1477,65 @@ function buildFallbackMissingDataQuestion(slots = {}, evidence = null) {
   return 'Ho raccolto parte dei dati, ma mi serve ancora un dettaglio in piu per procedere correttamente.';
 }
 
+function joinHumanList(items = []) {
+  const normalized = items.map((item) => s(item)).filter(Boolean);
+  if (!normalized.length) return '';
+  if (normalized.length === 1) return normalized[0];
+  if (normalized.length === 2) return `${normalized[0]} e ${normalized[1]}`;
+  return `${normalized.slice(0, -1).join(', ')} e ${normalized[normalized.length - 1]}`;
+}
+
+function getPendingCategoryService(category = '', slots = {}) {
+  const normalizedCategory = normalizePartCategory(category, slots.part_name || '');
+  const hasOe = !!s(slots.oe_code);
+
+  if (hasOe && normalizedCategory === 'ricambio_generico') return 'RTWS_EQUIVALENTI_BY_OE_PENDING';
+
+  switch (normalizedCategory) {
+    case 'filtri':
+      return hasOe ? 'RTWS_BDRT_FILTRI_BY_OE_PENDING' : 'RTWS_BDRT_FILTRI_PENDING';
+    case 'freni':
+      return hasOe ? 'RTWS_BDRT_FRENI_BY_OE_PENDING' : 'RTWS_BDRT_FRENI_PENDING';
+    case 'retrovisori':
+      return hasOe ? 'RTWS_BDRT_RETROVISORI_BY_OE_PENDING' : 'RTWS_BDRT_RETROVISORI_PENDING';
+    case 'illuminazione':
+      return hasOe ? 'RTWS_BDRT_ILLUMINAZIONE_BY_OE_PENDING' : 'RTWS_BDRT_ILLUMINAZIONE_PENDING';
+    case 'ricambio_generico':
+      return hasOe ? 'RTWS_EQUIVALENTI_BY_OE_PENDING' : 'RTWS_IDENTIFICATION_GENERIC_PENDING';
+    default:
+      return `CATEGORY_${String(normalizedCategory || 'GENERIC').toUpperCase()}_PENDING`;
+  }
+}
+
+function buildPendingCategoryMessage(category = '', partName = '', slots = {}) {
+  const normalizedCategory = normalizePartCategory(category, partName);
+  const partLabel = s(partName) || 'il ricambio richiesto';
+  const lookupBits = [
+    s(slots.plate) ? `targa ${s(slots.plate)}` : '',
+    s(slots.vin) ? `VIN ${s(slots.vin)}` : '',
+    s(slots.oe_code) ? `codice OE ${s(slots.oe_code)}` : ''
+  ].filter(Boolean);
+  const lookupText = lookupBits.length
+    ? ` Ho gia raccolto ${joinHumanList(lookupBits)}.`
+    : '';
+
+  switch (normalizedCategory) {
+    case 'filtri':
+      return `Ho riconosciuto una richiesta filtri per ${partLabel}.${lookupText} La instrado sul ramo filtri: con i servizi attivi oggi non posso ancora chiuderla in automatico, quindi passa al reparto tecnico senza usare il flusso cristalli.`;
+    case 'freni':
+      return `Ho riconosciuto una richiesta freni per ${partLabel}.${lookupText} La instrado sul ramo freni: con i servizi attivi oggi non posso ancora chiuderla in automatico, quindi passa al reparto tecnico senza usare il flusso cristalli.`;
+    case 'retrovisori':
+      return `Ho riconosciuto una richiesta retrovisori per ${partLabel}.${lookupText} La instrado sul ramo retrovisori: con i servizi attivi oggi non posso ancora chiuderla in automatico, quindi passa al reparto tecnico senza usare il flusso cristalli.`;
+    case 'illuminazione':
+      return `Ho riconosciuto una richiesta illuminazione per ${partLabel}.${lookupText} La instrado sul ramo illuminazione: con i servizi attivi oggi non posso ancora chiuderla in automatico, quindi passa al reparto tecnico senza usare il flusso cristalli.`;
+    default:
+      if (s(slots.oe_code)) {
+        return `Ho riconosciuto la richiesta per ${partLabel}.${lookupText} La instrado sul ramo OE/equivalenti: il catalogo automatico dedicato non e ancora attivo, quindi passa al reparto tecnico.`;
+      }
+      return `Ho raccolto i dati per ${partLabel}.${lookupText} La richiesta passa al reparto tecnico per usare il ramo piu adatto appena disponibile.`;
+  }
+}
+
 function buildServiceExecutionPlan(slots = {}, suggestedService = '', evidence = null, normalizedPart = null) {
   const category = normalizePartCategory(s(slots.part_category) || s(normalizedPart?.category), slots.part_name || normalizedPart?.name || '');
   const partName = s(slots.part_name) || s(normalizedPart?.name) || '';
@@ -1527,9 +1586,9 @@ function buildServiceExecutionPlan(slots = {}, suggestedService = '', evidence =
 
   return {
     mode: 'escalate_service_pending',
-    service: s(suggestedService) || `CATEGORY_${String(category || 'GENERIC').toUpperCase()}_PENDING`,
+    service: s(suggestedService) || getPendingCategoryService(category, slots),
     category,
-    message: 'Ho raccolto i dati necessari della richiesta. La giro subito al reparto tecnico per usare il servizio piu adatto appena disponibile.'
+    message: buildPendingCategoryMessage(category, partName, slots)
   };
 }
 
@@ -4308,6 +4367,7 @@ function buildFlowMessageCode(resolved = {}) {
   if (intent.includes('session_') || stage.includes('session')) return 'HPS2-SESSION';
   if (intent.includes('quote_pdf') || stage.includes('quote')) return 'HPS2-PDF';
   if (intent.includes('glass_option') || intent.includes('deterministic_glass') || suggestedService === 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2') return 'HPS2-RTWS';
+  if (suggestedService.includes('BDRT') || suggestedService.includes('IDENTIFICATION') || suggestedService.includes('EQUIVALENTI')) return 'HPS2-BDRT';
   if (resolved?.escalationRequired || stage === 'manual_review') return 'HPS2-MANUAL';
   return 'HPS2-ASK';
 }
