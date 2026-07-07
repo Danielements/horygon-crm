@@ -295,6 +295,57 @@ function parseKtypes(rawXml) {
   return collectXmlBlocks(getXmlTagBlock(rawXml, 'KType') || rawXml, 'string').map((value) => xmlDecode(value).trim()).filter(Boolean);
 }
 
+function parseStringArray(rawXml, containerTag, itemTag = 'string') {
+  return collectXmlBlocks(getXmlTagBlock(rawXml, containerTag) || rawXml, itemTag).map((value) => xmlDecode(value).trim()).filter(Boolean);
+}
+
+function parseIntArray(rawXml, containerTag, itemTag = 'int') {
+  return collectXmlBlocks(getXmlTagBlock(rawXml, containerTag) || rawXml, itemTag)
+    .map((value) => parseInt(xmlDecode(value).trim(), 10))
+    .filter((value) => Number.isFinite(value));
+}
+
+function parseBdrtParts(rawXml) {
+  return collectXmlBlocks(getXmlTagBlock(rawXml, 'DBRT_Parts') || rawXml, 'parts').map((block) => ({
+    id_par: getXmlTagValue(block, 'idpar') || getXmlTagValue(block, 'IdPar') || '',
+    symmetry: getXmlTagValue(block, 'simmetria') || '',
+    description: getXmlTagValue(block, 'descrizione') || ''
+  })).filter((item) => item.id_par || item.description || item.symmetry);
+}
+
+function flattenRicambiDbrt(matches = []) {
+  return (Array.isArray(matches) ? matches : []).flatMap((match) => {
+    const base = {
+      id_par: s(match.id_par),
+      id_sim: s(match.id_sim)
+    };
+    return (Array.isArray(match.variants) ? match.variants : []).map((variant) => ({
+      ...base,
+      description: s(variant.description),
+      part_number: s(variant.part_number),
+      extra_description: s(variant.extra_description),
+      pecos: s(variant.pecos),
+      color: s(variant.color),
+      list_price: s(variant.list_price)
+    }));
+  }).filter((item) => item.part_number || item.description || item.id_par);
+}
+
+function chunkArray(items, chunkSize) {
+  const list = Array.isArray(items) ? items : [];
+  const size = Math.max(1, Number(chunkSize) || 1);
+  const chunks = [];
+  for (let index = 0; index < list.length; index += size) {
+    chunks.push(list.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function pickBestAllestimento(parsed = {}) {
+  const allestimenti = Array.isArray(parsed.allestimenti) ? parsed.allestimenti : [];
+  return allestimenti.find((item) => item.id_marca && item.id_modello && item.id_versione) || allestimenti[0] || null;
+}
+
 function resolveProduct(alias) {
   const upper = s(alias).toUpperCase();
   const map = {
@@ -355,6 +406,62 @@ async function runScenario({ command, productAlias, methodName, contextXml, pars
   return { payload, logFile };
 }
 
+async function resolveVehicleByPlate(plate) {
+  const normalizedPlate = normalizePlate(plate);
+  const attempts = [];
+  const candidates = [
+    { productAlias: 'TARGATELAIO', methodName: 'GetRTDaTargaMin' },
+    { productAlias: 'IDENTIFICAZIONE', methodName: 'GetRTEstesoDaTarga' }
+  ].filter((candidate) => !!resolveProduct(candidate.productAlias));
+
+  for (const candidate of candidates) {
+    try {
+      const result = await runScenario({
+        command: `plate-lookup:${candidate.productAlias.toLowerCase()}`,
+        productAlias: candidate.productAlias,
+        methodName: candidate.methodName,
+        contextXml: candidate.methodName === 'GetRTDaTargaMin'
+          ? `<context><Targa>${xmlEscape(normalizedPlate)}</Targa><RicercaAvanzata>true</RicercaAvanzata></context>`
+          : `<context><Targa>${xmlEscape(normalizedPlate)}</Targa></context>`,
+        parseResponse: (rawXml) => ({
+          vehicle: parseSimpleVehicle(rawXml),
+          allestimenti: parseVehicleAllestimenti(rawXml)
+        })
+      });
+      attempts.push({
+        productAlias: candidate.productAlias,
+        methodName: candidate.methodName,
+        ok: result.payload.response.ok,
+        state: result.payload.response.state,
+        logFile: result.logFile
+      });
+      const selected = pickBestAllestimento(result.payload.parsed);
+      if (selected) {
+        return {
+          selected,
+          parsed: result.payload.parsed,
+          source: candidate.productAlias,
+          attempts
+        };
+      }
+    } catch (error) {
+      attempts.push({
+        productAlias: candidate.productAlias,
+        methodName: candidate.methodName,
+        ok: false,
+        error: error.message || String(error)
+      });
+    }
+  }
+
+  return {
+    selected: null,
+    parsed: null,
+    source: '',
+    attempts
+  };
+}
+
 function printUsage() {
   console.log(`
 Uso:
@@ -369,9 +476,14 @@ Uso:
   npm run rtws:diag -- equivalenti:substitutes <IDMARCA> <PARTNUMBER>
   npm run rtws:diag -- listini:update-oe <OE> [IDMAR] [IDPAR] [IDRIGA]
   npm run rtws:diag -- listini:equivalenti <PARTNUMBER>
+  npm run rtws:diag -- bdrt:categorie <IDMAR> <IDMOD> <IDVER> [CODLINGUA]
+  npm run rtws:diag -- bdrt:idpar <IDMAR> <IDMOD> <IDVER> [PRATICA]
+  npm run rtws:diag -- bdrt:idpar-completo <IDMAR> <IDMOD> <IDVER> [CATEGORIA] [CODLINGUA] [PRATICA]
+  npm run rtws:diag -- bdrt:gruppi <IDMAR> <IDMOD> <IDVER> [CATEGORIA] [CODLINGUA]
   npm run rtws:diag -- bdrt:search-rt-by-oe <OE_PATTERN> [TOP]
   npm run rtws:diag -- bdrt:ricambi-by-oe <IDMAR> <IDMOD> <IDVER> <OE1,OE2>
   npm run rtws:diag -- bdrt:ricambi-dbrt <IDMAR> <IDMOD> <IDVER> <IDPAR1,IDPAR2>
+  npm run rtws:diag -- bdrt:catalog-from-plate <TARGA> [CATEGORIA] [CODLINGUA] [CHUNK_SIZE]
 
 Log salvati in:
   ${getDebugDir()}
@@ -549,6 +661,85 @@ async function main() {
       break;
     }
 
+    case 'bdrt:categorie': {
+      const [idMar, idMod, idVer, language = 'IT'] = args;
+      result = await runScenario({
+        command,
+        productAlias: 'BDRT',
+        methodName: 'GetCategorieBDRT',
+        contextXml: `
+          <context>
+            <Marca>${xmlEscape(idMar || '')}</Marca>
+            <Modello>${xmlEscape(idMod || '')}</Modello>
+            <Versione>${xmlEscape(idVer || '')}</Versione>
+            <CodLingua>${xmlEscape(language || 'IT')}</CodLingua>
+          </context>
+        `,
+        parseResponse: (rawXml) => ({ categories: parseStringArray(rawXml, 'Categorie') })
+      });
+      break;
+    }
+
+    case 'bdrt:idpar': {
+      const [idMar, idMod, idVer, pratica = ''] = args;
+      result = await runScenario({
+        command,
+        productAlias: 'BDRT',
+        methodName: 'GetIdParBDRT',
+        contextXml: `
+          <context>
+            <Marca>${xmlEscape(idMar || '')}</Marca>
+            <Modello>${xmlEscape(idMod || '')}</Modello>
+            <Versione>${xmlEscape(idVer || '')}</Versione>
+            <Pratica>${xmlEscape(pratica || '')}</Pratica>
+          </context>
+        `,
+        parseResponse: (rawXml) => ({ idpars: parseIntArray(rawXml, 'DBRT_Parts') })
+      });
+      break;
+    }
+
+    case 'bdrt:idpar-completo': {
+      const [idMar, idMod, idVer, categoria = '', language = 'IT', pratica = ''] = args;
+      result = await runScenario({
+        command,
+        productAlias: 'BDRT',
+        methodName: 'GetIdParBDRTCompleto',
+        contextXml: `
+          <context>
+            <Marca>${xmlEscape(idMar || '')}</Marca>
+            <Modello>${xmlEscape(idMod || '')}</Modello>
+            <Versione>${xmlEscape(idVer || '')}</Versione>
+            <Categoria>${xmlEscape(categoria || '')}</Categoria>
+            <CodLingua>${xmlEscape(language || 'IT')}</CodLingua>
+            <Pratica>${xmlEscape(pratica || '')}</Pratica>
+          </context>
+        `,
+        parseResponse: (rawXml) => ({ parts: parseBdrtParts(rawXml) })
+      });
+      break;
+    }
+
+    case 'bdrt:gruppi': {
+      const [idMar, idMod, idVer, categoria = '', language = 'IT'] = args;
+      result = await runScenario({
+        command,
+        productAlias: 'BDRT',
+        methodName: 'GetGruppiBDRT',
+        contextXml: `
+          <context>
+            <Marca>${xmlEscape(idMar || '')}</Marca>
+            <Modello>${xmlEscape(idMod || '')}</Modello>
+            <Versione>${xmlEscape(idVer || '')}</Versione>
+            <Categoria>${xmlEscape(categoria || '')}</Categoria>
+            <CodLingua>${xmlEscape(language || 'IT')}</CodLingua>
+          </context>
+        `,
+        parseResponse: (rawXml) => ({ groups: parseStringArray(rawXml, 'Gruppi') })
+      });
+      break;
+    }
+
     case 'bdrt:search-rt-by-oe': {
       const [oePattern, top = '10'] = args;
       result = await runScenario({
@@ -614,6 +805,150 @@ async function main() {
         parseResponse: (rawXml) => ({ matches: parseRicambiDbrt(rawXml) })
       });
       break;
+    }
+
+    case 'bdrt:catalog-from-plate': {
+      const [plate, categoria = '', language = 'IT', chunkSize = '50'] = args;
+      const normalizedPlate = normalizePlate(plate);
+      if (!normalizedPlate) {
+        throw new Error('Targa mancante');
+      }
+
+      const vehicleLookup = await resolveVehicleByPlate(normalizedPlate);
+      if (!vehicleLookup.selected) {
+        throw new Error('Nessun allestimento RT trovato da targa per il catalogo BDRT');
+      }
+
+      const selected = vehicleLookup.selected;
+      const categoriesScenario = await runScenario({
+        command: `${command}:categorie`,
+        productAlias: 'BDRT',
+        methodName: 'GetCategorieBDRT',
+        contextXml: `
+          <context>
+            <Marca>${xmlEscape(selected.id_marca || '')}</Marca>
+            <Modello>${xmlEscape(selected.id_modello || '')}</Modello>
+            <Versione>${xmlEscape(selected.id_versione || '')}</Versione>
+            <CodLingua>${xmlEscape(language || 'IT')}</CodLingua>
+          </context>
+        `,
+        parseResponse: (rawXml) => ({ categories: parseStringArray(rawXml, 'Categorie') })
+      });
+
+      const groupsScenario = await runScenario({
+        command: `${command}:gruppi`,
+        productAlias: 'BDRT',
+        methodName: 'GetGruppiBDRT',
+        contextXml: `
+          <context>
+            <Marca>${xmlEscape(selected.id_marca || '')}</Marca>
+            <Modello>${xmlEscape(selected.id_modello || '')}</Modello>
+            <Versione>${xmlEscape(selected.id_versione || '')}</Versione>
+            <Categoria>${xmlEscape(categoria || '')}</Categoria>
+            <CodLingua>${xmlEscape(language || 'IT')}</CodLingua>
+          </context>
+        `,
+        parseResponse: (rawXml) => ({ groups: parseStringArray(rawXml, 'Gruppi') })
+      });
+
+      const idParScenario = await runScenario({
+        command: `${command}:idpar-completo`,
+        productAlias: 'BDRT',
+        methodName: 'GetIdParBDRTCompleto',
+        contextXml: `
+          <context>
+            <Marca>${xmlEscape(selected.id_marca || '')}</Marca>
+            <Modello>${xmlEscape(selected.id_modello || '')}</Modello>
+            <Versione>${xmlEscape(selected.id_versione || '')}</Versione>
+            <Categoria>${xmlEscape(categoria || '')}</Categoria>
+            <CodLingua>${xmlEscape(language || 'IT')}</CodLingua>
+            <Pratica></Pratica>
+          </context>
+        `,
+        parseResponse: (rawXml) => ({ parts: parseBdrtParts(rawXml) })
+      });
+
+      const idPars = (idParScenario.payload.parsed?.parts || [])
+        .map((item) => parseInt(item.id_par, 10))
+        .filter((value) => Number.isFinite(value));
+      const chunked = chunkArray(idPars, Math.max(1, parseInt(chunkSize, 10) || 50));
+      const ricambiChunks = [];
+
+      for (const chunk of chunked) {
+        const chunkScenario = await runScenario({
+          command: `${command}:ricambi-dbrt:${chunk[0]}-${chunk[chunk.length - 1]}`,
+          productAlias: 'BDRT',
+          methodName: 'GetRicambiDBRT',
+          contextXml: `
+            <context>
+              <Marca>${xmlEscape(selected.id_marca || '')}</Marca>
+              <Modello>${xmlEscape(selected.id_modello || '')}</Modello>
+              <Versione>${xmlEscape(selected.id_versione || '')}</Versione>
+              <Idpars>${chunk.map((value) => `<int>${xmlEscape(value)}</int>`).join('')}</Idpars>
+            </context>
+          `,
+          parseResponse: (rawXml) => ({ matches: parseRicambiDbrt(rawXml) })
+        });
+        ricambiChunks.push({
+          state: chunkScenario.payload.response.state,
+          logFile: chunkScenario.logFile,
+          matches: chunkScenario.payload.parsed?.matches || []
+        });
+      }
+
+      const flattenedVariants = ricambiChunks.flatMap((chunk) => flattenRicambiDbrt(chunk.matches));
+      const uniquePartNumbers = [...new Set(flattenedVariants.map((item) => s(item.part_number)).filter(Boolean))];
+      const payload = {
+        command,
+        product: resolveProduct('BDRT'),
+        createdAt: new Date().toISOString(),
+        request: {
+          plate: normalizedPlate,
+          categoria: categoria || '',
+          language: language || 'IT',
+          chunkSize: Math.max(1, parseInt(chunkSize, 10) || 50)
+        },
+        vehicleLookup,
+        vehicle: selected,
+        categories: categoriesScenario.payload.parsed?.categories || [],
+        groups: groupsScenario.payload.parsed?.groups || [],
+        idParParts: idParScenario.payload.parsed?.parts || [],
+        counts: {
+          categories: (categoriesScenario.payload.parsed?.categories || []).length,
+          groups: (groupsScenario.payload.parsed?.groups || []).length,
+          idpars: idPars.length,
+          ricambi_chunks: ricambiChunks.length,
+          flattened_variants: flattenedVariants.length,
+          unique_part_numbers: uniquePartNumbers.length
+        },
+        sample: {
+          idpar_parts: (idParScenario.payload.parsed?.parts || []).slice(0, 20),
+          variants: flattenedVariants.slice(0, 50)
+        },
+        logFiles: [
+          ...vehicleLookup.attempts.map((item) => item.logFile).filter(Boolean),
+          categoriesScenario.logFile,
+          groupsScenario.logFile,
+          idParScenario.logFile,
+          ...ricambiChunks.map((item) => item.logFile).filter(Boolean)
+        ]
+      };
+      const logFile = writeDebugLog(command, payload);
+      console.log(JSON.stringify({
+        ok: true,
+        command,
+        product: resolveProduct('BDRT'),
+        state: { code: '0', description: 'Catalogo BDRT aggregato da targa', fault: '' },
+        parsed: {
+          vehicle: selected,
+          counts: payload.counts,
+          categories: payload.categories,
+          groups: payload.groups,
+          sample: payload.sample
+        },
+        logFile
+      }, null, 2));
+      return;
     }
 
     default:
