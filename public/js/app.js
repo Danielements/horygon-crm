@@ -1968,11 +1968,12 @@ function renderProdottoMediaPanel(p) {
   const immagini = media.filter(m => m.tipo === 'immagine');
   const docs = media.filter(m => m.tipo !== 'immagine');
   const canUpload = typeof uploadFotoProdotto === 'function';
+  const mediaUrl = (item) => item?.id ? `/prodotto/${p.id}/media/${item.id}` : item?.path || '#';
   return `<h4 style="font-size:12px;margin:8px 0">Foto e schede tecniche</h4>
     <div style="padding:8px;border:1px solid var(--border);border-radius:6px;margin-bottom:10px">
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
         ${immagini.map(m => `<div style="width:76px;height:76px;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--bg-input)">
-          <img src="${m.path}" alt="${m.nome_file || 'foto prodotto'}" style="width:100%;height:100%;object-fit:cover">
+          <img src="${mediaUrl(m)}" alt="${m.nome_file || 'foto prodotto'}" style="width:100%;height:100%;object-fit:cover">
         </div>`).join('')}
         ${canUpload ? `<label class="btn btn-outline btn-sm" style="height:76px;display:flex;align-items:center;cursor:pointer">
           Carica foto
@@ -1980,7 +1981,7 @@ function renderProdottoMediaPanel(p) {
         </label>` : ''}
       </div>
       ${docs.length ? docs.map(m => `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-top:1px solid var(--border);font-size:12px">
-        <a href="${m.path}" target="_blank" style="color:var(--accent)">${m.nome_file || 'Documento'}</a>
+        <a href="${mediaUrl(m)}" target="_blank" rel="noopener" style="color:var(--accent)">${m.nome_file || 'Documento'}</a>
       </div>`).join('') : '<div style="color:var(--text-muted);font-size:12px;margin-bottom:6px">Nessuna scheda tecnica allegata</div>'}
       ${canUpload ? `<label class="btn btn-outline btn-sm" style="cursor:pointer;margin-top:6px">
         Allega scheda tecnica
@@ -1996,17 +1997,19 @@ function renderProdottoStoredFiles(media = []) {
     box.innerHTML = '<div style="color:var(--text-muted);font-size:12px">Nessun file salvato.</div>';
     return;
   }
+  const productId = Number(document.getElementById('prod-id')?.value || 0) || null;
   const labels = {
     immagine: 'Foto',
     pdf: 'Documento',
     certificazione: 'Certificato',
     scheda_tecnica: 'Scheda tecnica'
   };
+  const mediaUrl = (file) => (productId && file?.id) ? `/prodotto/${productId}/media/${file.id}` : (file?.path || '#');
   box.innerHTML = media.map(file => `
     <div class="saved-file-link">
       <div>
         <strong>${labels[file.tipo] || file.tipo || 'File'}</strong><br>
-        <a href="${file.path}" target="_blank">${escapeHtml(file.nome_file || 'Apri file')}</a>
+        <a href="${mediaUrl(file)}" target="_blank" rel="noopener">${escapeHtml(file.nome_file || 'Apri file')}</a>
       </div>
       <span style="color:var(--text-muted);font-size:11px">${escapeHtml(file.tipo || '')}</span>
     </div>
