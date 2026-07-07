@@ -2132,7 +2132,7 @@ function buildServiceExecutionPlan(slots = {}, suggestedService = '', evidence =
     };
   }
 
-  if (hasOe && (category === 'ricambio_generico' || !partName || !hasPlate)) {
+  if (hasOe) {
     return {
       mode: 'execute_service',
       service: 'RTWS_LISTINI_LOOKUP_BY_OE',
@@ -2179,6 +2179,16 @@ function isRtwsConfigured() {
     process.env.RTWS_CLIENT_NAME &&
     process.env.RTWS_PASSWORD &&
     process.env.RTWS_PRODUCT_LISTINI
+  );
+}
+
+function isRtwsBdrtConfigured() {
+  return !!(
+    getRtwsServiceUrl() &&
+    process.env.RTWS_AZIENDA_NAME &&
+    process.env.RTWS_CLIENT_NAME &&
+    process.env.RTWS_PASSWORD &&
+    process.env.RTWS_PRODUCT_BDRT
   );
 }
 
@@ -2328,6 +2338,84 @@ function parseRtwsEquivalentItems(rawXml) {
     price: getXmlTagValue(block, 'Prezzo') || '',
     raw_xml: block
   })).filter((item) => item.part_number || item.oe_code || item.description || item.price);
+}
+
+function parseRtwsSearchVehiclesByOeItems(rawXml) {
+  return collectXmlBlocks(getXmlTagBlock(rawXml, 'Allestimenti') || rawXml, 'AllestimentoRes').map((block) => ({
+    id_marca: getXmlTagValue(block, 'IdMar') || '',
+    id_modello: getXmlTagValue(block, 'IdMod') || '',
+    id_versione: getXmlTagValue(block, 'IdVer') || '',
+    make: getXmlTagValue(block, 'DsMar') || '',
+    model: getXmlTagValue(block, 'DsMod') || '',
+    version: getXmlTagValue(block, 'DsVer') || '',
+    oe_code: getXmlTagValue(block, 'OE') || '',
+    start_commercialization: getXmlTagValue(block, 'InizioCommercializzazione') || '',
+    end_commercialization: getXmlTagValue(block, 'FineCommercializzazione') || ''
+  })).filter((item) => item.id_marca || item.make || item.oe_code);
+}
+
+function parseRtwsRicambiByOeEntries(rawXml) {
+  return collectXmlBlocks(getXmlTagBlock(rawXml, 'SparePart_OEList') || rawXml, 'SparePart_OE').map((block) => ({
+    oe_code: getXmlTagValue(block, 'OE') || '',
+    matches: collectXmlBlocks(getXmlTagBlock(block, 'SparePartInfos') || block, 'SparePartInfo').map((infoBlock) => ({
+      id_par: getXmlTagValue(infoBlock, 'Idpar') || '',
+      description: getXmlTagValue(infoBlock, 'Dspar') || '',
+      id_sim: getXmlTagValue(infoBlock, 'Idsim') || '',
+      variants: collectXmlBlocks(getXmlTagBlock(infoBlock, 'OEList') || infoBlock, 'OEDetail').map((detailBlock) => ({
+        part_number: getXmlTagValue(detailBlock, 'Parno') || '',
+        extra_description: getXmlTagValue(detailBlock, 'Ultds') || '',
+        pecos: getXmlTagValue(detailBlock, 'Pecos') || '',
+        color: getXmlTagValue(detailBlock, 'Color') || '',
+        raw_xml: detailBlock
+      })).filter((item) => item.part_number || item.extra_description || item.pecos || item.color)
+    })).filter((item) => item.id_par || item.description || item.variants.length)
+  })).filter((item) => item.oe_code || item.matches.length);
+}
+
+function flattenRtwsRicambiByOeEntries(entries = []) {
+  return entries.flatMap((entry) => {
+    const entryOeCode = s(entry.oe_code);
+    return (Array.isArray(entry.matches) ? entry.matches : []).flatMap((match) => {
+      const baseItem = {
+        oe_code: entryOeCode,
+        id_par: s(match.id_par),
+        id_sim: s(match.id_sim),
+        description: s(match.description),
+        part_number: '',
+        extra_description: '',
+        pecos: '',
+        color: '',
+        price: '',
+        raw_xml: ''
+      };
+      const variants = Array.isArray(match.variants) ? match.variants : [];
+      if (!variants.length) return [baseItem];
+      return variants.map((variant) => ({
+        ...baseItem,
+        part_number: s(variant.part_number),
+        extra_description: s(variant.extra_description),
+        pecos: s(variant.pecos),
+        color: s(variant.color),
+        raw_xml: s(variant.raw_xml)
+      }));
+    });
+  }).filter((item) => item.oe_code || item.part_number || item.description || item.id_par);
+}
+
+function dedupeOeLookupItems(items = []) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = [
+      sanitizeOeCode(s(item.oe_code)),
+      sanitizeOeCode(s(item.part_number)),
+      s(item.description).toLowerCase(),
+      s(item.id_par)
+    ].join('|');
+    if (!key.replace(/\|/g, '')) return false;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function buildVehicleSummaryLabel(vehicle = {}) {
@@ -2483,6 +2571,88 @@ async function rtwsGetListiniEquivalenti({ partNumber }) {
     };
   } catch (error) {
     return { status: 'ERROR', message: error.message || 'Eccezione GetListiniEquivalenti', items: [], rawXml: '' };
+  }
+}
+
+async function rtwsSearchVehiclesByOe({ oeCode, top = 10 }) {
+  if (!isRtwsBdrtConfigured()) {
+    return { status: 'NOT_CONFIGURED', message: 'RTWS_BDRT non configurato', items: [] };
+  }
+  const normalizedOe = sanitizeOeCode(oeCode);
+  if (!normalizedOe || normalizedOe.length < 3) {
+    return { status: 'EMPTY', message: 'Servono almeno 3 caratteri di OE per cercare i veicoli compatibili', items: [] };
+  }
+  try {
+    const sessionId = await getRtwsSession(process.env.RTWS_PRODUCT_BDRT);
+    const body = `
+      <sessionId>${xmlEscape(sessionId)}</sessionId>
+      <context>
+        <Oe>${xmlEscape(normalizedOe)}</Oe>
+        <Top>${Math.max(1, Math.min(Number(top) || 10, 20))}</Top>
+      </context>
+    `;
+    const result = await callRtwsSoap('SearchRTByOe', body);
+    if (!result.ok) {
+      return { status: 'ERROR', message: result.error || 'Chiamata SearchRTByOe fallita', items: [], rawXml: result.rawXml || '' };
+    }
+    const stateCode = getXmlTagValue(result.rawXml, 'Code');
+    const stateDescription = getXmlTagValue(result.rawXml, 'Description');
+    const items = parseRtwsSearchVehiclesByOeItems(result.rawXml);
+    return {
+      status: String(stateCode || '').trim() === '0' ? (items.length ? 'READY' : 'EMPTY') : 'ERROR',
+      message: stateDescription || (items.length ? 'Veicoli compatibili recuperati da RTWS_BDRT.' : 'Nessun veicolo compatibile trovato in RTWS_BDRT.'),
+      items,
+      rawXml: result.rawXml,
+      stateCode: stateCode || ''
+    };
+  } catch (error) {
+    return { status: 'ERROR', message: error.message || 'Eccezione SearchRTByOe', items: [], rawXml: '' };
+  }
+}
+
+async function rtwsGetRicambiByOe({ idMar, idMod, idVer, oeCodes = [] }) {
+  if (!isRtwsBdrtConfigured()) {
+    return { status: 'NOT_CONFIGURED', message: 'RTWS_BDRT non configurato', items: [], entries: [] };
+  }
+  const normalizedCodes = [...new Set((Array.isArray(oeCodes) ? oeCodes : [oeCodes])
+    .map((code) => sanitizeOeCode(code))
+    .filter(Boolean))];
+  if (!normalizedCodes.length) {
+    return { status: 'EMPTY', message: 'Nessun codice OE valido per la verifica BDRT', items: [], entries: [] };
+  }
+  try {
+    const sessionId = await getRtwsSession(process.env.RTWS_PRODUCT_BDRT);
+    const oeListXml = normalizedCodes.map((code) => `<OE>${xmlEscape(code)}</OE>`).join('');
+    const body = `
+      <sessionId>${xmlEscape(sessionId)}</sessionId>
+      <context>
+        <Marca>${Number(idMar) || 0}</Marca>
+        <Modello>${Number(idMod) || 0}</Modello>
+        <Versione>${Number(idVer) || 0}</Versione>
+        <Oelist>${oeListXml}</Oelist>
+      </context>
+    `;
+    const result = await callRtwsSoap('GetRicambiByOE', body);
+    if (!result.ok) {
+      return { status: 'ERROR', message: result.error || 'Chiamata GetRicambiByOE fallita', items: [], entries: [], rawXml: result.rawXml || '' };
+    }
+    const stateCode = getXmlTagValue(result.rawXml, 'Code');
+    const stateDescription = getXmlTagValue(result.rawXml, 'Description');
+    const entries = parseRtwsRicambiByOeEntries(result.rawXml);
+    const items = flattenRtwsRicambiByOeEntries(entries);
+    const normalizedStateCode = String(stateCode || '').trim();
+    const isPartial = normalizedStateCode === '1';
+    return {
+      status: ['0', '1'].includes(normalizedStateCode) ? (items.length ? 'READY' : 'EMPTY') : 'ERROR',
+      message: stateDescription || (items.length ? 'Ricambi OE recuperati da RTWS_BDRT.' : 'Nessun ricambio OE trovato in RTWS_BDRT.'),
+      items,
+      entries,
+      rawXml: result.rawXml,
+      stateCode: stateCode || '',
+      warning: isPartial
+    };
+  } catch (error) {
+    return { status: 'ERROR', message: error.message || 'Eccezione GetRicambiByOE', items: [], entries: [], rawXml: '' };
   }
 }
 
@@ -3593,16 +3763,28 @@ function buildGlassOptionsReplyText(options = [], itemsCount = 0) {
   return lines.join('\n');
 }
 
-function buildOeLookupReplyText({ oeCode = '', exactItem = null, searchItems = [], equivalentItems = [], needsPlateForGlass = false }) {
+function buildOeLookupReplyText({
+  oeCode = '',
+  exactItem = null,
+  searchItems = [],
+  equivalentItems = [],
+  needsPlateForGlass = false,
+  identifiedVehicle = null,
+  vehicleMatches = [],
+  dbrtItems = []
+}) {
   const exactLabel = exactItem?.description || exactItem?.part_number || oeCode || 'Ricambio OE';
   if (exactItem) {
     const lines = [
       `Ho verificato il codice OE ${oeCode || exactItem.oe_code || exactItem.part_number || ''} sui servizi RTWS attivi.`,
       '',
+      identifiedVehicle ? `Veicolo verificato: ${buildVehicleSummaryLabel(identifiedVehicle) || 'veicolo da targa acquisito'}` : null,
       `Descrizione: ${exactLabel}`,
       exactItem.oe_code ? `Codice OE: ${exactItem.oe_code}` : null,
       exactItem.part_number && exactItem.part_number !== exactItem.oe_code ? `Part number: ${exactItem.part_number}` : null,
       exactItem.price ? `Prezzo listino indicativo: EUR ${exactItem.price}` : null,
+      dbrtItems.length > 1 ? `Varianti tecniche BDRT sul veicolo: ${dbrtItems.length}.` : null,
+      (!identifiedVehicle && vehicleMatches.length) ? `Veicoli compatibili trovati in BDRT: ${vehicleMatches.length}.` : null,
       equivalentItems.length ? `Equivalenti trovati: ${equivalentItems.length}.` : null,
       needsPlateForGlass
         ? 'Il codice sembra appartenere ai cristalli. Inviami la targa e verifico subito la compatibilita veicolo e le varianti corrette.'
@@ -3611,24 +3793,36 @@ function buildOeLookupReplyText({ oeCode = '', exactItem = null, searchItems = [
     return lines.join('\n');
   }
 
-  if (searchItems.length) {
+  const candidateItems = dedupeOeLookupItems([...searchItems, ...dbrtItems]);
+  if (candidateItems.length) {
     const lines = [
       `Ho trovato alcune corrispondenze RTWS per il codice OE ${oeCode}.`,
+      identifiedVehicle ? `Veicolo verificato: ${buildVehicleSummaryLabel(identifiedVehicle) || 'veicolo da targa acquisito'}` : null,
+      (!identifiedVehicle && vehicleMatches.length) ? `Veicoli compatibili trovati in BDRT: ${vehicleMatches.length}.` : null,
       'Ti elenco le piu vicine:'
-    ];
-    searchItems.slice(0, 5).forEach((item, index) => {
+    ].filter(Boolean);
+    candidateItems.slice(0, 5).forEach((item, index) => {
       const parts = [
         `${index + 1}. ${item.description || item.part_number || item.oe_code || 'Ricambio OE'}`,
         item.oe_code ? `OE ${item.oe_code}` : null,
+        item.part_number && item.part_number !== item.oe_code ? `PN ${item.part_number}` : null,
         item.price ? `EUR ${item.price}` : null
       ].filter(Boolean);
       lines.push(parts.join(' - '));
     });
-    if (searchItems.length > 5) {
-      lines.push(`Ci sono anche altre ${searchItems.length - 5} corrispondenze possibili.`);
+    if (candidateItems.length > 5) {
+      lines.push(`Ci sono anche altre ${candidateItems.length - 5} corrispondenze possibili.`);
     }
-    lines.push('Se riconosci quella giusta, inviami la targa oppure il dettaglio del ricambio per completare la verifica.');
+    lines.push(
+      identifiedVehicle
+        ? 'Rispondi con il numero corretto se riconosci il ricambio giusto, oppure mandami altri dettagli per la verifica finale.'
+        : 'Rispondi con il numero corretto, oppure inviami la targa o altri dettagli del ricambio per restringere la verifica.'
+    );
     return lines.join('\n');
+  }
+
+  if (vehicleMatches.length) {
+    return `Ho trovato ${vehicleMatches.length} veicoli compatibili per il codice OE ${oeCode}, ma per chiudere la ricerca in automatico mi serve la targa oppure un dettaglio in piu sul ricambio.`;
   }
 
   return `Ho verificato il codice OE ${oeCode}, ma sui servizi attivi oggi non ho trovato un riscontro automatico utilizzabile. Se mi mandi la targa oppure una foto del ricambio provo la verifica migliore disponibile.`;
@@ -3785,9 +3979,12 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
   const bypassPendingForFreshRequest = selfContainedFreshRequest
     && ['ambiguous_code_type', 'session_action', 'quote_pdf_confirmation'].includes(String(previousIntakeState.pendingSlot || ''));
   const currentRequestAwaitingClarification = ['part_name', 'glass_position', 'vehicle_key', 'plate', 'part_name_clarification'].includes(String(previousIntakeState.pendingSlot || ''))
-    || ['waiting_part_name', 'waiting_glass_position', 'waiting_vehicle_key', 'waiting_service_key', 'document_vehicle_data_completed'].includes(String(previousIntakeState.stage || ''));
+    || ['waiting_part_name', 'waiting_glass_position', 'waiting_vehicle_key', 'waiting_service_key', 'document_vehicle_data_completed', 'waiting_oe_option_selection'].includes(String(previousIntakeState.stage || ''));
   const previousOptions = Array.isArray(previousIntakeState.slots?.proposed_glass_options)
     ? previousIntakeState.slots.proposed_glass_options
+    : [];
+  const previousOeOptions = Array.isArray(previousIntakeState.slots?.proposed_oe_options)
+    ? previousIntakeState.slots.proposed_oe_options
     : [];
   const guidedDocumentRequested = String(previousIntakeState.pendingSlot || '') === 'vehicle_document_photo';
 
@@ -4634,6 +4831,123 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     }
   }
 
+  if (variantsRequest && previousOeOptions.length) {
+    const parsed = {
+      originalText: text,
+      plate: s(previousIntakeState.slots?.plate) || s(previousContext.plate) || '',
+      vin: s(previousIntakeState.slots?.vin) || s(previousContext.vin) || '',
+      oeCode: s(previousIntakeState.slots?.oe_code) || s(previousContext.oe_code) || '',
+      requestedPartText: s(previousIntakeState.slots?.part_name) || s(previousContext.normalized_part_name) || 'Ricambio OE',
+      confidence: 1
+    };
+    const normalizedPart = {
+      name: s(previousIntakeState.slots?.part_name) || 'Ricambio OE',
+      category: s(previousIntakeState.slots?.part_category) || normalizePartCategory('', s(previousIntakeState.slots?.part_name) || '')
+    };
+    return {
+      status: 'OK',
+      parsed,
+      vehicle: null,
+      normalizedPart,
+      dbrtResult: {},
+      glassCatalog: { status: 'SKIPPED', message: 'Varianti OE riproposte al cliente', items: [] },
+      oeCatalog: { status: 'READY', message: 'Varianti OE riproposte al cliente', items: previousOeOptions },
+      oeResults: previousOeOptions,
+      equivalents: {},
+      missingData: [],
+      whatsappText: buildOeLookupReplyText({
+        oeCode: parsed.oeCode,
+        searchItems: previousOeOptions
+      }),
+      aiRequest: {
+        intent: 'oe_options_recap',
+        request_is_valid: true,
+        suggested_service: 'RTWS_LISTINI_LOOKUP_BY_OE',
+        instruction: 'Riproposta delle varianti OE gia trovate in precedenza.',
+        availableSources: ['CONVERSATION_CONTEXT', 'RTWS_LISTINI', 'RTWS_BDRT'],
+        parsed,
+        normalizedPart,
+        openai: {
+          skipped: true,
+          error: null,
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          statusCode: null,
+          raw: null,
+          parsed: null
+        }
+      },
+      aiSummary: null,
+      resolvedStatus: 'in_attesa_verifica_tecnica',
+      intakeState: previousIntakeState
+    };
+  }
+
+  if (numericSelection && previousOeOptions.length) {
+    const selectedIndex = Number(numericSelection[1]) - 1;
+    const selectedItem = previousOeOptions[selectedIndex];
+    if (selectedItem) {
+      const parsed = {
+        originalText: text,
+        plate: s(previousIntakeState.slots?.plate) || s(previousContext.plate) || '',
+        vin: s(previousIntakeState.slots?.vin) || s(previousContext.vin) || '',
+        oeCode: s(selectedItem.oe_code) || s(previousIntakeState.slots?.oe_code) || '',
+        requestedPartText: s(previousIntakeState.slots?.part_name) || s(previousContext.normalized_part_name) || 'Ricambio OE',
+        confidence: 1
+      };
+      const normalizedPart = {
+        name: s(previousIntakeState.slots?.part_name) || s(selectedItem.description) || 'Ricambio OE',
+        category: s(previousIntakeState.slots?.part_category) || normalizePartCategory('', `${s(previousIntakeState.slots?.part_name)} ${s(selectedItem.description)}`.trim())
+      };
+      return {
+        status: 'OK',
+        parsed,
+        vehicle: null,
+        normalizedPart,
+        dbrtResult: {},
+        glassCatalog: { status: 'SKIPPED', message: 'Variante OE selezionata da cliente', items: [] },
+        oeCatalog: { status: 'READY', message: 'Variante OE selezionata da cliente', items: previousOeOptions },
+        oeResults: [selectedItem],
+        equivalents: {},
+        missingData: ['quote_pdf_confirmation'],
+        whatsappText: buildQuotePdfQuestionText(
+          selectedItem,
+          previousIntakeState.slots?.quote_append_requested ? (s(previousIntakeState.slots?.linked_preventivo_code) || '') : ''
+        ),
+        aiRequest: {
+          intent: 'oe_option_selection',
+          request_is_valid: true,
+          suggested_service: 'RTWS_LISTINI_LOOKUP_BY_OE',
+          instruction: 'Selezione diretta di una variante OE proposta in precedenza.',
+          availableSources: ['CONVERSATION_CONTEXT', 'RTWS_LISTINI', 'RTWS_BDRT'],
+          parsed,
+          normalizedPart,
+          selectedOptionIndex: selectedIndex + 1,
+          openai: {
+            skipped: true,
+            error: null,
+            model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+            statusCode: null,
+            raw: null,
+            parsed: null
+          }
+        },
+        aiSummary: null,
+        resolvedStatus: 'oe_trovato',
+        intakeState: {
+          stage: 'waiting_quote_pdf_confirmation',
+          pendingSlot: 'quote_pdf_confirmation',
+          pendingQuestion: 'Vuoi che ti prepari subito un preventivo PDF? Rispondi SI oppure NO.',
+          slots: {
+            ...previousIntakeState.slots,
+            oe_code: s(selectedItem.oe_code) || s(previousIntakeState.slots?.oe_code) || '',
+            selected_glass_option: selectedItem,
+            proposed_oe_options: previousOeOptions
+          }
+        }
+      };
+    }
+  }
+
   if (masterCase === 'document_image_only') {
     return buildVehicleDocumentWaitingResponse({
       text,
@@ -5136,50 +5450,123 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
       ? { status: 'SKIPPED', message: 'Ricerca OE estesa non necessaria', items: [] }
       : await rtwsSearchListiniByOe({ oeCode: parsed.oeCode, top: 8 });
     const equivalents = await rtwsGetListiniEquivalenti({ partNumber: parsed.oeCode });
+    const vehicleSearch = await rtwsSearchVehiclesByOe({ oeCode: parsed.oeCode, top: 8 });
+    const identificationCatalog = parsed.plate
+      ? await rtwsGetVehicleByPlate({ plate: parsed.plate })
+      : { status: 'SKIPPED', message: 'Nessuna targa disponibile per il match MMV', vehicle: null, allestimenti: [] };
     const exactItems = Array.isArray(exactCatalog.items) ? exactCatalog.items : [];
     const searchItems = Array.isArray(searchCatalog.items) ? searchCatalog.items : [];
-    const exactItem = exactItems.find((item) => sanitizeOeCode(item.oe_code || item.part_number || '') === parsed.oeCode)
+    const vehicleMatches = Array.isArray(vehicleSearch.items) ? vehicleSearch.items : [];
+    const identifiedAllestimenti = Array.isArray(identificationCatalog.allestimenti) ? identificationCatalog.allestimenti : [];
+    const matchedAllestimento = identifiedAllestimenti.find((candidate) => vehicleMatches.some((match) => (
+      s(match.id_marca) === s(candidate.id_marca)
+      && s(match.id_modello) === s(candidate.id_modello)
+      && s(match.id_versione) === s(candidate.id_versione)
+    ))) || identifiedAllestimenti[0] || null;
+    const dbrtCatalog = matchedAllestimento
+      ? await rtwsGetRicambiByOe({
+        idMar: matchedAllestimento.id_marca,
+        idMod: matchedAllestimento.id_modello,
+        idVer: matchedAllestimento.id_versione,
+        oeCodes: [parsed.oeCode]
+      })
+      : { status: 'SKIPPED', message: 'Match MMV BDRT non eseguito', items: [], entries: [] };
+    const dbrtItems = Array.isArray(dbrtCatalog.items) ? dbrtCatalog.items : [];
+    const exactCatalogItem = exactItems.find((item) => sanitizeOeCode(item.oe_code || item.part_number || '') === parsed.oeCode)
       || exactItems[0]
-      || searchItems.find((item) => sanitizeOeCode(item.oe_code || item.part_number || '') === parsed.oeCode)
-      || searchItems[0]
       || null;
-    const inferredPartName = s(exactItem?.description) || s(normalizedPart.name) || parsed.requestedPartText || parsed.oeCode;
+    const exactSearchItem = searchItems.find((item) => sanitizeOeCode(item.oe_code || item.part_number || '') === parsed.oeCode)
+      || null;
+    const exactBdrtItem = dbrtItems.length === 1 ? dbrtItems[0] : null;
+    const confirmedItem = exactCatalogItem || exactSearchItem || null;
+    const informativeItem = confirmedItem || exactBdrtItem || null;
+    const selectedItem = informativeItem
+      ? {
+        ...informativeItem,
+        description: s(exactBdrtItem?.description) || s(informativeItem.description) || parsed.requestedPartText || parsed.oeCode,
+        oe_code: s(informativeItem.oe_code) || s(exactBdrtItem?.oe_code) || parsed.oeCode,
+        part_number: s(exactBdrtItem?.part_number) || s(informativeItem.part_number) || '',
+        id_par: s(exactBdrtItem?.id_par) || s(informativeItem.id_par) || '',
+        extra_description: s(exactBdrtItem?.extra_description) || s(informativeItem.extra_description) || '',
+        pecos: s(exactBdrtItem?.pecos) || s(informativeItem.pecos) || '',
+        color: s(exactBdrtItem?.color) || s(informativeItem.color) || '',
+        raw_xml: s(informativeItem.raw_xml) || s(exactBdrtItem?.raw_xml) || ''
+      }
+      : null;
+    const candidateItems = dedupeOeLookupItems([
+      ...searchItems,
+      ...dbrtItems
+    ]).filter((item) => !selectedItem || [
+      sanitizeOeCode(s(item.oe_code)),
+      sanitizeOeCode(s(item.part_number)),
+      s(item.description).toLowerCase(),
+      s(item.id_par)
+    ].join('|') !== [
+      sanitizeOeCode(s(selectedItem.oe_code)),
+      sanitizeOeCode(s(selectedItem.part_number)),
+      s(selectedItem.description).toLowerCase(),
+      s(selectedItem.id_par)
+    ].join('|'));
+    const inferredPartName = s(selectedItem?.description) || s(normalizedPart.name) || parsed.requestedPartText || parsed.oeCode;
     const inferredCategory = normalizePartCategory(normalizedPart.category, inferredPartName);
     const resolvedPart = {
       name: inferredPartName,
       category: inferredCategory
     };
     const needsPlateForGlass = inferredCategory === 'cristalli' && !parsed.plate;
-    const oeResults = exactItems.length ? exactItems : searchItems;
-    const whatsappText = buildOeLookupReplyText({
-      oeCode: parsed.oeCode,
-      exactItem,
-      searchItems,
-      equivalentItems: Array.isArray(equivalents.items) ? equivalents.items : [],
-      needsPlateForGlass
-    });
+    const needsPlateForFollowup = !parsed.plate && !selectedItem && vehicleMatches.length > 0;
+    const oeResults = selectedItem
+      ? [selectedItem, ...candidateItems].slice(0, 8)
+      : candidateItems;
+    const canOfferQuote = !!(confirmedItem && selectedItem && !needsPlateForGlass);
+    const existingQuoteCode = intakeSlots.quote_append_requested ? (s(intakeSlots.linked_preventivo_code) || '') : '';
+    const whatsappText = canOfferQuote
+      ? (identificationCatalog.vehicle
+        ? `Ho verificato il codice OE sul veicolo ${buildVehicleSummaryLabel(identificationCatalog.vehicle) || 'della targa indicata'}.\n\n${buildQuotePdfQuestionText(selectedItem, existingQuoteCode)}`
+        : buildQuotePdfQuestionText(selectedItem, existingQuoteCode))
+      : buildOeLookupReplyText({
+        oeCode: parsed.oeCode,
+        exactItem: selectedItem,
+        searchItems: candidateItems,
+        equivalentItems: Array.isArray(equivalents.items) ? equivalents.items : [],
+        needsPlateForGlass,
+        identifiedVehicle: identificationCatalog.vehicle || null,
+        vehicleMatches,
+        dbrtItems
+      });
 
     return {
-      status: (exactCatalog.status === 'ERROR' && searchCatalog.status === 'ERROR' && equivalents.status === 'ERROR') ? 'ERROR' : 'OK',
+      status: (
+        exactCatalog.status === 'ERROR'
+        && searchCatalog.status === 'ERROR'
+        && equivalents.status === 'ERROR'
+        && vehicleSearch.status === 'ERROR'
+        && dbrtCatalog.status === 'ERROR'
+      ) ? 'ERROR' : 'OK',
       parsed: {
         ...parsed,
         requestedPartText: inferredPartName
       },
-      vehicle: null,
+      vehicle: identificationCatalog.vehicle || null,
       normalizedPart: resolvedPart,
-      dbrtResult: {},
+      dbrtResult: {
+        vehicleSearch,
+        oeLookup: dbrtCatalog,
+        matchedAllestimento
+      },
       glassCatalog: { status: 'SKIPPED', message: 'Lookup OE eseguito senza compatibilita targa', items: [] },
       oeCatalog: exactCatalog.status === 'READY' ? exactCatalog : searchCatalog,
       oeResults,
       equivalents,
-      missingData: needsPlateForGlass ? ['plate'] : [],
+      identificationCatalog,
+      missingData: needsPlateForGlass || needsPlateForFollowup ? ['plate'] : [],
       whatsappText,
       aiRequest: {
         intent: 'oe_lookup_resolution',
         request_is_valid: true,
         suggested_service: 'RTWS_LISTINI_LOOKUP_BY_OE',
-        instruction: 'Lookup automatico del codice OE con RTWS_LISTINI prima del passaggio manuale.',
-        availableSources: ['RTWS_LISTINI', 'RULES', 'CONVERSATION_CONTEXT'],
+        instruction: 'Lookup diretto del codice OE usando RTWS_LISTINI e RTWS_BDRT prima del passaggio manuale.',
+        availableSources: ['RTWS_LISTINI', 'RTWS_BDRT', 'RULES', 'CONVERSATION_CONTEXT'],
         parsed,
         normalizedPart: resolvedPart,
         intakeSlots,
@@ -5188,6 +5575,9 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
         exactCatalog,
         searchCatalog,
         equivalents,
+        vehicleSearch,
+        identificationCatalog,
+        dbrtCatalog,
         openai: {
           skipped: true,
           error: null,
@@ -5197,23 +5587,38 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
           parsed: null
         }
       },
-      aiSummary: exactItem
-        ? `Codice OE verificato in RTWS_LISTINI: ${inferredPartName}.`
-        : (searchItems.length
-          ? `Trovate ${searchItems.length} corrispondenze OE in RTWS_LISTINI.`
+      aiSummary: selectedItem
+        ? `Codice OE verificato sui servizi RTWS: ${inferredPartName}.`
+        : (candidateItems.length
+          ? `Trovate ${candidateItems.length} corrispondenze OE sui servizi RTWS.`
           : `Nessun risultato automatico utile per il codice OE ${parsed.oeCode}.`),
-      resolvedStatus: needsPlateForGlass
+      resolvedStatus: canOfferQuote
+        ? 'oe_trovato'
+        : (needsPlateForGlass || needsPlateForFollowup
         ? 'in_attesa_dati_cliente'
-        : (exactItem ? 'oe_trovato' : 'in_attesa_verifica_tecnica'),
-      escalationRequired: !needsPlateForGlass && !exactItem && !searchItems.length,
+        : 'in_attesa_verifica_tecnica'),
+      escalationRequired: !canOfferQuote && !needsPlateForGlass && !needsPlateForFollowup && !selectedItem && !candidateItems.length && !vehicleMatches.length,
       intakeState: {
-        stage: needsPlateForGlass ? 'waiting_service_key' : (exactItem ? 'oe_lookup_completed' : 'manual_review'),
-        pendingSlot: needsPlateForGlass ? 'plate' : null,
-        pendingQuestion: needsPlateForGlass ? 'Il codice sembra appartenere ai cristalli. Inviami la targa e verifico subito la compatibilita veicolo e le varianti corrette.' : null,
+        stage: canOfferQuote
+          ? 'waiting_quote_pdf_confirmation'
+          : (needsPlateForGlass || needsPlateForFollowup ? 'waiting_service_key' : (selectedItem ? 'oe_lookup_completed' : 'manual_review')),
+        pendingSlot: canOfferQuote
+          ? 'quote_pdf_confirmation'
+          : ((needsPlateForGlass || needsPlateForFollowup) ? 'plate' : null),
+        pendingQuestion: canOfferQuote
+          ? 'Vuoi che ti prepari subito un preventivo PDF? Rispondi SI oppure NO.'
+          : ((needsPlateForGlass || needsPlateForFollowup)
+            ? (needsPlateForGlass
+              ? 'Il codice sembra appartenere ai cristalli. Inviami la targa e verifico subito la compatibilita veicolo e le varianti corrette.'
+              : 'Inviami la targa del veicolo cosi posso restringere la verifica OE sul mezzo corretto.')
+            : null),
         slots: {
           ...intakeSlots,
           part_name: inferredPartName,
-          part_category: inferredCategory
+          part_category: inferredCategory,
+          oe_code: s(selectedItem?.oe_code) || s(intakeSlots.oe_code) || '',
+          selected_glass_option: canOfferQuote ? selectedItem : (intakeSlots.selected_glass_option || null),
+          proposed_oe_options: !canOfferQuote && candidateItems.length ? candidateItems.slice(0, 8) : (intakeSlots.proposed_oe_options || [])
         }
       }
     };
@@ -5900,6 +6305,25 @@ async function processInboundPartsMessage({
           items: resolved.equivalents.items?.slice(0, 10) || [],
           stateCode: resolved.equivalents.stateCode || ''
         });
+      }
+
+      if (resolved.dbrtResult?.vehicleSearch?.status === 'READY') {
+        logPartEvent(partsRequestId, 'rtws_bdrt_searchrt', resolved.dbrtResult.vehicleSearch.message || 'Veicoli compatibili recuperati da RTWS_BDRT', 'rtws_bdrt', {
+          items: resolved.dbrtResult.vehicleSearch.items?.slice(0, 10) || [],
+          stateCode: resolved.dbrtResult.vehicleSearch.stateCode || ''
+        });
+      } else if (resolved.dbrtResult?.vehicleSearch?.status === 'ERROR') {
+        logPartEvent(partsRequestId, 'rtws_bdrt_searchrt_error', resolved.dbrtResult.vehicleSearch.message || 'Errore SearchRTByOe', 'rtws_bdrt', resolved.dbrtResult.vehicleSearch);
+      }
+
+      if (resolved.dbrtResult?.oeLookup?.status === 'READY') {
+        logPartEvent(partsRequestId, 'rtws_bdrt_oe', resolved.dbrtResult.oeLookup.message || 'Ricambi OE recuperati da RTWS_BDRT', 'rtws_bdrt', {
+          items: resolved.dbrtResult.oeLookup.items?.slice(0, 10) || [],
+          stateCode: resolved.dbrtResult.oeLookup.stateCode || '',
+          matchedAllestimento: resolved.dbrtResult.matchedAllestimento || null
+        });
+      } else if (resolved.dbrtResult?.oeLookup?.status === 'ERROR') {
+        logPartEvent(partsRequestId, 'rtws_bdrt_oe_error', resolved.dbrtResult.oeLookup.message || 'Errore GetRicambiByOE', 'rtws_bdrt', resolved.dbrtResult.oeLookup);
       }
 
       if (resolved.whatsappText) {
