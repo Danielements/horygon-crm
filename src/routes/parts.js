@@ -2117,7 +2117,7 @@ function buildServiceExecutionPlan(slots = {}, suggestedService = '', evidence =
     };
   }
 
-  if (category === 'cristalli' && !hasPlate) {
+  if (category === 'cristalli' && !hasPlate && !hasOe) {
     return {
       mode: 'waiting_data',
       missing: ['plate'],
@@ -2132,7 +2132,15 @@ function buildServiceExecutionPlan(slots = {}, suggestedService = '', evidence =
     };
   }
 
-  if (category !== 'cristalli' && hasPlate && partName && isRtwsIdentificationConfigured()) {
+  if (hasOe && (category === 'ricambio_generico' || !partName || !hasPlate)) {
+    return {
+      mode: 'execute_service',
+      service: 'RTWS_LISTINI_LOOKUP_BY_OE',
+      category
+    };
+  }
+
+  if (category !== 'cristalli' && hasPlate && partName && isRtwsTargatelaioConfigured()) {
     return {
       mode: 'execute_service',
       service: 'RTWS_IDENTIFICATION_GET_RT_TARGA_MIN',
@@ -2181,6 +2189,16 @@ function isRtwsIdentificationConfigured() {
     process.env.RTWS_CLIENT_NAME &&
     process.env.RTWS_PASSWORD &&
     process.env.RTWS_PRODUCT_IDENTIFICATION
+  );
+}
+
+function isRtwsTargatelaioConfigured() {
+  return !!(
+    getRtwsServiceUrl() &&
+    process.env.RTWS_AZIENDA_NAME &&
+    process.env.RTWS_CLIENT_NAME &&
+    process.env.RTWS_PASSWORD &&
+    process.env.RTWS_PRODUCT_TARGATELAIO
   );
 }
 
@@ -2284,6 +2302,34 @@ function parseRtwsVehicleAllestimenti(rawXml) {
   })).filter((item) => item.make || item.model || item.version || item.id_marca || item.infocar_code);
 }
 
+function parseRtwsListinoItems(rawXml, itemTag = 'RicambioRes') {
+  return collectXmlBlocks(getXmlTagBlock(rawXml, 'Ricambi') || rawXml, itemTag).map((block) => ({
+    id_marca: getXmlTagValue(block, 'IdMar') || '',
+    id_par: getXmlTagValue(block, 'IdPar') || getXmlTagValue(block, 'Idpar') || '',
+    id_riga: getXmlTagValue(block, 'IdRiga') || '',
+    oe_code: getXmlTagValue(block, 'OE') || getXmlTagValue(block, 'Oe') || '',
+    part_number: getXmlTagValue(block, 'PartNumber') || getXmlTagValue(block, 'Parno') || '',
+    price: getXmlTagValue(block, 'Prezzo') || getXmlTagValue(block, 'Przli') || '',
+    description: getXmlTagValue(block, 'Descrizione') || getXmlTagValue(block, 'Dspar') || '',
+    state: getXmlTagValue(block, 'Stato') || '',
+    flag_manuale: getXmlTagValue(block, 'FlagManuale') || '',
+    data_validita: getXmlTagValue(block, 'DataValiditaListino') || '',
+    data_aggiornamento: getXmlTagValue(block, 'DataAggiornamentoListino') || '',
+    raw_xml: block
+  })).filter((item) => item.oe_code || item.part_number || item.description || item.price);
+}
+
+function parseRtwsEquivalentItems(rawXml) {
+  return collectXmlBlocks(getXmlTagBlock(rawXml, 'Ricambi') || rawXml, 'RicambioEquiRes').map((block) => ({
+    id_marca: getXmlTagValue(block, 'IdMar') || '',
+    oe_code: getXmlTagValue(block, 'OE') || getXmlTagValue(block, 'Oe') || '',
+    part_number: getXmlTagValue(block, 'PartNumber') || '',
+    description: getXmlTagValue(block, 'Descrizione') || '',
+    price: getXmlTagValue(block, 'Prezzo') || '',
+    raw_xml: block
+  })).filter((item) => item.part_number || item.oe_code || item.description || item.price);
+}
+
 function buildVehicleSummaryLabel(vehicle = {}) {
   return [
     s(vehicle.make),
@@ -2329,12 +2375,123 @@ async function rtwsCheckEurocodeDaTargaOE2({ plate, oeCode = '', eurocode = '', 
   };
 }
 
-async function rtwsGetVehicleByPlate({ plate, ricercaAvanzata = true }) {
-  if (!isRtwsIdentificationConfigured()) {
-    return { status: 'NOT_CONFIGURED', message: 'RTWS identificazione non configurato', vehicle: null, allestimenti: [] };
+async function rtwsGetUpdateListiniByOe({ oeCode, idMar = 0, idPar = 0, idRiga = 1 }) {
+  if (!isRtwsConfigured()) {
+    return { status: 'NOT_CONFIGURED', message: 'RTWS non configurato', items: [] };
+  }
+  const normalizedOe = sanitizeOeCode(oeCode);
+  if (!normalizedOe) {
+    return { status: 'EMPTY', message: 'Codice OE non valido', items: [] };
   }
   try {
-    const sessionId = await getRtwsSession(process.env.RTWS_PRODUCT_IDENTIFICATION);
+    const sessionId = await getRtwsSession(process.env.RTWS_PRODUCT_LISTINI);
+    const body = `
+      <sessionId>${xmlEscape(sessionId)}</sessionId>
+      <context>
+        <Ricambi>
+          <RicambioReq>
+            <IdMar>${Number(idMar) || 0}</IdMar>
+            <IdPar>${Number(idPar) || 0}</IdPar>
+            <OE>${xmlEscape(normalizedOe)}</OE>
+            <IdRiga>${Number(idRiga) || 1}</IdRiga>
+          </RicambioReq>
+        </Ricambi>
+      </context>
+    `;
+    const result = await callRtwsSoap('GetUpdateListini', body);
+    if (!result.ok) {
+      return { status: 'ERROR', message: result.error || 'Chiamata GetUpdateListini fallita', items: [], rawXml: result.rawXml || '' };
+    }
+    const stateCode = getXmlTagValue(result.rawXml, 'Code');
+    const items = parseRtwsListinoItems(result.rawXml, 'RicambioRes');
+    return {
+      status: String(stateCode || '').trim() === '0' ? (items.length ? 'READY' : 'EMPTY') : 'ERROR',
+      message: items.length ? 'Dettaglio OE recuperato da RTWS_LISTINI.' : 'Nessun dettaglio OE trovato in RTWS_LISTINI.',
+      items,
+      rawXml: result.rawXml,
+      stateCode: stateCode || ''
+    };
+  } catch (error) {
+    return { status: 'ERROR', message: error.message || 'Eccezione GetUpdateListini', items: [], rawXml: '' };
+  }
+}
+
+async function rtwsSearchListiniByOe({ oeCode, idMar = '', top = 10 }) {
+  if (!isRtwsConfigured()) {
+    return { status: 'NOT_CONFIGURED', message: 'RTWS non configurato', items: [] };
+  }
+  const normalizedOe = sanitizeOeCode(oeCode);
+  if (!normalizedOe || normalizedOe.length < 3) {
+    return { status: 'EMPTY', message: 'Servono almeno 3 caratteri di OE per la ricerca', items: [] };
+  }
+  try {
+    const sessionId = await getRtwsSession(process.env.RTWS_PRODUCT_LISTINI);
+    const body = `
+      <sessionId>${xmlEscape(sessionId)}</sessionId>
+      <context>
+        <Oe>${xmlEscape(normalizedOe)}</Oe>
+        <idMar>${xmlEscape(String(idMar || ''))}</idMar>
+        <Top>${Math.max(1, Math.min(Number(top) || 10, 20))}</Top>
+      </context>
+    `;
+    const result = await callRtwsSoap('SearchListiniByOe', body);
+    if (!result.ok) {
+      return { status: 'ERROR', message: result.error || 'Chiamata SearchListiniByOe fallita', items: [], rawXml: result.rawXml || '' };
+    }
+    const stateCode = getXmlTagValue(result.rawXml, 'Code');
+    const items = parseRtwsListinoItems(result.rawXml, 'SearchRicambioRes');
+    return {
+      status: String(stateCode || '').trim() === '0' ? (items.length ? 'READY' : 'EMPTY') : 'ERROR',
+      message: items.length ? 'Ricerca OE completata su RTWS_LISTINI.' : 'Nessuna corrispondenza trovata su RTWS_LISTINI.',
+      items,
+      rawXml: result.rawXml,
+      stateCode: stateCode || ''
+    };
+  } catch (error) {
+    return { status: 'ERROR', message: error.message || 'Eccezione SearchListiniByOe', items: [], rawXml: '' };
+  }
+}
+
+async function rtwsGetListiniEquivalenti({ partNumber }) {
+  if (!isRtwsConfigured()) {
+    return { status: 'NOT_CONFIGURED', message: 'RTWS non configurato', items: [] };
+  }
+  const normalizedPartNumber = sanitizeOeCode(partNumber);
+  if (!normalizedPartNumber) {
+    return { status: 'EMPTY', message: 'Part number non valido', items: [] };
+  }
+  try {
+    const sessionId = await getRtwsSession(process.env.RTWS_PRODUCT_LISTINI);
+    const body = `
+      <sessionId>${xmlEscape(sessionId)}</sessionId>
+      <context>
+        <PartNumber>${xmlEscape(normalizedPartNumber)}</PartNumber>
+      </context>
+    `;
+    const result = await callRtwsSoap('GetListiniEquivalenti', body);
+    if (!result.ok) {
+      return { status: 'ERROR', message: result.error || 'Chiamata GetListiniEquivalenti fallita', items: [], rawXml: result.rawXml || '' };
+    }
+    const stateCode = getXmlTagValue(result.rawXml, 'Code');
+    const items = parseRtwsEquivalentItems(result.rawXml);
+    return {
+      status: String(stateCode || '').trim() === '0' ? (items.length ? 'READY' : 'EMPTY') : 'ERROR',
+      message: items.length ? 'Equivalenti recuperati da RTWS_LISTINI.' : 'Nessun equivalente trovato in RTWS_LISTINI.',
+      items,
+      rawXml: result.rawXml,
+      stateCode: stateCode || ''
+    };
+  } catch (error) {
+    return { status: 'ERROR', message: error.message || 'Eccezione GetListiniEquivalenti', items: [], rawXml: '' };
+  }
+}
+
+async function rtwsGetVehicleByPlate({ plate, ricercaAvanzata = true }) {
+  if (!isRtwsTargatelaioConfigured()) {
+    return { status: 'NOT_CONFIGURED', message: 'RTWS targa/telaio non configurato', vehicle: null, allestimenti: [] };
+  }
+  try {
+    const sessionId = await getRtwsSession(process.env.RTWS_PRODUCT_TARGATELAIO);
     const body = `
       <sessionId>${xmlEscape(sessionId)}</sessionId>
       <context>
@@ -3420,6 +3577,47 @@ function buildGlassOptionsReplyText(options = [], itemsCount = 0) {
   lines.push('Rispondi con il numero corretto oppure mandami una foto del libretto/ricambio.');
 
   return lines.join('\n');
+}
+
+function buildOeLookupReplyText({ oeCode = '', exactItem = null, searchItems = [], equivalentItems = [], needsPlateForGlass = false }) {
+  const exactLabel = exactItem?.description || exactItem?.part_number || oeCode || 'Ricambio OE';
+  if (exactItem) {
+    const lines = [
+      `Ho verificato il codice OE ${oeCode || exactItem.oe_code || exactItem.part_number || ''} sui servizi RTWS attivi.`,
+      '',
+      `Descrizione: ${exactLabel}`,
+      exactItem.oe_code ? `Codice OE: ${exactItem.oe_code}` : null,
+      exactItem.part_number && exactItem.part_number !== exactItem.oe_code ? `Part number: ${exactItem.part_number}` : null,
+      exactItem.price ? `Prezzo listino indicativo: EUR ${exactItem.price}` : null,
+      equivalentItems.length ? `Equivalenti trovati: ${equivalentItems.length}.` : null,
+      needsPlateForGlass
+        ? 'Il codice sembra appartenere ai cristalli. Inviami la targa e verifico subito la compatibilita veicolo e le varianti corrette.'
+        : null
+    ].filter(Boolean);
+    return lines.join('\n');
+  }
+
+  if (searchItems.length) {
+    const lines = [
+      `Ho trovato alcune corrispondenze RTWS per il codice OE ${oeCode}.`,
+      'Ti elenco le piu vicine:'
+    ];
+    searchItems.slice(0, 5).forEach((item, index) => {
+      const parts = [
+        `${index + 1}. ${item.description || item.part_number || item.oe_code || 'Ricambio OE'}`,
+        item.oe_code ? `OE ${item.oe_code}` : null,
+        item.price ? `EUR ${item.price}` : null
+      ].filter(Boolean);
+      lines.push(parts.join(' - '));
+    });
+    if (searchItems.length > 5) {
+      lines.push(`Ci sono anche altre ${searchItems.length - 5} corrispondenze possibili.`);
+    }
+    lines.push('Se riconosci quella giusta, inviami la targa oppure il dettaglio del ricambio per completare la verifica.');
+    return lines.join('\n');
+  }
+
+  return `Ho verificato il codice OE ${oeCode}, ma sui servizi attivi oggi non ho trovato un riscontro automatico utilizzabile. Se mi mandi la targa oppure una foto del ricambio provo la verifica migliore disponibile.`;
 }
 
 // Legacy resolver kept only as historical reference. Runtime webhook flow uses resolvePartsMessageV2.
@@ -4910,6 +5108,103 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     };
   }
 
+  if (servicePlan.mode === 'execute_service' && servicePlan.service === 'RTWS_LISTINI_LOOKUP_BY_OE') {
+    const parsed = {
+      originalText: text,
+      plate: intakeSlots.plate || '',
+      vin: intakeSlots.vin || '',
+      oeCode: intakeSlots.oe_code || '',
+      requestedPartText: intakeSlots.part_name || preliminaryParsed.requestedPartText,
+      confidence: 1
+    };
+    const exactCatalog = await rtwsGetUpdateListiniByOe({ oeCode: parsed.oeCode });
+    const searchCatalog = exactCatalog.status === 'READY'
+      ? { status: 'SKIPPED', message: 'Ricerca OE estesa non necessaria', items: [] }
+      : await rtwsSearchListiniByOe({ oeCode: parsed.oeCode, top: 8 });
+    const equivalents = await rtwsGetListiniEquivalenti({ partNumber: parsed.oeCode });
+    const exactItems = Array.isArray(exactCatalog.items) ? exactCatalog.items : [];
+    const searchItems = Array.isArray(searchCatalog.items) ? searchCatalog.items : [];
+    const exactItem = exactItems.find((item) => sanitizeOeCode(item.oe_code || item.part_number || '') === parsed.oeCode)
+      || exactItems[0]
+      || searchItems.find((item) => sanitizeOeCode(item.oe_code || item.part_number || '') === parsed.oeCode)
+      || searchItems[0]
+      || null;
+    const inferredPartName = s(exactItem?.description) || s(normalizedPart.name) || parsed.requestedPartText || parsed.oeCode;
+    const inferredCategory = normalizePartCategory(normalizedPart.category, inferredPartName);
+    const resolvedPart = {
+      name: inferredPartName,
+      category: inferredCategory
+    };
+    const needsPlateForGlass = inferredCategory === 'cristalli' && !parsed.plate;
+    const oeResults = exactItems.length ? exactItems : searchItems;
+    const whatsappText = buildOeLookupReplyText({
+      oeCode: parsed.oeCode,
+      exactItem,
+      searchItems,
+      equivalentItems: Array.isArray(equivalents.items) ? equivalents.items : [],
+      needsPlateForGlass
+    });
+
+    return {
+      status: (exactCatalog.status === 'ERROR' && searchCatalog.status === 'ERROR' && equivalents.status === 'ERROR') ? 'ERROR' : 'OK',
+      parsed: {
+        ...parsed,
+        requestedPartText: inferredPartName
+      },
+      vehicle: null,
+      normalizedPart: resolvedPart,
+      dbrtResult: {},
+      glassCatalog: { status: 'SKIPPED', message: 'Lookup OE eseguito senza compatibilita targa', items: [] },
+      oeCatalog: exactCatalog.status === 'READY' ? exactCatalog : searchCatalog,
+      oeResults,
+      equivalents,
+      missingData: needsPlateForGlass ? ['plate'] : [],
+      whatsappText,
+      aiRequest: {
+        intent: 'oe_lookup_resolution',
+        request_is_valid: true,
+        suggested_service: 'RTWS_LISTINI_LOOKUP_BY_OE',
+        instruction: 'Lookup automatico del codice OE con RTWS_LISTINI prima del passaggio manuale.',
+        availableSources: ['RTWS_LISTINI', 'RULES', 'CONVERSATION_CONTEXT'],
+        parsed,
+        normalizedPart: resolvedPart,
+        intakeSlots,
+        intakeDecision,
+        servicePlan,
+        exactCatalog,
+        searchCatalog,
+        equivalents,
+        openai: {
+          skipped: true,
+          error: null,
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          statusCode: null,
+          raw: null,
+          parsed: null
+        }
+      },
+      aiSummary: exactItem
+        ? `Codice OE verificato in RTWS_LISTINI: ${inferredPartName}.`
+        : (searchItems.length
+          ? `Trovate ${searchItems.length} corrispondenze OE in RTWS_LISTINI.`
+          : `Nessun risultato automatico utile per il codice OE ${parsed.oeCode}.`),
+      resolvedStatus: needsPlateForGlass
+        ? 'in_attesa_dati_cliente'
+        : (exactItem ? 'oe_trovato' : 'in_attesa_verifica_tecnica'),
+      escalationRequired: !needsPlateForGlass && !exactItem && !searchItems.length,
+      intakeState: {
+        stage: needsPlateForGlass ? 'waiting_service_key' : (exactItem ? 'oe_lookup_completed' : 'manual_review'),
+        pendingSlot: needsPlateForGlass ? 'plate' : null,
+        pendingQuestion: needsPlateForGlass ? 'Il codice sembra appartenere ai cristalli. Inviami la targa e verifico subito la compatibilita veicolo e le varianti corrette.' : null,
+        slots: {
+          ...intakeSlots,
+          part_name: inferredPartName,
+          part_category: inferredCategory
+        }
+      }
+    };
+  }
+
   if (servicePlan.mode === 'execute_service' && servicePlan.service === 'RTWS_IDENTIFICATION_GET_RT_TARGA_MIN' && intakeSlots.part_category !== 'cristalli') {
     const identification = await rtwsGetVehicleByPlate({ plate: intakeSlots.plate });
     const vehicle = identification.vehicle || null;
@@ -5026,6 +5321,7 @@ function persistResolvedPayload(partsRequestId, resolved) {
   const parsed = resolved?.parsed || {};
   const normalizedPart = resolved?.normalizedPart || {};
   const items = Array.isArray(resolved?.oeResults) ? resolved.oeResults : [];
+  const equivalents = Array.isArray(resolved?.equivalents?.items) ? resolved.equivalents.items : [];
   const vehicle = resolved?.vehicle || null;
 
   db.prepare(`
@@ -5067,6 +5363,21 @@ function persistResolvedPayload(partsRequestId, resolved) {
       item.price ? Number(String(item.price).replace(',', '.')) : null,
       'RTWS_LISTINI',
       JSON.stringify(item)
+    );
+  });
+
+  db.prepare('DELETE FROM parts_request_equivalents WHERE parts_request_id = ?').run(partsRequestId);
+  const insertEquivalent = db.prepare(`
+    INSERT INTO parts_request_equivalents (parts_request_id, oe_result_id, brand, code, description, source)
+    VALUES (?, NULL, ?, ?, ?, ?)
+  `);
+  equivalents.forEach((item) => {
+    insertEquivalent.run(
+      partsRequestId,
+      s(item.id_marca) || 'RTWS',
+      s(item.part_number) || s(item.oe_code),
+      s(item.description),
+      'RTWS_LISTINI_EQUIVALENTI'
     );
   });
 
@@ -5309,7 +5620,7 @@ function buildFlowMessageCode(resolved = {}) {
   if (intent.includes('ambiguous_code')) return 'HPS2-CODE';
   if (intent.includes('session_') || stage.includes('session')) return 'HPS2-SESSION';
   if (intent.includes('quote_pdf') || stage.includes('quote')) return 'HPS2-PDF';
-  if (intent.includes('glass_option') || intent.includes('deterministic_glass') || suggestedService === 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2') return 'HPS2-RTWS';
+  if (intent.includes('glass_option') || intent.includes('deterministic_glass') || intent.includes('oe_lookup') || suggestedService.startsWith('RTWS_LISTINI')) return 'HPS2-RTWS';
   if (suggestedService.includes('BDRT') || suggestedService.includes('IDENTIFICATION') || suggestedService.includes('EQUIVALENTI')) return 'HPS2-BDRT';
   if (resolved?.escalationRequired || stage === 'manual_review') return 'HPS2-MANUAL';
   return 'HPS2-ASK';
@@ -5554,6 +5865,27 @@ async function processInboundPartsMessage({
         });
       } else if (resolved.identificationCatalog?.status === 'ERROR') {
         logPartEvent(partsRequestId, 'rtws_identification_error', resolved.identificationCatalog.message || 'Errore RTWS_IDENTIFICATION', 'rtws_identification', resolved.identificationCatalog);
+      }
+
+      if (resolved.oeCatalog?.status === 'READY') {
+        logPartEvent(partsRequestId, 'rtws_oe_lookup', resolved.oeCatalog.message || 'Lookup OE eseguito', 'rtws_listini', {
+          items: resolved.oeCatalog.items?.slice(0, 10) || [],
+          stateCode: resolved.oeCatalog.stateCode || ''
+        });
+      } else if (resolved.oeCatalog?.status === 'EMPTY') {
+        logPartEvent(partsRequestId, 'rtws_oe_lookup_empty', resolved.oeCatalog.message || 'Lookup OE senza risultati', 'rtws_listini', {
+          stateCode: resolved.oeCatalog.stateCode || '',
+          rawXml: resolved.oeCatalog.rawXml || ''
+        });
+      } else if (resolved.oeCatalog?.status === 'ERROR') {
+        logPartEvent(partsRequestId, 'errore_integrazione', resolved.oeCatalog.message || 'Errore lookup OE RTWS', 'rtws_listini', resolved.oeCatalog);
+      }
+
+      if (resolved.equivalents?.status === 'READY') {
+        logPartEvent(partsRequestId, 'rtws_equivalenti', resolved.equivalents.message || 'Equivalenti RTWS recuperati', 'rtws_listini', {
+          items: resolved.equivalents.items?.slice(0, 10) || [],
+          stateCode: resolved.equivalents.stateCode || ''
+        });
       }
 
       if (resolved.whatsappText) {
