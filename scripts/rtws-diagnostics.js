@@ -410,8 +410,33 @@ async function resolveVehicleByPlate(plate) {
   const normalizedPlate = normalizePlate(plate);
   const attempts = [];
   const candidates = [
-    { productAlias: 'TARGATELAIO', methodName: 'GetRTDaTargaMin' },
-    { productAlias: 'IDENTIFICAZIONE', methodName: 'GetRTEstesoDaTarga' }
+    {
+      productAlias: 'TARGATELAIO',
+      methodName: 'GetRTDaTargaMin',
+      contextXml: `<context><Targa>${xmlEscape(normalizedPlate)}</Targa><RicercaAvanzata>true</RicercaAvanzata></context>`,
+      parseResponse: (rawXml) => ({
+        vehicle: parseSimpleVehicle(rawXml),
+        allestimenti: parseVehicleAllestimenti(rawXml)
+      })
+    },
+    {
+      productAlias: 'IDENTIFICAZIONE',
+      methodName: 'GetRTEstesoDaTarga',
+      contextXml: `<context><Targa>${xmlEscape(normalizedPlate)}</Targa></context>`,
+      parseResponse: (rawXml) => ({
+        vehicle: parseSimpleVehicle(rawXml),
+        allestimenti: parseVehicleAllestimenti(rawXml)
+      })
+    },
+    {
+      productAlias: 'EQUIVALENTI',
+      methodName: 'GetRTCompletoDaTargaMinTecDocSingolo',
+      contextXml: `<context><Targa>${xmlEscape(normalizedPlate)}</Targa></context>`,
+      parseResponse: (rawXml) => ({
+        vehicle: parseSimpleVehicle(rawXml),
+        allestimenti: parseTecDocAllestimenti(rawXml)
+      })
+    }
   ].filter((candidate) => !!resolveProduct(candidate.productAlias));
 
   for (const candidate of candidates) {
@@ -420,26 +445,25 @@ async function resolveVehicleByPlate(plate) {
         command: `plate-lookup:${candidate.productAlias.toLowerCase()}`,
         productAlias: candidate.productAlias,
         methodName: candidate.methodName,
-        contextXml: candidate.methodName === 'GetRTDaTargaMin'
-          ? `<context><Targa>${xmlEscape(normalizedPlate)}</Targa><RicercaAvanzata>true</RicercaAvanzata></context>`
-          : `<context><Targa>${xmlEscape(normalizedPlate)}</Targa></context>`,
-        parseResponse: (rawXml) => ({
-          vehicle: parseSimpleVehicle(rawXml),
-          allestimenti: parseVehicleAllestimenti(rawXml)
-        })
+        contextXml: candidate.contextXml,
+        parseResponse: candidate.parseResponse
       });
+      const parsed = result.payload.parsed || {};
+      const allestimenti = Array.isArray(parsed.allestimenti) ? parsed.allestimenti : [];
       attempts.push({
         productAlias: candidate.productAlias,
         methodName: candidate.methodName,
         ok: result.payload.response.ok,
         state: result.payload.response.state,
+        allestimentiCount: allestimenti.length,
+        vehicle: parsed.vehicle || null,
         logFile: result.logFile
       });
-      const selected = pickBestAllestimento(result.payload.parsed);
+      const selected = pickBestAllestimento(parsed);
       if (selected) {
         return {
           selected,
-          parsed: result.payload.parsed,
+          parsed,
           source: candidate.productAlias,
           attempts
         };
@@ -816,7 +840,15 @@ async function main() {
 
       const vehicleLookup = await resolveVehicleByPlate(normalizedPlate);
       if (!vehicleLookup.selected) {
-        throw new Error('Nessun allestimento RT trovato da targa per il catalogo BDRT');
+        const attemptsSummary = (vehicleLookup.attempts || []).map((attempt) => {
+          if (attempt.error) {
+            return `${attempt.productAlias}:${attempt.methodName}:ERROR:${attempt.error}`;
+          }
+          const stateCode = attempt.state?.code || 'NA';
+          const stateDescription = attempt.state?.description || '';
+          return `${attempt.productAlias}:${attempt.methodName}:ok=${attempt.ok}:state=${stateCode}:${stateDescription}:allestimenti=${attempt.allestimentiCount || 0}`;
+        }).join(' | ');
+        throw new Error(`Nessun allestimento RT trovato da targa per il catalogo BDRT. Tentativi: ${attemptsSummary || 'nessun prodotto RTWS disponibile per il lookup targa'}`);
       }
 
       const selected = vehicleLookup.selected;
