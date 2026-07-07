@@ -2140,7 +2140,7 @@ function buildServiceExecutionPlan(slots = {}, suggestedService = '', evidence =
     };
   }
 
-  if (category !== 'cristalli' && hasPlate && partName && (isRtwsTargatelaioConfigured() || isRtwsIdentificationConfigured())) {
+  if (category !== 'cristalli' && hasPlate && partName && isRtwsNonGlassPlateLookupEnabled()) {
     return {
       mode: 'execute_service',
       service: 'RTWS_IDENTIFICATION_GET_RT_TARGA_MIN',
@@ -2210,6 +2210,12 @@ function isRtwsTargatelaioConfigured() {
     process.env.RTWS_PASSWORD &&
     process.env.RTWS_PRODUCT_TARGATELAIO
   );
+}
+
+function isRtwsNonGlassPlateLookupEnabled() {
+  const flag = String(process.env.PARTS_ENABLE_NON_GLASS_PLATE_LOOKUP || '').trim().toLowerCase();
+  if (!['1', 'true', 'yes', 'on'].includes(flag)) return false;
+  return isRtwsTargatelaioConfigured() || isRtwsIdentificationConfigured();
 }
 
 function buildSoap12Envelope(methodName, innerXml) {
@@ -2424,6 +2430,34 @@ function buildVehicleSummaryLabel(vehicle = {}) {
     s(vehicle.model),
     s(vehicle.version)
   ].filter(Boolean).join(' ').trim();
+}
+
+function buildBdrtVehicleFromOeMatch(matchedAllestimento = null, vehicleMatches = [], oeCode = '') {
+  const primary = matchedAllestimento || (Array.isArray(vehicleMatches) ? vehicleMatches[0] : null) || null;
+  if (!primary) return null;
+
+  const relatedMatches = Array.isArray(vehicleMatches)
+    ? vehicleMatches.filter((item) => (
+      s(item.id_marca) === s(primary.id_marca)
+      && s(item.id_modello) === s(primary.id_modello)
+      && s(item.id_versione) === s(primary.id_versione)
+    ))
+    : [];
+
+  return {
+    make: s(primary.make),
+    model: s(primary.model),
+    version: s(primary.version),
+    engine_code: '',
+    ktype: '',
+    infocar_code: s(primary.infocar_code),
+    vehicle_source: 'rtws_bdrt_oe_search',
+    raw_payload_json: {
+      oe_code: s(oeCode),
+      matched_allestimento: matchedAllestimento || null,
+      vehicle_matches: relatedMatches.length ? relatedMatches : (Array.isArray(vehicleMatches) ? vehicleMatches : [])
+    }
+  };
 }
 
 async function rtwsCheckEurocodeDaTargaOE2({ plate, oeCode = '', eurocode = '', ricercaVin = 0 }) {
@@ -5472,12 +5506,15 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
       })
       : { status: 'SKIPPED', message: 'Match MMV BDRT non eseguito', items: [], entries: [] };
     const dbrtItems = Array.isArray(dbrtCatalog.items) ? dbrtCatalog.items : [];
-    const exactCatalogItem = exactItems.find((item) => sanitizeOeCode(item.oe_code || item.part_number || '') === parsed.oeCode)
-      || exactItems[0]
+    const labeledExactItems = exactItems.map((item) => ({ ...item, source: s(item.source) || 'RTWS_LISTINI' }));
+    const labeledSearchItems = searchItems.map((item) => ({ ...item, source: s(item.source) || 'RTWS_LISTINI_SEARCH' }));
+    const labeledDbrtItems = dbrtItems.map((item) => ({ ...item, source: s(item.source) || 'RTWS_BDRT' }));
+    const exactCatalogItem = labeledExactItems.find((item) => sanitizeOeCode(item.oe_code || item.part_number || '') === parsed.oeCode)
+      || labeledExactItems[0]
       || null;
-    const exactSearchItem = searchItems.find((item) => sanitizeOeCode(item.oe_code || item.part_number || '') === parsed.oeCode)
+    const exactSearchItem = labeledSearchItems.find((item) => sanitizeOeCode(item.oe_code || item.part_number || '') === parsed.oeCode)
       || null;
-    const exactBdrtItem = dbrtItems.length === 1 ? dbrtItems[0] : null;
+    const exactBdrtItem = labeledDbrtItems.length === 1 ? labeledDbrtItems[0] : null;
     const confirmedItem = exactCatalogItem || exactSearchItem || null;
     const informativeItem = confirmedItem || exactBdrtItem || null;
     const selectedItem = informativeItem
@@ -5490,12 +5527,13 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
         extra_description: s(exactBdrtItem?.extra_description) || s(informativeItem.extra_description) || '',
         pecos: s(exactBdrtItem?.pecos) || s(informativeItem.pecos) || '',
         color: s(exactBdrtItem?.color) || s(informativeItem.color) || '',
-        raw_xml: s(informativeItem.raw_xml) || s(exactBdrtItem?.raw_xml) || ''
+        raw_xml: s(informativeItem.raw_xml) || s(exactBdrtItem?.raw_xml) || '',
+        source: s(exactBdrtItem?.source) || s(informativeItem.source) || (confirmedItem ? 'RTWS_LISTINI' : 'RTWS_BDRT')
       }
       : null;
     const candidateItems = dedupeOeLookupItems([
-      ...searchItems,
-      ...dbrtItems
+      ...labeledSearchItems,
+      ...labeledDbrtItems
     ]).filter((item) => !selectedItem || [
       sanitizeOeCode(s(item.oe_code)),
       sanitizeOeCode(s(item.part_number)),
@@ -5513,6 +5551,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
       name: inferredPartName,
       category: inferredCategory
     };
+    const resolvedVehicle = identificationCatalog.vehicle || buildBdrtVehicleFromOeMatch(matchedAllestimento, vehicleMatches, parsed.oeCode);
     const needsPlateForGlass = inferredCategory === 'cristalli' && !parsed.plate;
     const needsPlateForFollowup = !parsed.plate && !selectedItem && vehicleMatches.length > 0;
     const oeResults = selectedItem
@@ -5521,8 +5560,8 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
     const canOfferQuote = !!(confirmedItem && selectedItem && !needsPlateForGlass);
     const existingQuoteCode = intakeSlots.quote_append_requested ? (s(intakeSlots.linked_preventivo_code) || '') : '';
     const whatsappText = canOfferQuote
-      ? (identificationCatalog.vehicle
-        ? `Ho verificato il codice OE sul veicolo ${buildVehicleSummaryLabel(identificationCatalog.vehicle) || 'della targa indicata'}.\n\n${buildQuotePdfQuestionText(selectedItem, existingQuoteCode)}`
+      ? (resolvedVehicle
+        ? `Ho verificato il codice OE sul veicolo ${buildVehicleSummaryLabel(resolvedVehicle) || 'compatibile con il veicolo indicato'}.\n\n${buildQuotePdfQuestionText(selectedItem, existingQuoteCode)}`
         : buildQuotePdfQuestionText(selectedItem, existingQuoteCode))
       : buildOeLookupReplyText({
         oeCode: parsed.oeCode,
@@ -5530,7 +5569,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
         searchItems: candidateItems,
         equivalentItems: Array.isArray(equivalents.items) ? equivalents.items : [],
         needsPlateForGlass,
-        identifiedVehicle: identificationCatalog.vehicle || null,
+        identifiedVehicle: resolvedVehicle,
         vehicleMatches,
         dbrtItems
       });
@@ -5547,7 +5586,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
         ...parsed,
         requestedPartText: inferredPartName
       },
-      vehicle: identificationCatalog.vehicle || null,
+      vehicle: resolvedVehicle,
       normalizedPart: resolvedPart,
       dbrtResult: {
         vehicleSearch,
@@ -5578,6 +5617,7 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
         vehicleSearch,
         identificationCatalog,
         dbrtCatalog,
+        resolvedVehicle,
         openai: {
           skipped: true,
           error: null,
@@ -5617,6 +5657,17 @@ async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = 
           part_name: inferredPartName,
           part_category: inferredCategory,
           oe_code: s(selectedItem?.oe_code) || s(intakeSlots.oe_code) || '',
+          matched_mmv: matchedAllestimento
+            ? {
+              id_marca: s(matchedAllestimento.id_marca),
+              id_modello: s(matchedAllestimento.id_modello),
+              id_versione: s(matchedAllestimento.id_versione),
+              make: s(matchedAllestimento.make),
+              model: s(matchedAllestimento.model),
+              version: s(matchedAllestimento.version)
+            }
+            : (intakeSlots.matched_mmv || null),
+          selected_id_par: s(selectedItem?.id_par) || s(intakeSlots.selected_id_par) || '',
           selected_glass_option: canOfferQuote ? selectedItem : (intakeSlots.selected_glass_option || null),
           proposed_oe_options: !canOfferQuote && candidateItems.length ? candidateItems.slice(0, 8) : (intakeSlots.proposed_oe_options || [])
         }
@@ -5778,9 +5829,9 @@ function persistResolvedPayload(partsRequestId, resolved) {
     insertOe.run(
       partsRequestId,
       s(item.oe_code),
-      s(item.description || item.eurocode || 'Ricambio cristalli'),
+      s(item.description || item.eurocode || normalizedPart.name || 'Ricambio'),
       item.price ? Number(String(item.price).replace(',', '.')) : null,
-      'RTWS_LISTINI',
+      s(item.source) || 'RTWS_LISTINI',
       JSON.stringify(item)
     );
   });
