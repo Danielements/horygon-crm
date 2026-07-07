@@ -2140,7 +2140,7 @@ function buildServiceExecutionPlan(slots = {}, suggestedService = '', evidence =
     };
   }
 
-  if (category !== 'cristalli' && hasPlate && partName && isRtwsTargatelaioConfigured()) {
+  if (category !== 'cristalli' && hasPlate && partName && (isRtwsTargatelaioConfigured() || isRtwsIdentificationConfigured())) {
     return {
       mode: 'execute_service',
       service: 'RTWS_IDENTIFICATION_GET_RT_TARGA_MIN',
@@ -2487,28 +2487,42 @@ async function rtwsGetListiniEquivalenti({ partNumber }) {
 }
 
 async function rtwsGetVehicleByPlate({ plate, ricercaAvanzata = true }) {
-  if (!isRtwsTargatelaioConfigured()) {
-    return { status: 'NOT_CONFIGURED', message: 'RTWS targa/telaio non configurato', vehicle: null, allestimenti: [] };
+  if (!isRtwsTargatelaioConfigured() && !isRtwsIdentificationConfigured()) {
+    return { status: 'NOT_CONFIGURED', message: 'RTWS targa/telaio e identificazione non configurati', vehicle: null, allestimenti: [] };
   }
   try {
-    const sessionId = await getRtwsSession(process.env.RTWS_PRODUCT_TARGATELAIO);
-    const body = `
-      <sessionId>${xmlEscape(sessionId)}</sessionId>
-      <context>
-        <Targa>${xmlEscape(normalizePlate(plate))}</Targa>
-        <RicercaAvanzata>${ricercaAvanzata ? 'true' : 'false'}</RicercaAvanzata>
-      </context>
-    `;
-    const result = await callRtwsSoap('GetRTDaTargaMin', body);
+    const useTargatelaio = isRtwsTargatelaioConfigured();
+    const sessionId = await getRtwsSession(useTargatelaio ? process.env.RTWS_PRODUCT_TARGATELAIO : process.env.RTWS_PRODUCT_IDENTIFICATION);
+    const body = useTargatelaio
+      ? `
+        <sessionId>${xmlEscape(sessionId)}</sessionId>
+        <context>
+          <Targa>${xmlEscape(normalizePlate(plate))}</Targa>
+          <RicercaAvanzata>${ricercaAvanzata ? 'true' : 'false'}</RicercaAvanzata>
+        </context>
+      `
+      : `
+        <sessionId>${xmlEscape(sessionId)}</sessionId>
+        <context>
+          <Targa>${xmlEscape(normalizePlate(plate))}</Targa>
+        </context>
+      `;
+    const result = await callRtwsSoap(useTargatelaio ? 'GetRTDaTargaMin' : 'GetRTEstesoDaTarga', body);
     if (!result.ok) {
-      return { status: 'ERROR', message: result.error || 'Chiamata RTWS identificazione fallita', vehicle: null, allestimenti: [], rawXml: result.rawXml || '' };
+      return {
+        status: 'ERROR',
+        message: result.error || `Chiamata RTWS ${useTargatelaio ? 'targa/telaio' : 'identificazione'} fallita`,
+        vehicle: null,
+        allestimenti: [],
+        rawXml: result.rawXml || ''
+      };
     }
 
     const allestimenti = parseRtwsVehicleAllestimenti(result.rawXml);
     const selected = allestimenti[0] || {};
-    const plateValue = getXmlTagValue(result.rawXml, 'targa') || normalizePlate(plate);
-    const vin = getXmlTagValue(result.rawXml, 'telaio') || '';
-    const engineCode = getXmlTagValue(result.rawXml, 'codiceMotore') || '';
+    const plateValue = getXmlTagValue(result.rawXml, 'targa') || getXmlTagValue(result.rawXml, 'Targa') || normalizePlate(plate);
+    const vin = getXmlTagValue(result.rawXml, 'telaio') || getXmlTagValue(result.rawXml, 'Telaio') || '';
+    const engineCode = getXmlTagValue(result.rawXml, 'codiceMotore') || getXmlTagValue(result.rawXml, 'CodiceMotore') || '';
     const errCode = getXmlTagValue(result.rawXml, 'AllestimentiErrCode') || '';
     const errMessage = getXmlTagValue(result.rawXml, 'AllestimentiErrMessage') || '';
     const vehicle = (selected.make || selected.model || selected.version || vin || plateValue)
@@ -2519,7 +2533,7 @@ async function rtwsGetVehicleByPlate({ plate, ricercaAvanzata = true }) {
           engine_code: engineCode || '',
           ktype: '',
           infocar_code: selected.infocar_code || '',
-          vehicle_source: 'rtws_identification_targa',
+          vehicle_source: useTargatelaio ? 'rtws_targatelaio_targa' : 'rtws_identification_targa',
           raw_payload_json: {
             plate: plateValue,
             vin,
@@ -2536,8 +2550,8 @@ async function rtwsGetVehicleByPlate({ plate, ricercaAvanzata = true }) {
     return {
       status,
       message: vehicle
-        ? 'Veicolo identificato da targa tramite RTWS_IDENTIFICATION.'
-        : (errMessage || 'Nessun veicolo identificato da targa tramite RTWS_IDENTIFICATION.'),
+        ? `Veicolo identificato da targa tramite ${useTargatelaio ? 'RTWS_TARGATELAIO' : 'RTWS_IDENTIFICAZIONE'}.`
+        : (errMessage || `Nessun veicolo identificato da targa tramite ${useTargatelaio ? 'RTWS_TARGATELAIO' : 'RTWS_IDENTIFICAZIONE'}.`),
       vehicle,
       allestimenti,
       rawXml: result.rawXml,
