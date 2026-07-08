@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "rtws:diag": "node scripts/rtws-diagnostics.js"
+    "rtws:diag": "node scripts/rtws-diagnostics.js",
+    "rtws:products": "node scripts/rtws-products-check.js"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
