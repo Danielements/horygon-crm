@@ -15,3 +15,5 @@ uploads/*
 *.jpeg
 *.png
 desktop.ini
+data/rtws-flow/
+data/rtws-debug/
