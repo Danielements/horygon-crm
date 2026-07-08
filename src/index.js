@@ -117,6 +117,24 @@ process.on('uncaughtException', (error) => {
   console.error('Uncaught exception:', error);
 });
 
+// Spegnimento pulito: il DB e' in WAL mode e nel container solo horygon.db e'
+// montato (non i sidecar -wal/-shm). Senza un checkpoint prima dello stop, le
+// scritture ancora nel WAL andrebbero perse al recreate del container.
+let shuttingDown = false;
+function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try {
+    require('./db/database').exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  } catch (error) {
+    console.error('Checkpoint WAL in shutdown fallito:', error?.message || error);
+  }
+  console.log(`Shutdown (${signal}) completato.`);
+  process.exit(0);
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
 app.use('/api', (req, res) => {
   res.status(404).json({ error: `API non trovata: ${req.method} ${req.originalUrl}` });
 });

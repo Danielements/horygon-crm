@@ -60,6 +60,10 @@ function main() {
     process.exit(1);
   }
 
+  // Checkpoint WAL: senza questo le righe restano nel file -wal (non montato nel
+  // container) e andrebbero perse al primo rebuild. Le forziamo nel file principale.
+  try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch (e) { console.warn('wal_checkpoint fallito: ' + e.message); }
+
   const after = db.prepare('SELECT COUNT(*) AS c FROM rtws_idpar_dizionario').get().c;
   console.log('Voci in tabella prima : ' + before);
   console.log('Voci in tabella dopo  : ' + after);
