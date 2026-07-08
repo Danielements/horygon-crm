@@ -11,7 +11,7 @@ const router = express.Router();
 
 const PARTS_OPEN_STATUSES = ['nuova', 'in_lavorazione', 'in_attesa_dati_cliente', 'in_attesa_verifica_tecnica', 'oe_trovato', 'preventivo_pronto'];
 const rtwsSessions = new Map();
-let partsInboundProcessingQueue = Promise.resolve();
+const partsInboundQueuesByUserKey = new Map();
 let partsAttentionWatchdogStarted = false;
 
 function s(value) {
@@ -3444,98 +3444,6 @@ async function analyzeInboundMediaWithOpenAI({ channel, bodyText, mediaUrl, medi
   }
 }
 
-async function triangulateWithOpenAI(messageText) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-  if (!apiKey || !messageText) {
-    return { skipped: true, reason: 'openai_non_configurato', meta: { model } };
-  }
-
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.2,
-      response_format: {
-        type: 'json_schema',
-        json_schema: {
-          name: 'parts_whatsapp_triage',
-          schema: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              intent: { type: 'string' },
-              request_is_valid: { type: 'boolean' },
-              suggested_service: { type: 'string' },
-              confidence: { type: 'number' },
-              ai_summary: { type: 'string' },
-              requested_part_text: { type: 'string' },
-              normalized_part_name: { type: 'string' },
-              normalized_part_category: { type: 'string' },
-              plate: { type: 'string' },
-              vin: { type: 'string' },
-              oe_code: { type: 'string' },
-              missing_data: {
-                type: 'array',
-                items: { type: 'string' }
-              },
-              status: { type: 'string' },
-              operator_reply_text: { type: 'string' }
-            },
-            required: ['intent', 'request_is_valid', 'suggested_service', 'confidence', 'ai_summary', 'requested_part_text', 'normalized_part_name', 'normalized_part_category', 'plate', 'vin', 'oe_code', 'missing_data', 'status', 'operator_reply_text']
-          }
-        }
-      },
-      messages: [
-        {
-          role: 'system',
-          content: 'Sei un assistente di triage per richieste ricambi automotive WhatsApp. Estrai targa, VIN, OE e tipo ricambio se presenti. Valuta se la richiesta è interpretabile con alta affidabilità. Oggi il servizio tecnico disponibile via targa è RTWS_LISTINI CheckEurocodeDaTargaOE2 ed è utile solo per cristalli/vetri/alzacristalli/raschiavetro e ricambi collegati ai cristalli. suggested_service deve essere uno tra RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2, MANUAL_REVIEW, WAITING_DATA. Usa stati tra nuova, in_attesa_dati_cliente, in_attesa_verifica_tecnica, oe_trovato. Se la richiesta non è chiaramente legata ai cristalli, evita falsi positivi e chiedi i dati mancanti o segnala revisione manuale.'
-        },
-        {
-          role: 'user',
-          content: messageText
-        }
-      ]
-    })
-  });
-
-  const raw = await response.text();
-  const parsed = parseWhatsappResponseBody(raw);
-  if (!response.ok) {
-    return {
-      skipped: false,
-      error: parsed?.error?.message || raw || `OpenAI HTTP ${response.status}`,
-      meta: { model, statusCode: response.status, raw, parsed }
-    };
-  }
-  const content = parsed?.choices?.[0]?.message?.content;
-  if (!content) {
-    return {
-      skipped: false,
-      error: 'Risposta OpenAI vuota',
-      meta: { model, statusCode: response.status, raw, parsed }
-    };
-  }
-  try {
-    return {
-      skipped: false,
-      data: JSON.parse(content),
-      meta: { model, statusCode: response.status, raw, parsed, content }
-    };
-  } catch {
-    return {
-      skipped: false,
-      error: 'JSON OpenAI non valido',
-      raw: content,
-      meta: { model, statusCode: response.status, raw, parsed, content }
-    };
-  }
-}
-
 async function analyzeInboundEvidenceWithOpenAI({
   messageText,
   mediaAnalysis = null,
@@ -3860,119 +3768,6 @@ function buildOeLookupReplyText({
   }
 
   return `Ho verificato il codice OE ${oeCode}, ma sui servizi attivi oggi non ho trovato un riscontro automatico utilizzabile. Se mi mandi la targa oppure una foto del ricambio provo la verifica migliore disponibile.`;
-}
-
-// Legacy resolver kept only as historical reference. Runtime webhook flow uses resolvePartsMessageV2.
-async function legacyResolvePartsMessageUnused({ message, channel = 'whatsapp', context = null }) {
-  const text = String(message || '').trim();
-  if (!text) return { status: 'ERROR', error: 'message obbligatorio' };
-
-  const aiResult = await triangulateWithOpenAI(text);
-  const ai = aiResult.data || {};
-  const previousContext = context || {};
-  const fallbackPlate = extractPlateFromText(text);
-  const fallbackVin = extractVinFromText(text);
-  const fallbackOeCode = extractOeCodeFromText(text);
-  const resolvedPlate = normalizePlate(ai.plate || fallbackPlate || previousContext.plate || '');
-  const resolvedVin = s(ai.vin) || fallbackVin || s(previousContext.vin) || '';
-  const resolvedOeCode = s(ai.oe_code) || fallbackOeCode || s(previousContext.oe_code) || '';
-  const resolvedRequestedPartText = s(ai.requested_part_text)
-    || deriveRequestedPartText(text, resolvedPlate, resolvedVin, resolvedOeCode)
-    || s(previousContext.requested_part_text)
-    || s(previousContext.normalized_part_name)
-    || text;
-  const parsed = {
-    originalText: text,
-    plate: resolvedPlate,
-    vin: resolvedVin,
-    oeCode: resolvedOeCode,
-    requestedPartText: resolvedRequestedPartText,
-    confidence: ai.confidence ?? 0
-  };
-  const normalizedPart = {
-    name: s(ai.normalized_part_name) || s(previousContext.normalized_part_name) || parsed.requestedPartText,
-    category: s(ai.normalized_part_category) || s(previousContext.normalized_part_category) || guessPartCategory(parsed.requestedPartText)
-  };
-  const glassEligible = ai.request_is_valid !== false
-    && parsed.plate
-    && (String(ai.suggested_service || '') === 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2' || normalizedPart.category === 'cristalli');
-
-  let glassCatalog = { status: 'SKIPPED', message: 'Nessun servizio tecnico eseguito', items: [] };
-  let whatsappText = s(ai.operator_reply_text) || '';
-  let status = s(ai.status) || 'nuova';
-  let options = [];
-  let selectedItem = null;
-  let confidentSelection = false;
-
-  if (glassEligible) {
-    glassCatalog = await rtwsCheckEurocodeDaTargaOE2({ plate: parsed.plate, oeCode: parsed.oeCode });
-    selectedItem = chooseBestGlassItem(glassCatalog.items, parsed.requestedPartText);
-    options = buildGlassOptions(glassCatalog.items, parsed.requestedPartText);
-    confidentSelection = isConfidentGlassSelection(selectedItem, parsed.requestedPartText, options);
-    if (selectedItem && options.length <= 1 && confidentSelection) {
-      parsed.oeCode = selectedItem.oe_code || parsed.oeCode;
-      whatsappText = buildQuotePdfQuestionText(selectedItem);
-      status = 'oe_trovato';
-    } else if (options.length > 1) {
-      whatsappText = buildGlassOptionsReplyText(options, glassCatalog.items.length);
-      status = 'in_attesa_verifica_tecnica';
-    } else {
-      whatsappText = whatsappText || 'Ho identificato una richiesta cristalli, ma dalla sola targa non emerge un risultato univoco. Indicami meglio quale vetro o allega una foto del ricambio.';
-      status = 'in_attesa_verifica_tecnica';
-    }
-  } else if (!parsed.plate && !parsed.vin && !parsed.oeCode) {
-    whatsappText = whatsappText || 'Per usare i servizi attivi oggi ho bisogno di almeno uno tra targa, VIN o codice OE, oltre al tipo di cristallo/ricambio richiesto.';
-    status = 'in_attesa_dati_cliente';
-  } else if (normalizedPart.category !== 'cristalli') {
-    whatsappText = whatsappText || 'Al momento con i servizi RTWS attivi posso lavorare in automatico soprattutto sui cristalli da targa. Ho preso in carico la richiesta e la faccio verificare manualmente.';
-    status = 'in_attesa_verifica_tecnica';
-  }
-
-  return {
-    status: glassCatalog.status === 'ERROR' ? 'ERROR' : 'OK',
-    parsed,
-    vehicle: null,
-    normalizedPart,
-    dbrtResult: {},
-    glassCatalog,
-    oeCatalog: {},
-    oeResults: glassCatalog.items || [],
-    equivalents: {},
-    missingData: ai.missing_data || [],
-    whatsappText,
-    aiRequest: {
-      intent: ai.intent || 'automotive_parts_resolution',
-      request_is_valid: ai.request_is_valid !== false,
-      suggested_service: ai.suggested_service || (glassEligible ? 'RTWS_LISTINI_CHECK_EUROCODE_TARGA_OE2' : 'MANUAL_REVIEW'),
-      instruction: 'Triage AI e scelta del servizio RTWS più utile con minimizzazione dei falsi positivi.',
-      availableSources: ['OPENAI', 'RTWS_LISTINI', 'RTWS_BDRT'],
-      parsed,
-      normalizedPart,
-      extraction: {
-        plate_source: ai.plate ? 'openai' : (fallbackPlate ? 'regex' : 'missing'),
-        vin_source: ai.vin ? 'openai' : (fallbackVin ? 'regex' : 'missing'),
-        oe_source: ai.oe_code ? 'openai' : (fallbackOeCode ? 'regex' : 'missing')
-      },
-      conversationContext: previousContext ? {
-        plate: s(previousContext.plate) || null,
-        vin: s(previousContext.vin) || null,
-        oe_code: s(previousContext.oe_code) || null,
-        requested_part_text: s(previousContext.requested_part_text) || null,
-        normalized_part_name: s(previousContext.normalized_part_name) || null,
-        normalized_part_category: s(previousContext.normalized_part_category) || null
-      } : null,
-      openai: {
-        skipped: !!aiResult.skipped,
-        error: aiResult.error || null,
-        model: aiResult.meta?.model || null,
-        statusCode: aiResult.meta?.statusCode || null,
-        raw: aiResult.meta?.content || aiResult.meta?.raw || aiResult.raw || null,
-        parsed: aiResult.data || aiResult.meta?.parsed || null
-      }
-    },
-    aiSummary: s(ai.ai_summary) || null,
-    resolvedStatus: status
-  };
 }
 
 async function resolvePartsMessageV2({ message, channel = 'whatsapp', context = null, intakeState = null, mediaAnalysis = null }) {
@@ -6133,12 +5928,21 @@ function decorateFlowReplyText(bodyText, resolved = {}) {
   return `[${buildFlowMessageCode(resolved)}] ${text}`;
 }
 
+// Una coda per conversazione: i messaggi dello stesso utente restano in ordine,
+// ma una conversazione lenta (es. analisi AI di una foto) non blocca le altre.
 function enqueueInboundPartsMessage(payload) {
+  const queueKey = payload.userKey || `${payload.channel || 'unknown'}:unknown`;
+  const previous = partsInboundQueuesByUserKey.get(queueKey) || Promise.resolve();
   const run = async () => processInboundPartsMessage(payload);
-  const next = partsInboundProcessingQueue.then(run, run);
-  partsInboundProcessingQueue = next.catch((error) => {
+  const next = previous.then(run, run);
+  const tail = next.catch((error) => {
     console.error('parts inbound queue error', error);
+  }).then(() => {
+    if (partsInboundQueuesByUserKey.get(queueKey) === tail) {
+      partsInboundQueuesByUserKey.delete(queueKey);
+    }
   });
+  partsInboundQueuesByUserKey.set(queueKey, tail);
   return next;
 }
 
@@ -6165,16 +5969,16 @@ function scanAndEscalateAgedPartsRequests() {
 function startPartsAttentionWatchdog() {
   if (partsAttentionWatchdogStarted) return;
   partsAttentionWatchdogStarted = true;
-  setInterval(() => {
+  const interval = setInterval(() => {
     try {
       scanAndEscalateAgedPartsRequests();
     } catch (error) {
       console.error('parts attention watchdog error', error);
     }
   }, 60000);
+  // Non tiene vivo il processo: gli script che importano questo modulo devono poter terminare.
+  if (typeof interval.unref === 'function') interval.unref();
 }
-
-startPartsAttentionWatchdog();
 
 async function processInboundPartsMessage({
   channel,
@@ -6193,6 +5997,19 @@ async function processInboundPartsMessage({
   let partsRequestId = null;
   const inboundPreviewText = s(bodyText) || buildInboundMessagePlaceholder(messageType, mediaUrl);
   try {
+    // Meta e Telegram reinviano il webhook se non ricevono conferma in tempo:
+    // lo stesso messaggio non deve essere processato (e risposto) due volte.
+    if (externalMessageId) {
+      const duplicate = db.prepare(`
+        SELECT id FROM whatsapp_messages
+        WHERE direction = 'inbound' AND channel = ? AND external_message_id = ?
+        LIMIT 1
+      `).get(channel, externalMessageId);
+      if (duplicate) {
+        return { skipped: 'duplicate_inbound_message', externalMessageId };
+      }
+    }
+
     closeStalePartsRequestsForPhone(userKey);
     const activeRequest = getActivePartsRequestForPhone(userKey);
     if (activeRequest) {
@@ -6563,6 +6380,29 @@ async function processInboundPartsMessage({
   }
 }
 
+let whatsappSignatureWarningLogged = false;
+
+function verifyWhatsAppWebhookSignature(req) {
+  const appSecret = s(process.env.WHATSAPP_APP_SECRET);
+  if (!appSecret) {
+    if (!whatsappSignatureWarningLogged) {
+      whatsappSignatureWarningLogged = true;
+      console.warn('WHATSAPP_APP_SECRET non configurato: firma webhook WhatsApp non verificata');
+    }
+    return true;
+  }
+  const signatureHeader = s(req.headers['x-hub-signature-256']);
+  if (!signatureHeader || !signatureHeader.startsWith('sha256=') || !req.rawBody) return false;
+  const expected = crypto.createHmac('sha256', appSecret).update(req.rawBody).digest();
+  let received;
+  try {
+    received = Buffer.from(signatureHeader.slice('sha256='.length), 'hex');
+  } catch {
+    return false;
+  }
+  return received.length === expected.length && crypto.timingSafeEqual(received, expected);
+}
+
 router.get('/webhook/whatsapp', (req, res) => {
   const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
   const mode = req.query['hub.mode'];
@@ -6578,6 +6418,9 @@ router.get('/webhook/whatsapp', (req, res) => {
 });
 
 router.post('/webhook/whatsapp', async (req, res) => {
+  if (!verifyWhatsAppWebhookSignature(req)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
   const entries = Array.isArray(req.body?.entry) ? req.body.entry : [];
   res.json({ ok: true });
 
@@ -6631,7 +6474,9 @@ router.post('/webhook/telegram', async (req, res) => {
   const callbackData = s(update.callback_query?.data);
   const chatId = s(message?.chat?.id);
   const bodyText = s(message?.text) || s(message?.caption) || callbackData || '';
-  const externalMessageId = s(message?.message_id) || s(update.update_id) || s(update.callback_query?.id);
+  // Per i callback_query l'id del tap e' univoco, mentre message_id e' quello del
+  // messaggio-menu del bot e sarebbe condiviso tra tap diversi sullo stesso menu.
+  const externalMessageId = s(update.callback_query?.id) || s(message?.message_id) || s(update.update_id);
 
   if (!chatId) return res.json({ ok: true, skipped: 'chat_missing' });
   res.json({ ok: true });
@@ -7005,3 +6850,4 @@ router.get('/parts/stats', requirePermesso('ricambi', 'read'), (req, res) => {
 });
 
 module.exports = router;
+module.exports.startPartsAttentionWatchdog = startPartsAttentionWatchdog;

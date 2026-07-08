@@ -33,7 +33,13 @@ app.use('/api/auth/setup', rateLimit({ windowMs: 60 * 60 * 1000, max: 3 }));
 app.use('/api', rateLimit({ windowMs: 60 * 1000, max: 300 }));
 
 // Body parser must run before API routes that read req.body
-app.use(express.json({ limit: '20mb' }));
+// req.rawBody serve alla verifica firma HMAC dei webhook (X-Hub-Signature-256)
+app.use(express.json({
+  limit: '20mb',
+  verify: (req, res, buf) => {
+    if (req.originalUrl.startsWith('/api/webhook/')) req.rawBody = buf;
+  }
+}));
 
 // Static assets
 app.use(express.static(path.join(__dirname, '../public')));
@@ -67,7 +73,8 @@ app.use('/api/cig',         require('./routes/cig'));
 app.use('/api/analytics',   require('./routes/analytics'));
 app.use('/api/audit',       require('./routes/audit'));
 app.use('/api/system-log',  require('./routes/system-log'));
-app.use('/api',             require('./routes/parts'));
+const partsRoutes = require('./routes/parts');
+app.use('/api',             partsRoutes);
 app.use('/api',             require('./routes/operativo'));
 
 // Error handler
@@ -118,6 +125,8 @@ app.use('/api', (req, res) => {
 app.get('/{*path}', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/index.html'));
 });
+
+partsRoutes.startPartsAttentionWatchdog();
 
 app.listen(PORT, () => {
   console.log(`✅ Horygon CRM → http://localhost:${PORT} [${IS_PROD ? 'PROD' : 'DEV'}]`);

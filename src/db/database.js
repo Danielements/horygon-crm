@@ -742,6 +742,12 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
   );
+
+  CREATE INDEX IF NOT EXISTS idx_parts_requests_phone_status ON parts_requests(user_phone, status);
+  CREATE INDEX IF NOT EXISTS idx_parts_requests_status ON parts_requests(status);
+  CREATE INDEX IF NOT EXISTS idx_whatsapp_conversations_phone ON whatsapp_conversations(user_phone);
+  CREATE INDEX IF NOT EXISTS idx_whatsapp_messages_conversation ON whatsapp_messages(conversation_id);
+  CREATE INDEX IF NOT EXISTS idx_whatsapp_messages_external_id ON whatsapp_messages(channel, external_message_id);
 `);
 
 const ROLE_DEFS = [
