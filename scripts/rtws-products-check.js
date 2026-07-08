@@ -44,15 +44,23 @@ function loadEnvFile(filePath) {
   if (nodeEnv !== 'production') loadEnvFile(path.join(projectRoot, '.env.local'));
 })();
 
-// I 7 nomi-prodotto elencati nella documentazione RTWebServices v2.1.2 (pag. 11).
+// I 7 nomi-prodotto elencati nella documentazione RTWebServices v2.1.2 (pag. 11)
+// piu' le grafie usate nella "Guida Integrazione" (Rev. 2.0), che scrive
+// RTWS_TARGA_TELAIO con underscore. Testiamo tutte le varianti plausibili:
+// il server accetta solo il nome esatto previsto dal contratto.
 const CANONICAL_PRODUCTS = [
   'RTWS_BDRT',
   'RTWS_LISTINI',
   'RTWS_IDENTIFICAZIONE',
   'RTWS_TARGATELAIO',
+  'RTWS_TARGA_TELAIO',
+  'RTWS_TARGA-TELAIO',
+  'RTWS_TARGATELAIO_TELAIO',
   'RTWS_EQUIVALENTI',
   'RTWS_DATI-TECNICI',
+  'RTWS_DATI_TECNICI',
   'RTWS_TEMPI-MECH',
+  'RTWS_TEMPI_MECH',
 ];
 
 // Nomi-prodotto attualmente referenziati dal codice tramite variabili d'ambiente.
@@ -70,6 +78,7 @@ const FEATURE_MAP = {
   RTWS_LISTINI: 'Cristalli da targa (CheckEurocodeDaTargaOE2) e listini/equivalenti da OE',
   RTWS_IDENTIFICAZIONE: 'Identificazione veicolo da targa (GetRTDaTarga/GetRTEstesoDaTarga)',
   RTWS_TARGATELAIO: 'Identificazione veicolo da targa via fornitori terzi (GetRTDaTargaMin)',
+  RTWS_TARGA_TELAIO: 'Identificazione veicolo da targa (GetRTDaTarga) — grafia della Guida Rev. 2.0',
   RTWS_EQUIVALENTI: 'Equivalenti aftermarket e KType (GetPartNumberSostituenti, GetKType)',
   'RTWS_DATI-TECNICI': 'Dati tecnici veicolo',
   'RTWS_TEMPI-MECH': 'Tempi di manodopera',
