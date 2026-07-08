@@ -743,11 +743,27 @@ db.exec(`
     updated_at TEXT DEFAULT (datetime('now'))
   );
 
+  -- Dizionario ricambi RTWS/BDRT: idpar = codice QuattroRuote del tipo ricambio.
+  -- Universale (indipendente dal veicolo). Popolato dallo scan e arricchito ad
+  -- ogni nuova targa processata. Usato per mappare il testo cliente -> idpar ->
+  -- GetRicambiDBRT (OE + prezzo del ricambio per il veicolo specifico).
+  CREATE TABLE IF NOT EXISTS rtws_idpar_dizionario (
+    idpar INTEGER PRIMARY KEY,
+    descrizione TEXT NOT NULL,
+    categoria TEXT,
+    simmetria TEXT,
+    hit_count INTEGER DEFAULT 0,
+    fonte TEXT DEFAULT 'scan',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_parts_requests_phone_status ON parts_requests(user_phone, status);
   CREATE INDEX IF NOT EXISTS idx_parts_requests_status ON parts_requests(status);
   CREATE INDEX IF NOT EXISTS idx_whatsapp_conversations_phone ON whatsapp_conversations(user_phone);
   CREATE INDEX IF NOT EXISTS idx_whatsapp_messages_conversation ON whatsapp_messages(conversation_id);
   CREATE INDEX IF NOT EXISTS idx_whatsapp_messages_external_id ON whatsapp_messages(channel, external_message_id);
+  CREATE INDEX IF NOT EXISTS idx_rtws_idpar_descrizione ON rtws_idpar_dizionario(descrizione);
 `);
 
 const ROLE_DEFS = [

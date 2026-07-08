@@ -10,6 +10,7 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./horygon.db:/app/horygon.db
+      - ./data:/app/data
     environment:
       - PORT=3001
       - DB_PATH=/app/horygon.db
