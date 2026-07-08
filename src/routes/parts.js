@@ -2779,6 +2779,223 @@ async function rtwsGetVehicleByPlate({ plate, ricercaAvanzata = true }) {
   }
 }
 
+// ============================================================================
+// Flusso ricambi meccanici da targa (validato live):
+//   targa -> GetRTCompletoDaTargaMin (TARGATELAIO) -> IdMar/IdMod/IdVer
+//   idpar -> GetRicambiDBRT (BDRT) -> OE + prezzo (originali)
+//   OE    -> GetListiniEquivalenti (LISTINI) -> compatibili aftermarket
+// Additivo: non tocca il flusso cristalli/OE esistente.
+// ============================================================================
+
+// Parser allestimenti da GetRTCompletoDaTargaMin. La risposta usa
+// <AllestimentoCompleto> (con fallback su altre grafie viste su altri metodi).
+function parseRtwsAllestimentiCompleto(rawXml) {
+  const container = getXmlTagBlock(rawXml, 'Allestimenti') || rawXml;
+  let blocks = collectXmlBlocks(container, 'AllestimentoCompleto');
+  if (!blocks.length) blocks = collectXmlBlocks(container, 'AllestimentoEsteso');
+  if (!blocks.length) blocks = collectXmlBlocks(container, 'Allestimento');
+  return blocks.map((b) => ({
+    id_marca: getXmlTagValue(b, 'IdMar') || '',
+    id_modello: getXmlTagValue(b, 'IdMod') || '',
+    id_versione: getXmlTagValue(b, 'IdVer') || '',
+    marca: getXmlTagValue(b, 'DsMar') || '',
+    modello: getXmlTagValue(b, 'DsMod') || '',
+    versione: getXmlTagValue(b, 'DsVer') || '',
+    alimentazione: getXmlTagValue(b, 'Alimentazione') || '',
+    potenza_kw: getXmlTagValue(b, 'PotenzaKw') || ''
+  })).filter((a) => a.id_marca && a.id_modello && a.id_versione);
+}
+
+function buildVehicleLabelFromAllestimento(a) {
+  if (!a) return '';
+  return [a.marca, a.modello, a.versione].map((x) => s(x)).filter(Boolean).join(' ');
+}
+
+// Identifica il veicolo dalla targa via GetRTCompletoDaTargaMin (TARGATELAIO).
+// Cache globale su rtws_targa_cache: la stessa targa non consuma crediti due volte.
+async function rtwsGetVehicleCompletoByPlate({ plate, forceRefresh = false }) {
+  const normalizedPlate = normalizePlate(plate);
+  if (!normalizedPlate) {
+    return { status: 'EMPTY', message: 'Targa non valida', vehicle: null, allestimenti: [] };
+  }
+
+  if (!forceRefresh) {
+    const cached = db.prepare('SELECT * FROM rtws_targa_cache WHERE targa = ? LIMIT 1').get(normalizedPlate);
+    if (cached && cached.id_marca) {
+      const allestimenti = json(cached.allestimenti_json, []) || [];
+      const vehicle = allestimenti[0] || {
+        id_marca: String(cached.id_marca),
+        id_modello: String(cached.id_modello),
+        id_versione: String(cached.id_versione),
+        marca: '', modello: '', versione: cached.descrizione_veicolo || ''
+      };
+      return { status: 'READY', message: 'Veicolo da cache targa.', vehicle, allestimenti, cached: true, plate: normalizedPlate, vin: cached.vin || '' };
+    }
+  }
+
+  if (!isRtwsTargatelaioConfigured()) {
+    return { status: 'NOT_CONFIGURED', message: 'RTWS_TARGATELAIO non configurato', vehicle: null, allestimenti: [] };
+  }
+
+  try {
+    const sessionId = await getRtwsSession(process.env.RTWS_PRODUCT_TARGATELAIO);
+    const body = `
+      <sessionId>${xmlEscape(sessionId)}</sessionId>
+      <context>
+        <Targa>${xmlEscape(normalizedPlate)}</Targa>
+      </context>
+    `;
+    const result = await callRtwsSoap('GetRTCompletoDaTargaMin', body);
+    if (!result.ok) {
+      return { status: 'ERROR', message: result.error || 'Chiamata GetRTCompletoDaTargaMin fallita', vehicle: null, allestimenti: [], rawXml: result.rawXml || '' };
+    }
+    const allestimenti = parseRtwsAllestimentiCompleto(result.rawXml);
+    const vin = getXmlTagValue(result.rawXml, 'Telaio') || '';
+    if (!allestimenti.length) {
+      return { status: 'EMPTY', message: 'Nessun veicolo identificato dalla targa', vehicle: null, allestimenti: [], rawXml: result.rawXml, plate: normalizedPlate, vin };
+    }
+    const primary = allestimenti[0];
+    db.prepare(`
+      INSERT INTO rtws_targa_cache (targa, id_marca, id_modello, id_versione, descrizione_veicolo, allestimenti_json, vin, fetched_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(targa) DO UPDATE SET
+        id_marca = excluded.id_marca,
+        id_modello = excluded.id_modello,
+        id_versione = excluded.id_versione,
+        descrizione_veicolo = excluded.descrizione_veicolo,
+        allestimenti_json = excluded.allestimenti_json,
+        vin = excluded.vin,
+        fetched_at = datetime('now')
+    `).run(
+      normalizedPlate,
+      i(primary.id_marca),
+      i(primary.id_modello),
+      i(primary.id_versione),
+      buildVehicleLabelFromAllestimento(primary),
+      JSON.stringify(allestimenti),
+      vin || null
+    );
+    return { status: 'READY', message: 'Veicolo identificato dalla targa.', vehicle: primary, allestimenti, cached: false, plate: normalizedPlate, vin };
+  } catch (error) {
+    return { status: 'ERROR', message: error?.message || 'Eccezione GetRTCompletoDaTargaMin', vehicle: null, allestimenti: [] };
+  }
+}
+
+// Parser varianti da GetRicambiDBRT: ogni DBRT_Part ha una lista VarianteListino.
+function parseRtwsDbrtVariants(rawXml) {
+  const out = [];
+  collectXmlBlocks(rawXml, 'DBRT_Part').forEach((partBlock) => {
+    const idpar = getXmlTagValue(partBlock, 'Idpar') || getXmlTagValue(partBlock, 'idpar') || '';
+    const idsim = getXmlTagValue(partBlock, 'Idsim') || '';
+    collectXmlBlocks(partBlock, 'VarianteListino').forEach((v) => {
+      const oe = getXmlTagValue(v, 'Parno') || '';
+      const price = getXmlTagValue(v, 'Przli') || '';
+      const descr = getXmlTagValue(v, 'Dspar') || '';
+      if (!oe && !descr) return;
+      out.push({
+        idpar: idpar,
+        idsim: idsim,
+        description: descr,
+        oe_code: oe,
+        price: price,
+        color: getXmlTagValue(v, 'Color') || '',
+        extra_description: getXmlTagValue(v, 'Ultds') || ''
+      });
+    });
+  });
+  return out;
+}
+
+// Ricambi originali (OE) da veicolo + lista idpar via GetRicambiDBRT (BDRT).
+async function rtwsGetRicambiDbrt({ idMarca, idModello, idVersione, idPars = [] }) {
+  if (!isRtwsBdrtConfigured()) {
+    return { status: 'NOT_CONFIGURED', message: 'RTWS_BDRT non configurato', items: [] };
+  }
+  const marca = i(idMarca), modello = i(idModello), versione = i(idVersione);
+  const pars = (Array.isArray(idPars) ? idPars : [idPars]).map((n) => i(n)).filter((n) => n !== null);
+  if (marca === null || modello === null || versione === null || !pars.length) {
+    return { status: 'EMPTY', message: 'Codici veicolo o idpar mancanti', items: [] };
+  }
+  try {
+    const sessionId = await getRtwsSession(process.env.RTWS_PRODUCT_BDRT);
+    const idparsXml = pars.map((n) => `<Idpar>${n}</Idpar>`).join('');
+    const body = `
+      <sessionId>${xmlEscape(sessionId)}</sessionId>
+      <context>
+        <Marca>${marca}</Marca>
+        <Modello>${modello}</Modello>
+        <Versione>${versione}</Versione>
+        <CodLingua>IT</CodLingua>
+        <Idpars>${idparsXml}</Idpars>
+      </context>
+    `;
+    const result = await callRtwsSoap('GetRicambiDBRT', body);
+    if (!result.ok) {
+      return { status: 'ERROR', message: result.error || 'Chiamata GetRicambiDBRT fallita', items: [], rawXml: result.rawXml || '' };
+    }
+    const items = parseRtwsDbrtVariants(result.rawXml);
+    return {
+      status: items.length ? 'READY' : 'EMPTY',
+      message: items.length ? 'Ricambi originali da RTWS_BDRT.' : 'Nessun ricambio originale trovato per gli idpar richiesti.',
+      items,
+      rawXml: result.rawXml
+    };
+  } catch (error) {
+    return { status: 'ERROR', message: error?.message || 'Eccezione GetRicambiDBRT', items: [] };
+  }
+}
+
+// Matcher testo cliente -> idpar dal dizionario rtws_idpar_dizionario.
+// Punteggio per sovrapposizione token; ritorna i migliori candidati.
+function normalizeForMatch(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+function tokenizeForMatch(value) {
+  return normalizeForMatch(value).split(' ').filter((t) => t.length >= 2);
+}
+// Espansione sinonimi: le descrizioni RTWS usano abbreviazioni (ant./post./dx/sx).
+// Mappiamo le parole del cliente su quelle forme per migliorare il match.
+const IDPAR_SYNONYMS = {
+  anteriore: 'ant', anteriori: 'ant', avanti: 'ant', davanti: 'ant',
+  posteriore: 'post', posteriori: 'post', dietro: 'post', retro: 'post',
+  destro: 'dx', destra: 'dx', dx: 'dx',
+  sinistro: 'sx', sinistra: 'sx', sx: 'sx',
+  parabrezza: 'parabrezza', cristallo: 'cristallo', vetro: 'cristallo',
+  faro: 'proiettore', fari: 'proiettore', fanale: 'fanale',
+  pastiglie: 'pastiglie', dischi: 'disco', disco: 'disco'
+};
+function expandQueryTokens(tokens) {
+  const out = [];
+  tokens.forEach((t) => {
+    out.push(t);
+    if (IDPAR_SYNONYMS[t] && IDPAR_SYNONYMS[t] !== t) out.push(IDPAR_SYNONYMS[t]);
+  });
+  return out;
+}
+function lookupIdparByText(text, limit = 8) {
+  const queryTokens = expandQueryTokens(tokenizeForMatch(text));
+  if (!queryTokens.length) return [];
+  const rows = db.prepare('SELECT idpar, descrizione, categoria, simmetria FROM rtws_idpar_dizionario').all();
+  const scored = rows.map((row) => {
+    const descrNorm = normalizeForMatch(row.descrizione);
+    const descrTokens = descrNorm.split(' ').filter(Boolean);
+    let score = 0;
+    queryTokens.forEach((qt) => {
+      if (descrTokens.indexOf(qt) !== -1) score += 2;            // token esatto
+      else if (descrNorm.indexOf(qt) !== -1) score += 1;         // sottostringa
+    });
+    // bonus se la descrizione inizia con il primo token della query
+    if (descrTokens[0] && descrTokens[0] === queryTokens[0]) score += 1;
+    return { idpar: row.idpar, descrizione: row.descrizione, categoria: row.categoria, simmetria: row.simmetria, score };
+  }).filter((r) => r.score > 0);
+  scored.sort((a, b) => b.score - a.score || String(a.descrizione).length - String(b.descrizione).length);
+  return scored.slice(0, limit);
+}
+
 function parseWhatsappResponseBody(raw) {
   if (!raw) return null;
   try {
@@ -6510,6 +6727,87 @@ router.post('/parts/resolve', requirePermesso('ricambi', 'read'), async (req, re
     return res.status(400).json(resolved);
   }
   res.json(resolved);
+});
+
+// Rotta di test/validazione del flusso ricambi meccanici da targa (Fase 1).
+// Non tocca il flusso WhatsApp/Telegram: serve a validare targa -> veicolo ->
+// idpar -> originali + compatibili prima del cablaggio nella messaggistica.
+// Body: { plate, partText?, idpar?, includeCompatibili? }
+router.post('/parts/rtws-lookup', requirePermesso('ricambi', 'read'), async (req, res) => {
+  try {
+    const plate = s(req.body?.plate);
+    const partText = s(req.body?.partText);
+    const explicitIdpar = i(req.body?.idpar);
+    const includeCompatibili = req.body?.includeCompatibili !== false;
+    if (!plate) return res.status(400).json({ error: 'plate obbligatorio' });
+
+    // 1) targa -> veicolo (cache globale, 1 credito TARGATELAIO per targa)
+    const vehicleResult = await rtwsGetVehicleCompletoByPlate({ plate });
+    if (vehicleResult.status !== 'READY') {
+      return res.status(200).json({ step: 'vehicle', ...vehicleResult });
+    }
+    const v = vehicleResult.vehicle;
+
+    // 2) testo -> idpar candidati (o idpar esplicito)
+    const candidates = explicitIdpar
+      ? [{ idpar: explicitIdpar, descrizione: '(idpar esplicito)', score: 99 }]
+      : lookupIdparByText(partText);
+    if (!candidates.length) {
+      return res.status(200).json({
+        step: 'idpar',
+        message: 'Nessun idpar corrispondente nel dizionario per: ' + partText,
+        vehicle: { label: buildVehicleLabelFromAllestimento(v), id_marca: v.id_marca, id_modello: v.id_modello, id_versione: v.id_versione },
+        cached: !!vehicleResult.cached,
+        candidates: []
+      });
+    }
+    const chosen = candidates[0];
+
+    // 3) idpar -> ricambi originali (BDRT, illimitato)
+    const original = await rtwsGetRicambiDbrt({
+      idMarca: v.id_marca, idModello: v.id_modello, idVersione: v.id_versione, idPars: [chosen.idpar]
+    });
+
+    const variants = [];
+    const seenOe = {};
+    (original.items || []).forEach((it) => {
+      const oe = s(it.oe_code);
+      if (oe) seenOe[oe] = true;
+      variants.push({ tipo: 'originale', oe_code: oe, descrizione: it.description, prezzo: it.price, colore: it.color || '' });
+    });
+
+    // 4) per ogni OE originale -> compatibili aftermarket (LISTINI, illimitato)
+    if (includeCompatibili) {
+      const oeList = (original.items || []).map((it) => s(it.oe_code)).filter(Boolean);
+      for (let k = 0; k < oeList.length; k++) {
+        const eq = await rtwsGetListiniEquivalenti({ partNumber: oeList[k] });
+        (eq.items || []).forEach((c) => {
+          const code = s(c.oe_code) || s(c.part_number);
+          if (!code || seenOe[code]) return;
+          seenOe[code] = true;
+          variants.push({ tipo: 'compatibile', oe_code: code, descrizione: c.description || '', prezzo: c.price || '', source_oe: oeList[k] });
+        });
+      }
+    }
+
+    // aggiorna hit_count sull'idpar scelto
+    try { db.prepare('UPDATE rtws_idpar_dizionario SET hit_count = hit_count + 1 WHERE idpar = ?').run(chosen.idpar); } catch (e) {}
+
+    return res.json({
+      step: 'ok',
+      plate: vehicleResult.plate,
+      cached: !!vehicleResult.cached,
+      vehicle: { label: buildVehicleLabelFromAllestimento(v), id_marca: v.id_marca, id_modello: v.id_modello, id_versione: v.id_versione, alimentazione: v.alimentazione, potenza_kw: v.potenza_kw },
+      candidates,
+      chosen_idpar: chosen.idpar,
+      chosen_descrizione: chosen.descrizione,
+      originali: variants.filter((x) => x.tipo === 'originale').length,
+      compatibili: variants.filter((x) => x.tipo === 'compatibile').length,
+      variants
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || 'Errore rtws-lookup' });
+  }
 });
 
 router.get('/parts/dashboard', requirePermesso('ricambi', 'read'), (req, res) => {

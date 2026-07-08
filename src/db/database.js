@@ -758,6 +758,20 @@ db.exec(`
     updated_at TEXT DEFAULT (datetime('now'))
   );
 
+  -- Cache identificazione veicolo da targa (GetRTCompletoDaTargaMin, TARGATELAIO).
+  -- La stessa targa mappa sempre allo stesso veicolo: cachando i codici IdMar/IdMod/
+  -- IdVer evitiamo di consumare crediti TARGATELAIO piu' di una volta per targa.
+  CREATE TABLE IF NOT EXISTS rtws_targa_cache (
+    targa TEXT PRIMARY KEY,
+    id_marca INTEGER,
+    id_modello INTEGER,
+    id_versione INTEGER,
+    descrizione_veicolo TEXT,
+    allestimenti_json TEXT,
+    vin TEXT,
+    fetched_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_parts_requests_phone_status ON parts_requests(user_phone, status);
   CREATE INDEX IF NOT EXISTS idx_parts_requests_status ON parts_requests(status);
   CREATE INDEX IF NOT EXISTS idx_whatsapp_conversations_phone ON whatsapp_conversations(user_phone);
