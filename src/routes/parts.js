@@ -3358,7 +3358,7 @@ async function maybeEnterMeccFlow({ request, resolved, mediaAnalysis, bodyText }
   try {
     if (!resolved || resolved.status === 'ERROR') return null;
     if (resolved?.glassCatalog?.status === 'READY') return null;
-    const plate = normalizePlate(s(resolved?.parsed?.plate) || s(request?.plate));
+    const plate = normalizePlate(s(resolved?.parsed?.plate) || s(resolved?.intakeState?.slots?.plate) || s(request?.plate));
     if (!plate) return null;
     const oeCode = s(resolved?.parsed?.oeCode);
     const partName = s(resolved?.normalizedPart?.name) || s(resolved?.parsed?.requestedPartText);
