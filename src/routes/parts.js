@@ -670,7 +670,7 @@ function buildWhatsAppReplyOptionsForResolved(resolved = {}) {
     return buildWhatsAppListOptions(rows.slice(0, 9), { headerText: 'Ricambi', buttonText: 'Scegli', sectionTitle: 'Quale variante aggiungo?' });
   }
   if (stage === 'mecc_another_part') {
-    return buildWhatsAppReplyButtonsOptions(['Chiudi sessione'], { headerText: 'Ti serve altro?', includeCloseSession: false });
+    return buildWhatsAppReplyButtonsOptions(['Genera preventivo', 'Chiudi sessione'], { headerText: 'Ti serve altro?', includeCloseSession: false });
   }
 
   if (intent.includes('assistant_wake') || intent.includes('root_menu') || intent.includes('info_keyword') || stage === 'guided_root_menu') {
@@ -809,7 +809,7 @@ function buildTelegramReplyOptionsForResolved(resolved = {}) {
     return buildTelegramReplyKeyboard(rows, 'Scegli il numero del ricambio', { includeCloseSession: false });
   }
   if (stage === 'mecc_another_part') {
-    return buildTelegramReplyKeyboard([['Chiudi sessione']], 'Scrivi un altro pezzo, oppure chiudi', { includeCloseSession: false });
+    return buildTelegramReplyKeyboard([['Genera preventivo'], ['Chiudi sessione']], 'Altro pezzo, genera il preventivo, oppure chiudi', { includeCloseSession: false });
   }
 
   if (intent.includes('root_menu') || stage === 'guided_root_menu' || intent.includes('info_keyword')) {
@@ -3158,9 +3158,10 @@ function meccBaseSlots(codes, plate, partName, idpar, descrizione) {
 }
 
 // Oggetto "resolved" compatibile con l'orchestratore + persistResolvedPayload.
-function buildMeccResolved({ whatsappText, stage, slots = {}, resolvedStatus = 'in_lavorazione', plate = '', partName = '' }) {
+function buildMeccResolved({ whatsappText, stage, slots = {}, resolvedStatus = 'in_lavorazione', plate = '', partName = '', generateQuote = false }) {
   return {
     status: 'OK',
+    meccGenerateQuote: !!generateQuote,
     parsed: { originalText: '', plate: s(plate) || '', vin: '', oeCode: '', requestedPartText: partName || '', confidence: 1 },
     vehicle: null,
     normalizedPart: { name: partName || '', category: 'ricambio_generico' },
@@ -3270,7 +3271,11 @@ async function handleMeccContinuation({ request, intakeState, bodyText, mediaAna
     const codes = { id_marca: s(slots.mecc_id_marca), id_modello: s(slots.mecc_id_modello), id_versione: s(slots.mecc_id_versione), label: s(slots.mecc_vehicle_label) };
     const plate = s(slots.plate) || '';
 
-    if (/^(chiudi(\s+sessione)?|basta|fine|no grazie|stop)$/i.test(text)) {
+    if (/^(genera(\s+preventivo)?|preventivo|concludi|invia preventivo|fine e preventivo)$/i.test(text)) {
+      // finalizza e invia il PDF del preventivo accumulato (gestito nell'orchestratore)
+      return buildMeccResolved({ whatsappText: 'Preparo il preventivo con i pezzi selezionati…', stage: 'session_closed', slots: {}, resolvedStatus: 'preventivo_pronto', plate, generateQuote: true });
+    }
+    if (/^(chiudi(\s+sessione)?|basta|fine|no grazie|stop|annulla)$/i.test(text)) {
       return buildMeccResolved({ whatsappText: 'Sessione chiusa. Il preventivo resta salvato per l\'operatore. A presto!', stage: 'session_closed', slots: {}, resolvedStatus: 'completata', plate });
     }
 
@@ -3292,7 +3297,7 @@ async function handleMeccContinuation({ request, intakeState, bodyText, mediaAna
           addVariantLineToQuote(preventivoId, chosen, request);
           const summary = getQuoteSummary(preventivoId);
           if (request?.id) logPartEvent(request.id, 'mecc_add_quote', `Aggiunto: ${chosen.descrizione} OE ${chosen.oe_code} ${chosen.prezzo}`, 'crm', { preventivoId, chosen });
-          const txt = `Aggiunto al preventivo:\n${formatVariantLine(chosen, idx + 1)}\n\nPreventivo attuale: ${summary?.numRighe || 0} pezzi, totale ${Number(summary?.totale || 0).toFixed(2)}€.\nTi serve altro? Scrivi il nome del pezzo, oppure "Chiudi sessione".`;
+          const txt = `Aggiunto al preventivo:\n${formatVariantLine(chosen, idx + 1)}\n\nPreventivo attuale: ${summary?.numRighe || 0} pezzi, totale ${Number(summary?.totale || 0).toFixed(2)}€.\nTi serve altro? Scrivi il nome di un altro pezzo, "Genera preventivo" per concludere, oppure "Chiudi sessione".`;
           return buildMeccResolved({ whatsappText: txt, stage: 'mecc_another_part', slots: { ...slots, proposed_variant_options: [], variant_page: 0 }, plate, partName: s(slots.part_name) });
         }
         return buildMeccResolved({ whatsappText: `Numero non valido. Scegli un numero dalla lista (1-${variants.length}).`, stage: 'mecc_variant_selection', slots, plate, partName: s(slots.part_name) });
@@ -6937,6 +6942,33 @@ async function processInboundPartsMessage({
           channel,
           outboundResult
         );
+      }
+
+      // Flusso meccanici: "Genera preventivo" -> PDF del preventivo accumulato + invio al cliente.
+      if (resolved.meccGenerateQuote) {
+        try {
+          const reqRow = db.prepare('SELECT linked_preventivo_id FROM parts_requests WHERE id = ? LIMIT 1').get(partsRequestId);
+          const preventivoId = i(reqRow?.linked_preventivo_id);
+          const righeCount = preventivoId ? db.prepare('SELECT COUNT(*) AS c FROM preventivi_righe WHERE preventivo_id = ?').get(preventivoId).c : 0;
+          if (!preventivoId || !righeCount) {
+            await sendText(outboundTarget, 'Non ci sono ancora pezzi nel preventivo. Aggiungine almeno uno prima di generarlo.');
+          } else {
+            db.prepare("UPDATE parts_requests SET status = 'preventivo_pronto', updated_at = datetime('now') WHERE id = ?").run(partsRequestId);
+            const codice = db.prepare('SELECT codice_preventivo FROM preventivi WHERE id = ?').get(preventivoId)?.codice_preventivo || '';
+            const pdf = await createPreventivoPdfBuffer(preventivoId);
+            const documentSend = await sendDocument(outboundTarget, pdf.buffer, pdf.filename, `Preventivo ${codice}`);
+            const documentSuccess = isSendResultSuccessful(documentSend);
+            db.prepare(`
+              INSERT INTO whatsapp_messages (conversation_id, direction, channel, external_message_id, message_type, body_text, delivery_status, error_message, source_system, raw_payload_json)
+              VALUES (?, 'outbound', ?, ?, 'document', ?, ?, ?, 'mecc_quote_pdf', ?)
+            `).run(conversation.id, channel, extractDocumentMediaRef(channel, documentSend), `Preventivo ${codice}`, documentSuccess ? 'sent' : 'error', getSendResultError(documentSend), JSON.stringify(documentSend));
+            logPartEvent(partsRequestId, documentSuccess ? 'mecc_preventivo_generato' : 'errore_integrazione', `Preventivo ${codice} ${documentSuccess ? 'generato e inviato' : 'generato ma invio fallito'} (${righeCount} pezzi)`, 'crm', { preventivoId, righeCount });
+          }
+        } catch (error) {
+          logPartEvent(partsRequestId, 'errore_integrazione', `Errore generazione preventivo meccanici: ${error.message}`, 'crm', { stack: error.stack || null });
+          try { writeSystemLog({ livello: 'error', origine: 'parts_mecc_quote', messaggio: `Errore generazione preventivo: ${error?.message}`, stack: error?.stack || null }); } catch (e) {}
+          try { await sendText(outboundTarget, 'Problema nel generare il preventivo. Riprova o contatta l\'operatore.'); } catch (e) {}
+        }
       }
 
       if (resolved.quoteDecision === 'create_pdf') {
