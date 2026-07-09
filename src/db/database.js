@@ -290,6 +290,16 @@ db.exec(`
     FOREIGN KEY (utente_id) REFERENCES utenti(id)
   );
 
+  CREATE TABLE IF NOT EXISTS mobile_chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    utente_id INTEGER NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+    content TEXT NOT NULL,
+    metadata_json TEXT,
+    creato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (utente_id) REFERENCES utenti(id) ON DELETE CASCADE
+  );
+
   -- GOOGLE TOKENS
   CREATE TABLE IF NOT EXISTS google_tokens (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -359,7 +369,8 @@ function ensureColumn(table, definition) {
   "imponibile REAL DEFAULT 0",
   "iva REAL DEFAULT 0",
   "valuta TEXT DEFAULT 'EUR'",
-  "public_token TEXT"
+  "public_token TEXT",
+  "created_by_user_id INTEGER"
 ].forEach(col => ensureColumn('preventivi', col));
 
 [
@@ -373,7 +384,8 @@ function ensureColumn(table, definition) {
 [
   "preventivo_id INTEGER",
   "imponibile REAL DEFAULT 0",
-  "iva REAL DEFAULT 0"
+  "iva REAL DEFAULT 0",
+  "created_by_user_id INTEGER"
 ].forEach(col => ensureColumn('ordini', col));
 
 [
@@ -610,6 +622,8 @@ db.exec(`
     priority TEXT DEFAULT 'media',
     tags_json TEXT,
     last_message_at TEXT,
+    linked_product_id INTEGER,
+    linked_preventivo_id INTEGER,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (customer_id) REFERENCES anagrafiche(id),
@@ -772,6 +786,20 @@ db.exec(`
     fetched_at TEXT DEFAULT (datetime('now'))
   );
 
+  -- Account clienti dell'app mobile (auth separata dagli operatori CRM).
+  -- Il profilo con P.IVA/dati di fatturazione e' un'anagrafica collegata.
+  CREATE TABLE IF NOT EXISTS app_clienti (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    anagrafica_id INTEGER,
+    telefono TEXT,
+    attivo INTEGER DEFAULT 1,
+    ultimo_accesso TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (anagrafica_id) REFERENCES anagrafiche(id)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_parts_requests_phone_status ON parts_requests(user_phone, status);
   CREATE INDEX IF NOT EXISTS idx_parts_requests_status ON parts_requests(status);
   CREATE INDEX IF NOT EXISTS idx_whatsapp_conversations_phone ON whatsapp_conversations(user_phone);
@@ -779,6 +807,9 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_whatsapp_messages_external_id ON whatsapp_messages(channel, external_message_id);
   CREATE INDEX IF NOT EXISTS idx_rtws_idpar_descrizione ON rtws_idpar_dizionario(descrizione);
 `);
+
+// Colonna SDI per anagrafiche (dati di fatturazione clienti app).
+try { db.exec("ALTER TABLE anagrafiche ADD COLUMN codice_sdi TEXT"); } catch {}
 
 const ROLE_DEFS = [
   { id: 1, nome: 'readonly', descrizione: 'Solo lettura' },

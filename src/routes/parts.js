@@ -4092,6 +4092,18 @@ async function downloadInboundMediaForAi({ channel, mediaUrl, mediaMimeType, med
     };
   }
 
+  if (channel === 'app') {
+    // L'app invia l'immagine gia' in base64 nel metadata: niente download.
+    const b64 = s(mediaMetadata?.appImageBase64);
+    if (!b64) return { skipped: true, reason: 'app_immagine_mancante' };
+    try {
+      const buffer = Buffer.from(b64.replace(/^data:[^,]+,/, ''), 'base64');
+      if (!buffer.length) return { skipped: true, reason: 'app_immagine_vuota' };
+      return { ok: true, buffer, mimeType: effectiveMimeType || 'image/jpeg', filename: 'app-upload.jpg' };
+    } catch (e) {
+      return { skipped: false, error: 'Base64 immagine app non valido' };
+    }
+  }
   if (channel === 'whatsapp') return downloadWhatsAppInboundMedia(mediaUrl);
   if (channel === 'telegram') return downloadTelegramInboundMedia(mediaUrl, mediaMetadata);
   return { skipped: true, reason: 'canale_media_non_supportato' };
@@ -7150,7 +7162,9 @@ async function processInboundPartsMessage({
     if (resolved?.whatsappText) {
       resolved.whatsappText = decorateFlowReplyText(resolved.whatsappText, resolved);
     }
-    const channelReplyOptions = channel === 'telegram'
+    // Il canale 'app' riusa le opzioni Telegram (keyboard di label) che l'app
+    // rende come tasti; la cattura le appiattisce in {label, value}.
+    const channelReplyOptions = (channel === 'telegram' || channel === 'app')
       ? buildTelegramReplyOptionsForResolved(resolved)
       : (channel === 'whatsapp' ? buildWhatsAppReplyOptionsForResolved(resolved) : null);
 
@@ -7988,5 +8002,56 @@ router.get('/parts/stats', requirePermesso('ricambi', 'read'), (req, res) => {
   res.json({ requestsByDay, byCategory, byOperator, messageVolume, funnel });
 });
 
+// ===========================================================================
+// Canale APP: esegue la chat ricambi e CATTURA la risposta (reply + tasti) in
+// JSON, invece di inviarla su WhatsApp/Telegram. Usato dagli endpoint /api/app.
+// ===========================================================================
+function stripFlowCodes(text) {
+  return String(text || '').replace(/^\[HPS2-[A-Z0-9_]+\]\s*/i, '').trim();
+}
+function appOptionsFromChannelOptions(options) {
+  const kb = options && options.reply_markup && options.reply_markup.keyboard;
+  if (!Array.isArray(kb)) return [];
+  const out = [];
+  kb.forEach((row) => (Array.isArray(row) ? row : []).forEach((btn) => {
+    const label = s(btn && btn.text);
+    if (label) out.push({ label, value: label });
+  }));
+  return out;
+}
+async function processAppChatMessage({ userKey, text, imageBase64 }) {
+  const captured = { reply: '', options: [], quoteGenerated: false, error: null };
+  const sendText = async (to, bodyText, options) => {
+    captured.reply = stripFlowCodes(bodyText);
+    captured.options = appOptionsFromChannelOptions(options);
+    return { ok: true, appCapture: true };
+  };
+  const sendDocument = async () => {
+    captured.quoteGenerated = true;
+    return { ok: true, appCapture: true };
+  };
+  try {
+    await enqueueInboundPartsMessage({
+      channel: 'app',
+      userKey,
+      outboundTarget: userKey,
+      bodyText: s(text) || '',
+      externalMessageId: makeUuid(),
+      messageType: imageBase64 ? 'photo' : 'text',
+      mediaUrl: imageBase64 ? 'app_inline' : null,
+      mediaMimeType: imageBase64 ? 'image/jpeg' : null,
+      mediaMetadata: imageBase64 ? { appImageBase64: imageBase64 } : null,
+      rawPayload: { channel: 'app' },
+      sendText,
+      sendDocument
+    });
+  } catch (error) {
+    captured.error = error && error.message ? error.message : 'errore elaborazione';
+  }
+  if (!captured.reply && !captured.error) captured.reply = 'Non ho capito, puoi ripetere?';
+  return captured;
+}
+
 module.exports = router;
 module.exports.startPartsAttentionWatchdog = startPartsAttentionWatchdog;
+module.exports.processAppChatMessage = processAppChatMessage;

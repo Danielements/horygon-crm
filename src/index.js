@@ -74,6 +74,7 @@ app.use('/api/analytics',   require('./routes/analytics'));
 app.use('/api/audit',       require('./routes/audit'));
 app.use('/api/system-log',  require('./routes/system-log'));
 const partsRoutes = require('./routes/parts');
+app.use('/api/app',         require('./routes/app'));
 app.use('/api',             partsRoutes);
 app.use('/api',             require('./routes/operativo'));
 
