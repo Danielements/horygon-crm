@@ -657,6 +657,9 @@ function buildWhatsAppReplyOptionsForResolved(resolved = {}) {
   const pendingSlot = String(resolved?.intakeState?.pendingSlot || '').toLowerCase();
   const intent = String(resolved?.aiRequest?.intent || '').toLowerCase();
 
+  if (stage === 'mecc_awaiting_plate') {
+    return buildWhatsAppReplyButtonsOptions(['Chiudi sessione'], { headerText: 'Inviami la targa', includeCloseSession: false });
+  }
   if (stage === 'mecc_vehicle_menu') {
     const vslots = resolved?.intakeState?.slots || {};
     const vehicles = Array.isArray(vslots.mecc_vehicles) ? vslots.mecc_vehicles : [];
@@ -835,6 +838,9 @@ function buildTelegramReplyOptionsForResolved(resolved = {}) {
   const slots = resolved?.intakeState?.slots || {};
   const hasVehicleKey = !!(s(slots.plate) || s(slots.vin) || s(slots.oe_code));
 
+  if (stage === 'mecc_awaiting_plate') {
+    return buildTelegramReplyKeyboard([['Chiudi sessione']], 'Inviami la targa del veicolo', { includeCloseSession: false });
+  }
   if (stage === 'mecc_vehicle_menu') {
     const vehicles = Array.isArray(slots.mecc_vehicles) ? slots.mecc_vehicles : [];
     const page = parseInt(slots.vehicle_page, 10) || 0;
@@ -1580,10 +1586,10 @@ function createDraftQuoteFromRequest(request, quotedProduct) {
 
   const insert = db.prepare(`
     INSERT INTO preventivi (
-      codice_preventivo, anagrafica_id, stato, data_preventivo, imponibile, iva, totale, valuta, note
+      codice_preventivo, anagrafica_id, stato, data_preventivo, imponibile, iva, totale, valuta, note, created_by_user_id
     )
-    VALUES (?, ?, 'bozza', date('now'), ?, ?, ?, 'EUR', ?)
-  `).run(codicePreventivo, i(request?.customer_id), imponibile, importoIva, totale, note);
+    VALUES (?, ?, 'bozza', date('now'), ?, ?, ?, 'EUR', ?, ?)
+  `).run(codicePreventivo, i(request?.customer_id), imponibile, importoIva, totale, note, i(request?.assigned_to_user_id));
   const preventivoId = Number(insert.lastInsertRowid);
 
   db.prepare(`
@@ -1634,9 +1640,9 @@ function getOrCreateOpenQuoteForRequest(request) {
     request?.plate ? `Targa: ${request.plate}` : null
   ].filter(Boolean).join('\n');
   const ins = db.prepare(`
-    INSERT INTO preventivi (codice_preventivo, anagrafica_id, stato, data_preventivo, imponibile, iva, totale, valuta, note)
-    VALUES (?, ?, 'bozza', date('now'), 0, 0, 0, 'EUR', ?)
-  `).run(codice, i(request?.customer_id), note);
+    INSERT INTO preventivi (codice_preventivo, anagrafica_id, stato, data_preventivo, imponibile, iva, totale, valuta, note, created_by_user_id)
+    VALUES (?, ?, 'bozza', date('now'), 0, 0, 0, 'EUR', ?, ?)
+  `).run(codice, i(request?.customer_id), note, i(request?.assigned_to_user_id));
   const preventivoId = Number(ins.lastInsertRowid);
   db.prepare('UPDATE parts_requests SET linked_preventivo_id = ?, updated_at = datetime(\'now\') WHERE id = ?').run(preventivoId, request.id);
   return preventivoId;
@@ -3199,7 +3205,7 @@ function buildVariantPage(variants = [], page = 0, pageSize = 10) {
 // il comportamento resta identico a prima. I cristalli restano sul loro flusso.
 // ===========================================================================
 const MECC_PAGE_SIZE = 10;
-const MECC_STAGES = ['mecc_vehicle_menu', 'mecc_category_menu', 'mecc_part_menu', 'mecc_variant_selection', 'mecc_another_part'];
+const MECC_STAGES = ['mecc_awaiting_plate', 'mecc_vehicle_menu', 'mecc_category_menu', 'mecc_part_menu', 'mecc_variant_selection', 'mecc_another_part'];
 
 function isMeccFlowEnabled() {
   const f = String(process.env.PARTS_ENABLE_MECC_FLOW || '').trim().toLowerCase();
@@ -3396,6 +3402,16 @@ function presentMeccVehicleMenu({ oeCode, vehicles, page = 0 }) {
   return buildMeccResolved({ whatsappText: txt, stage: 'mecc_vehicle_menu', slots: { mecc_oe: oeCode, mecc_vehicles: vehicles, vehicle_page: pageObj.page }, plate: '' });
 }
 
+// Pezzo riconosciuto (foto/testo) ma senza veicolo: conferma il pezzo, proponi
+// alternative e chiedi la targa una volta sola (evita richieste ripetute).
+function presentMeccAwaitingPlate({ partName, idpar, candidates = [] }) {
+  const others = candidates.slice(1, 5).map((c) => s(c.descrizione)).filter(Boolean);
+  let txt = `Dalla foto ho riconosciuto il pezzo: ${partName}.`;
+  if (others.length) txt += `\n(Se non è corretto potrebbe essere: ${others.join(', ')} — scrivi il nome giusto.)`;
+  txt += `\n\nPer vedere prezzi e disponibilità inviami la targa del veicolo.`;
+  return buildMeccResolved({ whatsappText: txt, stage: 'mecc_awaiting_plate', slots: { pending_part_name: partName, pending_part_idpar: idpar || null }, plate: '', partName });
+}
+
 // Nuovo pezzo sullo stesso veicolo (riusa i codici in slot: nessun credito TARGATELAIO).
 async function meccNewPartOnSameVehicle({ request, codes, plate, text, mediaAnalysis }) {
   const partName = s(text) || s(mediaAnalysis?.data?.normalized_part_name);
@@ -3427,7 +3443,6 @@ async function maybeEnterMeccFlow({ request, resolved, mediaAnalysis, bodyText }
       return presentMeccVehicleMenu({ oeCode, vehicles, page: 0 });
     }
 
-    if (!plate) return null;
     let partName = s(resolved?.normalizedPart?.name) || s(resolved?.parsed?.requestedPartText);
     // Il resolver a volte mette come "pezzo" la targa/VIN stessa: scartala.
     if (partName) {
@@ -3437,6 +3452,16 @@ async function maybeEnterMeccFlow({ request, resolved, mediaAnalysis, bodyText }
     }
     const category = normalizePartCategory(s(resolved?.normalizedPart?.category), partName);
     if (partName && category === 'cristalli') return null; // i cristalli restano sul flusso attuale
+
+    // Caso D: pezzo riconosciuto (foto/testo) ma senza targa nè OE -> conferma e chiedi la targa (una volta).
+    if (!plate && !oeCode && partName) {
+      const candidates = lookupIdparByText(partName, 6);
+      if (!candidates.length) return null; // non riconosciuto: lascia rispondere il resolver
+      if (request?.id) logPartEvent(request.id, 'mecc_part_recognized', `Pezzo riconosciuto senza targa: ${partName}`, 'rtws_bdrt', { partName, top: candidates[0] && candidates[0].descrizione });
+      return presentMeccAwaitingPlate({ partName: candidates[0].descrizione, idpar: candidates[0].idpar, candidates });
+    }
+
+    if (!plate) return null;
 
     const veh = await rtwsGetVehicleCompletoByPlate({ plate });
     if (veh.status !== 'READY' || !veh.vehicle) return null;
@@ -3479,6 +3504,31 @@ async function handleMeccContinuation({ request, intakeState, bodyText, mediaAna
     }
     if (/^(chiudi(\s+sessione)?|basta|fine|no grazie|stop|annulla)$/i.test(text)) {
       return buildMeccResolved({ whatsappText: 'Sessione chiusa. Il preventivo resta salvato per l\'operatore. A presto!', stage: 'session_closed', slots: {}, resolvedStatus: 'completata', plate });
+    }
+
+    if (stage === 'mecc_awaiting_plate') {
+      const pendingPart = s(slots.pending_part_name);
+      const pendingIdpar = i(slots.pending_part_idpar);
+      const p = normalizePlate(text);
+      if (p && p.length >= 5) {
+        const veh = await rtwsGetVehicleCompletoByPlate({ plate: p });
+        if (veh.status !== 'READY' || !veh.vehicle) {
+          return buildMeccResolved({ whatsappText: `Non ho identificato la targa ${p}. Riprova con la targa corretta, oppure "Chiudi sessione".`, stage: 'mecc_awaiting_plate', slots, plate: '', partName: pendingPart });
+        }
+        const vcodes = meccVehicleCodes(veh.vehicle);
+        let useIdpar = pendingIdpar;
+        if (!useIdpar) { const c0 = lookupIdparByText(pendingPart, 1)[0]; if (c0) useIdpar = c0.idpar; }
+        if (useIdpar) {
+          const varRes = await getVariantsForIdpar({ idMarca: vcodes.id_marca, idModello: vcodes.id_modello, idVersione: vcodes.id_versione, idpar: useIdpar });
+          if (request && request.id) logPartEvent(request.id, 'mecc_variants', `Varianti "${pendingPart}" targa ${p}: ${varRes.originaliCount} orig`, 'rtws_bdrt', { idpar: useIdpar });
+          return presentMeccVariants({ vehicleCodes: vcodes, plate: p, partName: pendingPart, idpar: useIdpar, descrizione: pendingPart, variants: varRes.variants, page: 0 });
+        }
+        return presentMeccCategoryMenu({ vehicleCodes: vcodes, plate: p });
+      }
+      // non e' una targa: forse e' una correzione del nome pezzo
+      const cc = lookupIdparByText(text, 6);
+      if (cc.length) return presentMeccAwaitingPlate({ partName: cc[0].descrizione, idpar: cc[0].idpar, candidates: cc });
+      return null;
     }
 
     if (stage === 'mecc_vehicle_menu') {
