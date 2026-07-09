@@ -1505,6 +1505,80 @@ function createDraftQuoteFromRequest(request, quotedProduct) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Preventivo multi-riga accumulato per richiesta (Fase 2 ricambi meccanici).
+// La prima aggiunta crea la bozza e la lega a parts_requests.linked_preventivo_id;
+// le aggiunte successive accodano righe e ricalcolano i totali. Additivo:
+// createDraftQuoteFromRequest (riga singola) resta per il flusso esistente.
+// ---------------------------------------------------------------------------
+function getOrCreateOpenQuoteForRequest(request) {
+  const existingId = i(request?.linked_preventivo_id);
+  if (existingId) {
+    const existing = db.prepare('SELECT id, stato FROM preventivi WHERE id = ? LIMIT 1').get(existingId);
+    if (existing && existing.stato === 'bozza') return existingId;
+  }
+  const codice = createUniquePreventivoCode();
+  const note = [
+    'Preventivo generato da richiesta ricambi (conversazionale).',
+    request?.request_uuid ? `Richiesta: ${request.request_uuid}` : null,
+    request?.plate ? `Targa: ${request.plate}` : null
+  ].filter(Boolean).join('\n');
+  const ins = db.prepare(`
+    INSERT INTO preventivi (codice_preventivo, anagrafica_id, stato, data_preventivo, imponibile, iva, totale, valuta, note)
+    VALUES (?, ?, 'bozza', date('now'), 0, 0, 0, 'EUR', ?)
+  `).run(codice, i(request?.customer_id), note);
+  const preventivoId = Number(ins.lastInsertRowid);
+  db.prepare('UPDATE parts_requests SET linked_preventivo_id = ?, updated_at = datetime(\'now\') WHERE id = ?').run(preventivoId, request.id);
+  return preventivoId;
+}
+
+function recomputeQuoteTotals(preventivoId) {
+  const agg = db.prepare(`
+    SELECT COALESCE(SUM(imponibile), 0) AS imp, COALESCE(SUM(importo_iva), 0) AS iva, COALESCE(SUM(totale_riga), 0) AS tot
+    FROM preventivi_righe WHERE preventivo_id = ?
+  `).get(preventivoId);
+  const round2 = (n) => Number((Number(n) || 0).toFixed(2));
+  db.prepare('UPDATE preventivi SET imponibile = ?, iva = ?, totale = ? WHERE id = ?')
+    .run(round2(agg.imp), round2(agg.iva), round2(agg.tot), preventivoId);
+}
+
+// Aggiunge una variante scelta (originale o compatibile) come riga del preventivo.
+function addVariantLineToQuote(preventivoId, variant, request, qty = 1) {
+  const item = {
+    oe_code: s(variant?.oe_code),
+    description: s(variant?.descrizione) || s(variant?.description),
+    price: variant?.prezzo !== undefined ? variant.prezzo : variant?.price
+  };
+  const quoted = ensureQuoteProductForRequest(request, item);
+  const unitPrice = Number(quoted.price || 0);
+  const quantita = Number(qty) > 0 ? Number(qty) : 1;
+  const imponibile = Number((unitPrice * quantita).toFixed(2));
+  const aliquota = 22;
+  const iva = Number((imponibile * aliquota / 100).toFixed(2));
+  const totale = Number((imponibile + iva).toFixed(2));
+  const tipoLabel = s(variant?.tipo) ? ` [${s(variant.tipo)}]` : '';
+  const descrizione = `${quoted.description}${tipoLabel}`;
+  const ins = db.prepare(`
+    INSERT INTO preventivi_righe (
+      preventivo_id, prodotto_id, descrizione, quantita, prezzo_unitario, sconto,
+      imponibile, aliquota_iva, importo_iva, totale_riga
+    )
+    VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+  `).run(preventivoId, quoted.product.id, descrizione, quantita, unitPrice, imponibile, aliquota, iva, totale);
+  recomputeQuoteTotals(preventivoId);
+  return { rigaId: Number(ins.lastInsertRowid), descrizione, prezzo: unitPrice, totale };
+}
+
+function getQuoteSummary(preventivoId) {
+  const p = db.prepare('SELECT id, codice_preventivo, imponibile, iva, totale, stato FROM preventivi WHERE id = ? LIMIT 1').get(preventivoId);
+  if (!p) return null;
+  const righe = db.prepare(`
+    SELECT id, descrizione, quantita, prezzo_unitario, totale_riga
+    FROM preventivi_righe WHERE preventivo_id = ? ORDER BY id
+  `).all(preventivoId);
+  return { ...p, righe, numRighe: righe.length };
+}
+
 function buildQuotePdfQuestionText(selectedItem, existingQuoteCode = '') {
   const lines = [
     'Perfetto, ho identificato il ricambio selezionato.',
