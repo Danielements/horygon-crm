@@ -635,10 +635,43 @@ function buildWhatsAppCategoryMenuOptions(extra = {}) {
   });
 }
 
+// Righe-tasto per la selezione varianti (numeri della pagina + navigazione).
+function meccVariantButtonRows(resolved) {
+  const slots = resolved?.intakeState?.slots || {};
+  const variants = Array.isArray(slots.proposed_variant_options) ? slots.proposed_variant_options : [];
+  const page = parseInt(slots.variant_page, 10) || 0;
+  const pg = buildVariantPage(variants, page, 10);
+  const numbers = pg.pageItems.map((_, idx) => String(pg.startIndex + idx + 1));
+  const rows = [];
+  for (let k = 0; k < numbers.length; k += 5) rows.push(numbers.slice(k, k + 5));
+  const nav = [];
+  if (pg.hasPrev) nav.push('Precedenti 10');
+  if (pg.hasNext) nav.push('Prossimi 10');
+  if (nav.length) rows.push(nav);
+  return { rows, page: pg };
+}
+
 function buildWhatsAppReplyOptionsForResolved(resolved = {}) {
   const stage = String(resolved?.intakeState?.stage || '').toLowerCase();
   const pendingSlot = String(resolved?.intakeState?.pendingSlot || '').toLowerCase();
   const intent = String(resolved?.aiRequest?.intent || '').toLowerCase();
+
+  if (stage === 'mecc_variant_selection') {
+    const slots = resolved?.intakeState?.slots || {};
+    const variants = Array.isArray(slots.proposed_variant_options) ? slots.proposed_variant_options : [];
+    const page = parseInt(slots.variant_page, 10) || 0;
+    const pg = buildVariantPage(variants, page, 10);
+    const rows = pg.pageItems.map((v, idx) => {
+      const n = pg.startIndex + idx + 1;
+      return { id: String(n), title: String(n), description: formatVariantLine(v, n).slice(0, 72) };
+    });
+    if (pg.hasNext) rows.push({ id: 'prossimi_10', title: 'Prossimi 10' });
+    if (pg.hasPrev) rows.push({ id: 'precedenti_10', title: 'Precedenti 10' });
+    return buildWhatsAppListOptions(rows.slice(0, 9), { headerText: 'Ricambi', buttonText: 'Scegli', sectionTitle: 'Quale variante aggiungo?' });
+  }
+  if (stage === 'mecc_another_part') {
+    return buildWhatsAppReplyButtonsOptions(['Chiudi sessione'], { headerText: 'Ti serve altro?', includeCloseSession: false });
+  }
 
   if (intent.includes('assistant_wake') || intent.includes('root_menu') || intent.includes('info_keyword') || stage === 'guided_root_menu') {
     return buildWhatsAppRootMenuOptions({
@@ -769,6 +802,15 @@ function buildTelegramReplyOptionsForResolved(resolved = {}) {
   const intent = String(resolved?.aiRequest?.intent || '').toLowerCase();
   const slots = resolved?.intakeState?.slots || {};
   const hasVehicleKey = !!(s(slots.plate) || s(slots.vin) || s(slots.oe_code));
+
+  if (stage === 'mecc_variant_selection') {
+    const { rows } = meccVariantButtonRows(resolved);
+    rows.push(['Vedi tutti', 'Chiudi sessione']);
+    return buildTelegramReplyKeyboard(rows, 'Scegli il numero del ricambio', { includeCloseSession: false });
+  }
+  if (stage === 'mecc_another_part') {
+    return buildTelegramReplyKeyboard([['Chiudi sessione']], 'Scrivi un altro pezzo, oppure chiudi', { includeCloseSession: false });
+  }
 
   if (intent.includes('root_menu') || stage === 'guided_root_menu' || intent.includes('info_keyword')) {
     return buildTelegramReplyKeyboard([
@@ -3082,6 +3124,191 @@ function buildVariantPage(variants = [], page = 0, pageSize = 10) {
     hasNext: start + pageSize < total,
     text
   };
+}
+
+// ===========================================================================
+// Flusso ricambi meccanici da targa, gestito nell'ORCHESTRATORE (non nel
+// resolver). Gated dal flag PARTS_ENABLE_MECC_FLOW (kill-switch): se spento,
+// il comportamento resta identico a prima. I cristalli restano sul loro flusso.
+// ===========================================================================
+const MECC_PAGE_SIZE = 10;
+const MECC_STAGES = ['mecc_variant_selection', 'mecc_another_part'];
+
+function isMeccFlowEnabled() {
+  const f = String(process.env.PARTS_ENABLE_MECC_FLOW || '').trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(f);
+}
+function isMeccStage(intakeState) {
+  return MECC_STAGES.includes(String(intakeState?.stage || ''));
+}
+function meccVehicleCodes(v) {
+  return { id_marca: s(v?.id_marca), id_modello: s(v?.id_modello), id_versione: s(v?.id_versione), label: buildVehicleLabelFromAllestimento(v) };
+}
+function meccBaseSlots(codes, plate, partName, idpar, descrizione) {
+  return {
+    plate: s(plate) || '',
+    part_name: partName || '',
+    mecc_id_marca: codes.id_marca || '',
+    mecc_id_modello: codes.id_modello || '',
+    mecc_id_versione: codes.id_versione || '',
+    mecc_vehicle_label: codes.label || '',
+    chosen_idpar: idpar || null,
+    chosen_descrizione: descrizione || ''
+  };
+}
+
+// Oggetto "resolved" compatibile con l'orchestratore + persistResolvedPayload.
+function buildMeccResolved({ whatsappText, stage, slots = {}, resolvedStatus = 'in_lavorazione', plate = '', partName = '' }) {
+  return {
+    status: 'OK',
+    parsed: { originalText: '', plate: s(plate) || '', vin: '', oeCode: '', requestedPartText: partName || '', confidence: 1 },
+    vehicle: null,
+    normalizedPart: { name: partName || '', category: 'ricambio_generico' },
+    dbrtResult: {},
+    glassCatalog: { status: 'SKIPPED', message: 'Flusso ricambi meccanici', items: [] },
+    oeCatalog: {}, oeResults: [], equivalents: {},
+    missingData: [],
+    whatsappText,
+    aiRequest: {
+      intent: 'ricambi_meccanici', request_is_valid: true, suggested_service: 'RTWS_BDRT_DBRT',
+      instruction: 'Flusso ricambi meccanici da targa via GetRicambiDBRT.',
+      availableSources: ['RTWS_TARGATELAIO', 'RTWS_BDRT', 'DIZIONARIO_IDPAR'],
+      openai: { skipped: true, error: null, model: null, statusCode: null, raw: null, parsed: null }
+    },
+    aiSummary: null,
+    resolvedStatus,
+    intakeState: {
+      stage,
+      pendingSlot: stage === 'mecc_variant_selection' ? 'variant_selection' : (stage === 'mecc_another_part' ? 'another_part' : null),
+      pendingQuestion: whatsappText,
+      slots
+    }
+  };
+}
+
+function meccNavHint(pageObj) {
+  const bits = ['Rispondi col numero per aggiungere al preventivo'];
+  if (pageObj.hasNext) bits.push('"Prossimi 10" per i successivi');
+  if (pageObj.hasPrev) bits.push('"Precedenti 10" per tornare indietro');
+  bits.push('"Chiudi sessione" per terminare');
+  return bits.join(' · ');
+}
+
+// Presenta una pagina di varianti e imposta lo stato di selezione.
+function presentMeccVariants({ vehicleCodes, plate, partName, idpar, descrizione, variants, page = 0, pageSize = MECC_PAGE_SIZE }) {
+  const codes = vehicleCodes || {};
+  const baseSlots = meccBaseSlots(codes, plate, partName, idpar, descrizione);
+
+  if (!variants || !variants.length) {
+    const txt = `Per ${descrizione || partName} su ${codes.label || 'questo veicolo'} non ho trovato ricambi a catalogo.\nVuoi provare un altro pezzo? Scrivi il nome, oppure "Chiudi sessione".`;
+    return buildMeccResolved({ whatsappText: txt, stage: 'mecc_another_part', slots: { ...baseSlots, proposed_variant_options: [], variant_page: 0 }, plate, partName });
+  }
+
+  const pageObj = buildVariantPage(variants, page, pageSize);
+  const header = `${descrizione || partName} — ${codes.label || ''}`.trim();
+  const txt = `${header}\n${pageObj.text}\n\n${meccNavHint(pageObj)}`;
+  return buildMeccResolved({
+    whatsappText: txt,
+    stage: 'mecc_variant_selection',
+    slots: { ...baseSlots, proposed_variant_options: variants, variant_page: pageObj.page },
+    plate, partName
+  });
+}
+
+// Nuovo pezzo sullo stesso veicolo (riusa i codici in slot: nessun credito TARGATELAIO).
+async function meccNewPartOnSameVehicle({ request, codes, plate, text, mediaAnalysis }) {
+  const partName = s(text) || s(mediaAnalysis?.data?.normalized_part_name);
+  const keepSlots = { plate, mecc_id_marca: codes.id_marca, mecc_id_modello: codes.id_modello, mecc_id_versione: codes.id_versione, mecc_vehicle_label: codes.label };
+  if (!partName || !codes.id_marca) {
+    return buildMeccResolved({ whatsappText: 'Dimmi quale ricambio ti serve (es. "filtro aria", "pastiglie freni"), oppure "Chiudi sessione".', stage: 'mecc_another_part', slots: keepSlots, plate, partName: '' });
+  }
+  const idparRes = await resolveIdparFromMedia({ mediaAnalysis, partNameOverride: partName, bodyText: text });
+  if (!idparRes || !idparRes.idpar) {
+    return buildMeccResolved({ whatsappText: `Non ho trovato "${partName}" a catalogo per questo veicolo. Prova con un altro nome, oppure "Chiudi sessione".`, stage: 'mecc_another_part', slots: keepSlots, plate, partName });
+  }
+  const varRes = await getVariantsForIdpar({ idMarca: codes.id_marca, idModello: codes.id_modello, idVersione: codes.id_versione, idpar: idparRes.idpar });
+  if (request?.id) logPartEvent(request.id, 'mecc_variants', `Varianti "${partName}": ${varRes.originaliCount} orig, ${varRes.compatibiliCount} comp`, 'rtws_bdrt', { idpar: idparRes.idpar });
+  return presentMeccVariants({ vehicleCodes: codes, plate, partName, idpar: idparRes.idpar, descrizione: idparRes.descrizione || partName, variants: varRes.variants, page: 0 });
+}
+
+// Entry: dopo il resolver, decide se entrare nel flusso meccanici.
+async function maybeEnterMeccFlow({ request, resolved, mediaAnalysis, bodyText }) {
+  try {
+    if (!resolved || resolved.status === 'ERROR') return null;
+    const partName = s(resolved?.normalizedPart?.name) || s(resolved?.parsed?.requestedPartText);
+    if (!partName) return null;
+    const category = normalizePartCategory(s(resolved?.normalizedPart?.category), partName);
+    if (category === 'cristalli') return null;
+    if (resolved?.glassCatalog?.status === 'READY') return null;
+    const plate = normalizePlate(s(resolved?.parsed?.plate) || s(request?.plate));
+    if (!plate) return null;
+
+    const veh = await rtwsGetVehicleCompletoByPlate({ plate });
+    if (veh.status !== 'READY' || !veh.vehicle) return null;
+    const codes = meccVehicleCodes(veh.vehicle);
+
+    const idparRes = await resolveIdparFromMedia({ mediaAnalysis, partNameOverride: partName, bodyText });
+    if (!idparRes || !idparRes.idpar) return null;
+
+    if (request?.id) logPartEvent(request.id, 'mecc_entry', `Flusso meccanici: "${partName}" -> idpar ${idparRes.idpar} (${idparRes.status})`, 'rtws_bdrt', { plate, codes, idpar: idparRes.idpar });
+    const varRes = await getVariantsForIdpar({ idMarca: codes.id_marca, idModello: codes.id_modello, idVersione: codes.id_versione, idpar: idparRes.idpar });
+    if (request?.id) logPartEvent(request.id, 'mecc_variants', `Varianti: ${varRes.originaliCount} orig, ${varRes.compatibiliCount} comp`, 'rtws_bdrt', { idpar: idparRes.idpar });
+    return presentMeccVariants({ vehicleCodes: codes, plate, partName, idpar: idparRes.idpar, descrizione: idparRes.descrizione || partName, variants: varRes.variants, page: 0 });
+  } catch (error) {
+    try { writeSystemLog({ livello: 'error', origine: 'parts_mecc_entry', messaggio: `Errore ingresso flusso meccanici: ${error?.message || error}`, stack: error?.stack || null }); } catch (e) {}
+    return null;
+  }
+}
+
+// Continuazione: input mentre siamo in uno stato mecc.
+async function handleMeccContinuation({ request, intakeState, bodyText, mediaAnalysis }) {
+  try {
+    const stage = String(intakeState?.stage || '');
+    const slots = intakeState?.slots || {};
+    const text = String(bodyText || '').trim();
+    const lower = text.toLowerCase();
+    const codes = { id_marca: s(slots.mecc_id_marca), id_modello: s(slots.mecc_id_modello), id_versione: s(slots.mecc_id_versione), label: s(slots.mecc_vehicle_label) };
+    const plate = s(slots.plate) || '';
+
+    if (/^(chiudi(\s+sessione)?|basta|fine|no grazie|stop)$/i.test(text)) {
+      return buildMeccResolved({ whatsappText: 'Sessione chiusa. Il preventivo resta salvato per l\'operatore. A presto!', stage: 'session_closed', slots: {}, resolvedStatus: 'completata', plate });
+    }
+
+    if (stage === 'mecc_variant_selection') {
+      const variants = Array.isArray(slots.proposed_variant_options) ? slots.proposed_variant_options : [];
+      const page = i(slots.variant_page) || 0;
+      const commonArgs = { vehicleCodes: codes, plate, partName: s(slots.part_name), idpar: i(slots.chosen_idpar), descrizione: s(slots.chosen_descrizione), variants };
+
+      if (/(prossim|avanti|vedi altri|next)/i.test(lower)) return presentMeccVariants({ ...commonArgs, page: page + 1 });
+      if (/(precedent|indietro|prev)/i.test(lower)) return presentMeccVariants({ ...commonArgs, page: Math.max(0, page - 1) });
+      if (/(vedi tutt|tutte le varianti|mostra tutt)/i.test(lower)) return presentMeccVariants({ ...commonArgs, page: 0, pageSize: Math.min(variants.length, 30) });
+
+      const num = text.match(/^\s*(\d{1,3})\s*$/);
+      if (num) {
+        const idx = parseInt(num[1], 10) - 1;
+        if (idx >= 0 && idx < variants.length) {
+          const chosen = variants[idx];
+          const preventivoId = getOrCreateOpenQuoteForRequest(request);
+          addVariantLineToQuote(preventivoId, chosen, request);
+          const summary = getQuoteSummary(preventivoId);
+          if (request?.id) logPartEvent(request.id, 'mecc_add_quote', `Aggiunto: ${chosen.descrizione} OE ${chosen.oe_code} ${chosen.prezzo}`, 'crm', { preventivoId, chosen });
+          const txt = `Aggiunto al preventivo:\n${formatVariantLine(chosen, idx + 1)}\n\nPreventivo attuale: ${summary?.numRighe || 0} pezzi, totale ${Number(summary?.totale || 0).toFixed(2)}€.\nTi serve altro? Scrivi il nome del pezzo, oppure "Chiudi sessione".`;
+          return buildMeccResolved({ whatsappText: txt, stage: 'mecc_another_part', slots: { ...slots, proposed_variant_options: [], variant_page: 0 }, plate, partName: s(slots.part_name) });
+        }
+        return buildMeccResolved({ whatsappText: `Numero non valido. Scegli un numero dalla lista (1-${variants.length}).`, stage: 'mecc_variant_selection', slots, plate, partName: s(slots.part_name) });
+      }
+      // testo libero durante la selezione = nuova richiesta pezzo (stesso veicolo)
+      return await meccNewPartOnSameVehicle({ request, codes, plate, text, mediaAnalysis });
+    }
+
+    if (stage === 'mecc_another_part') {
+      return await meccNewPartOnSameVehicle({ request, codes, plate, text, mediaAnalysis });
+    }
+    return null;
+  } catch (error) {
+    try { writeSystemLog({ livello: 'error', origine: 'parts_mecc_continuation', messaggio: `Errore continuazione flusso meccanici: ${error?.message || error}`, stack: error?.stack || null }); } catch (e) {}
+    return null;
+  }
 }
 
 // Matcher testo cliente -> idpar dal dizionario rtws_idpar_dizionario.
@@ -6574,13 +6801,27 @@ async function processInboundPartsMessage({
       );
     }
 
-    const resolved = await resolvePartsMessageV2({
-      message: bodyText || '',
-      channel,
-      context: conversationContext,
-      intakeState,
-      mediaAnalysis
-    });
+    // Flusso ricambi meccanici (gated da PARTS_ENABLE_MECC_FLOW). Il resolver
+    // resta intatto: qui lo intercettiamo solo se siamo gia' in uno stato mecc
+    // (continuazione) o se, dopo il resolver, abbiamo targa + pezzo non-vetro (entry).
+    const meccRequest = db.prepare('SELECT * FROM parts_requests WHERE id = ? LIMIT 1').get(partsRequestId);
+    let resolved = null;
+    if (isMeccFlowEnabled() && isMeccStage(intakeState)) {
+      resolved = await handleMeccContinuation({ request: meccRequest, intakeState, bodyText, mediaAnalysis });
+    }
+    if (!resolved) {
+      resolved = await resolvePartsMessageV2({
+        message: bodyText || '',
+        channel,
+        context: conversationContext,
+        intakeState,
+        mediaAnalysis
+      });
+      if (isMeccFlowEnabled()) {
+        const meccEntry = await maybeEnterMeccFlow({ request: meccRequest, resolved, mediaAnalysis, bodyText });
+        if (meccEntry) resolved = meccEntry;
+      }
+    }
     if (resolved?.whatsappText) {
       resolved.whatsappText = decorateFlowReplyText(resolved.whatsappText, resolved);
     }
