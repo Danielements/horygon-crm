@@ -18,3 +18,6 @@ desktop.ini
 data/rtws-flow/
 data/rtws-debug/
 data/rtws-idpar-dictionary.json
+
+# IDE
+.idea/
