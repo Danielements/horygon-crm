@@ -6,6 +6,7 @@ const db = require('../db/database');
 const { authMiddleware, requirePermesso } = require('../middleware/auth');
 const { createPreventivoPdfBuffer } = require('../services/document-pdf');
 const { createNotificationsForUserIds } = require('../services/google');
+const { writeSystemLog } = require('../services/system-log');
 
 const router = express.Router();
 
@@ -6470,6 +6471,16 @@ async function processInboundPartsMessage({
       }
     }
 
+    // Log inbound nella sezione log del CRM: cosa riceviamo dai bot.
+    try {
+      writeSystemLog({
+        livello: 'info',
+        origine: `parts_webhook_${channel}`,
+        messaggio: `Inbound ${channel} da ${outboundTarget || userKey}: ${inboundPreviewText}`,
+        dettagli: { channel, from: outboundTarget || userKey, messageType, hasMedia: !!mediaUrl, externalMessageId, bodyText: s(bodyText) }
+      });
+    } catch (e) { /* il log non deve mai bloccare il flusso */ }
+
     closeStalePartsRequestsForPhone(userKey);
     const activeRequest = getActivePartsRequestForPhone(userKey);
     if (activeRequest) {
@@ -6835,6 +6846,16 @@ async function processInboundPartsMessage({
         console.error('parts inbound webhook logging error', loggingError);
       }
     }
+    // Eccezione visibile nella sezione log del CRM.
+    try {
+      writeSystemLog({
+        livello: 'error',
+        origine: `parts_webhook_${channel}`,
+        messaggio: `Eccezione processing inbound ${channel}: ${error?.message || error}`,
+        stack: error?.stack || null,
+        dettagli: { channel, from: outboundTarget || userKey, externalMessageId, partsRequestId }
+      });
+    } catch (e) { /* ignora */ }
     console.error('parts inbound webhook error', error);
     throw error;
   }
