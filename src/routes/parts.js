@@ -7,6 +7,7 @@ const { authMiddleware, requirePermesso } = require('../middleware/auth');
 const { createPreventivoPdfBuffer } = require('../services/document-pdf');
 const { createNotificationsForUserIds } = require('../services/google');
 const { writeSystemLog } = require('../services/system-log');
+const { IDPAR_CATEGORIES, categorizeIdparDescription } = require('../services/idpar-categories');
 
 const router = express.Router();
 
@@ -656,6 +657,24 @@ function buildWhatsAppReplyOptionsForResolved(resolved = {}) {
   const pendingSlot = String(resolved?.intakeState?.pendingSlot || '').toLowerCase();
   const intent = String(resolved?.aiRequest?.intent || '').toLowerCase();
 
+  if (stage === 'mecc_category_menu') {
+    const cats = Array.isArray(resolved?.intakeState?.slots?.mecc_categories) ? resolved.intakeState.slots.mecc_categories : [];
+    const rows = cats.slice(0, 9).map((c) => ({ id: String(c), title: String(c).slice(0, 24) }));
+    return buildWhatsAppListOptions(rows, { headerText: 'Categorie', buttonText: 'Categorie', sectionTitle: 'Scegli una categoria' });
+  }
+  if (stage === 'mecc_part_menu') {
+    const partsSlot = resolved?.intakeState?.slots || {};
+    const parts = Array.isArray(partsSlot.category_parts) ? partsSlot.category_parts : [];
+    const page = parseInt(partsSlot.category_page, 10) || 0;
+    const pg = buildPagedList(parts, page, 10, (p) => p.descrizione);
+    const rows = pg.pageItems.map((p, idx) => {
+      const n = pg.startIndex + idx + 1;
+      return { id: String(n), title: String(n), description: String(p.descrizione).slice(0, 72) };
+    });
+    if (pg.hasNext) rows.push({ id: 'prossimi_10', title: 'Prossimi 10' });
+    rows.push({ id: 'categorie', title: 'Categorie' });
+    return buildWhatsAppListOptions(rows.slice(0, 9), { headerText: 'Ricambi', buttonText: 'Scegli', sectionTitle: 'Quale pezzo?' });
+  }
   if (stage === 'mecc_variant_selection') {
     const slots = resolved?.intakeState?.slots || {};
     const variants = Array.isArray(slots.proposed_variant_options) ? slots.proposed_variant_options : [];
@@ -803,6 +822,27 @@ function buildTelegramReplyOptionsForResolved(resolved = {}) {
   const slots = resolved?.intakeState?.slots || {};
   const hasVehicleKey = !!(s(slots.plate) || s(slots.vin) || s(slots.oe_code));
 
+  if (stage === 'mecc_category_menu') {
+    const cats = Array.isArray(slots.mecc_categories) ? slots.mecc_categories : [];
+    const rows = [];
+    for (let k = 0; k < cats.length; k += 2) rows.push(cats.slice(k, k + 2));
+    rows.push(['Chiudi sessione']);
+    return buildTelegramReplyKeyboard(rows, 'Scegli una categoria, o scrivi il pezzo', { includeCloseSession: false });
+  }
+  if (stage === 'mecc_part_menu') {
+    const parts = Array.isArray(slots.category_parts) ? slots.category_parts : [];
+    const page = parseInt(slots.category_page, 10) || 0;
+    const pg = buildPagedList(parts, page, 10, (p) => p.descrizione);
+    const numbers = pg.pageItems.map((_, idx) => String(pg.startIndex + idx + 1));
+    const rows = [];
+    for (let k = 0; k < numbers.length; k += 5) rows.push(numbers.slice(k, k + 5));
+    const nav = [];
+    if (pg.hasPrev) nav.push('Precedenti 10');
+    if (pg.hasNext) nav.push('Prossimi 10');
+    if (nav.length) rows.push(nav);
+    rows.push(['Categorie', 'Chiudi sessione']);
+    return buildTelegramReplyKeyboard(rows, 'Scegli il numero, o "Categorie"', { includeCloseSession: false });
+  }
   if (stage === 'mecc_variant_selection') {
     const { rows } = meccVariantButtonRows(resolved);
     rows.push(['Vedi tutti', 'Chiudi sessione']);
@@ -3132,7 +3172,7 @@ function buildVariantPage(variants = [], page = 0, pageSize = 10) {
 // il comportamento resta identico a prima. I cristalli restano sul loro flusso.
 // ===========================================================================
 const MECC_PAGE_SIZE = 10;
-const MECC_STAGES = ['mecc_variant_selection', 'mecc_another_part'];
+const MECC_STAGES = ['mecc_category_menu', 'mecc_part_menu', 'mecc_variant_selection', 'mecc_another_part'];
 
 function isMeccFlowEnabled() {
   const f = String(process.env.PARTS_ENABLE_MECC_FLOW || '').trim().toLowerCase();
@@ -3216,6 +3256,87 @@ function presentMeccVariants({ vehicleCodes, plate, partName, idpar, descrizione
   });
 }
 
+// --- Menu annidati: categorie -> pezzi disponibili -> varianti ---
+function buildPagedList(items, page = 0, pageSize = 10, labelFn = (x) => String(x)) {
+  const total = items.length;
+  if (!total) return { total: 0, page: 0, startIndex: 0, pageItems: [], text: '', hasPrev: false, hasNext: false };
+  const maxPage = Math.max(0, Math.ceil(total / pageSize) - 1);
+  const safePage = Math.min(Math.max(0, page), maxPage);
+  const start = safePage * pageSize;
+  const pageItems = items.slice(start, start + pageSize);
+  const text = pageItems.map((it, idx) => `${start + idx + 1}) ${labelFn(it)}`).join('\n');
+  return { total, page: safePage, startIndex: start, pageItems, hasPrev: start > 0, hasNext: start + pageSize < total, text };
+}
+
+// Categorie presenti nel dizionario, nell'ordine di IDPAR_CATEGORIES.
+function getMeccCategories() {
+  const rows = db.prepare("SELECT categoria, COUNT(*) AS c FROM rtws_idpar_dizionario WHERE categoria IS NOT NULL AND categoria <> '' GROUP BY categoria").all();
+  const present = {};
+  rows.forEach((r) => { present[r.categoria] = r.c; });
+  return IDPAR_CATEGORIES.filter((c) => present[c]);
+}
+
+// Pezzi di una categoria DISPONIBILI per il veicolo: batch GetRicambiDBRT su
+// tutti gli idpar della categoria, tiene solo quelli con ricambi (una sola call).
+async function getMeccPartsForCategory({ idMarca, idModello, idVersione, categoria }) {
+  const idpars = db.prepare('SELECT idpar, descrizione FROM rtws_idpar_dizionario WHERE categoria = ? ORDER BY hit_count DESC, idpar LIMIT 60').all(categoria);
+  if (!idpars.length) return [];
+  const res = await rtwsGetRicambiDbrt({ idMarca, idModello, idVersione, idPars: idpars.map((x) => x.idpar) });
+  const available = {};
+  (res.items || []).forEach((it) => { const ip = i(it.idpar); if (ip !== null) available[ip] = true; });
+  return idpars.filter((x) => available[x.idpar]).map((x) => ({ idpar: x.idpar, descrizione: x.descrizione }));
+}
+
+// Riconosce una categoria dal testo (tasto o digitata).
+function matchMeccCategory(text) {
+  const t = String(text || '').toLowerCase().trim();
+  if (!t) return '';
+  const cats = getMeccCategories();
+  let hit = cats.find((c) => c.toLowerCase() === t);
+  if (hit) return hit;
+  hit = cats.find((c) => c.toLowerCase().startsWith(t) || t.startsWith(c.toLowerCase()));
+  if (hit) return hit;
+  const firstWord = t.split(/\s+/)[0];
+  hit = cats.find((c) => c.toLowerCase().split(/\s+/)[0] === firstWord);
+  return hit || '';
+}
+
+// Menu categorie (dopo la targa, se non c'e' ancora un pezzo).
+function presentMeccCategoryMenu({ vehicleCodes, plate }) {
+  const codes = vehicleCodes || {};
+  const categories = getMeccCategories();
+  const txt = `Veicolo: ${codes.label || 'identificato'}.\nScegli una categoria di ricambi (o scrivi direttamente il nome del pezzo):`;
+  return buildMeccResolved({
+    whatsappText: txt,
+    stage: 'mecc_category_menu',
+    slots: { ...meccBaseSlots(codes, plate, '', null, ''), mecc_categories: categories },
+    plate, partName: ''
+  });
+}
+
+// Menu pezzi disponibili in una categoria.
+function presentMeccCategoryParts({ vehicleCodes, plate, categoria, parts, page = 0 }) {
+  const codes = vehicleCodes || {};
+  const baseSlots = { ...meccBaseSlots(codes, plate, '', null, ''), current_category: categoria };
+  if (!parts || !parts.length) {
+    const txt = `In "${categoria}" non ho trovato ricambi disponibili per ${codes.label || 'questo veicolo'}.\nScegli un'altra categoria, scrivi il nome del pezzo, oppure "Chiudi sessione".`;
+    return buildMeccResolved({ whatsappText: txt, stage: 'mecc_category_menu', slots: { ...baseSlots, mecc_categories: getMeccCategories() }, plate, partName: '' });
+  }
+  const pageObj = buildPagedList(parts, page, 10, (p) => p.descrizione);
+  const nav = ['Rispondi col numero'];
+  if (pageObj.hasNext) nav.push('"Prossimi 10"');
+  if (pageObj.hasPrev) nav.push('"Precedenti 10"');
+  nav.push('"Categorie" per tornare indietro');
+  nav.push('"Chiudi sessione"');
+  const txt = `${categoria} — ${codes.label || ''}\n${pageObj.text}\n\n${nav.join(' · ')}`;
+  return buildMeccResolved({
+    whatsappText: txt,
+    stage: 'mecc_part_menu',
+    slots: { ...baseSlots, category_parts: parts, category_page: pageObj.page },
+    plate, partName: ''
+  });
+}
+
 // Nuovo pezzo sullo stesso veicolo (riusa i codici in slot: nessun credito TARGATELAIO).
 async function meccNewPartOnSameVehicle({ request, codes, plate, text, mediaAnalysis }) {
   const partName = s(text) || s(mediaAnalysis?.data?.normalized_part_name);
@@ -3236,18 +3357,26 @@ async function meccNewPartOnSameVehicle({ request, codes, plate, text, mediaAnal
 async function maybeEnterMeccFlow({ request, resolved, mediaAnalysis, bodyText }) {
   try {
     if (!resolved || resolved.status === 'ERROR') return null;
-    const partName = s(resolved?.normalizedPart?.name) || s(resolved?.parsed?.requestedPartText);
-    if (!partName) return null;
-    const category = normalizePartCategory(s(resolved?.normalizedPart?.category), partName);
-    if (category === 'cristalli') return null;
     if (resolved?.glassCatalog?.status === 'READY') return null;
     const plate = normalizePlate(s(resolved?.parsed?.plate) || s(request?.plate));
     if (!plate) return null;
+    const oeCode = s(resolved?.parsed?.oeCode);
+    const partName = s(resolved?.normalizedPart?.name) || s(resolved?.parsed?.requestedPartText);
+    const category = normalizePartCategory(s(resolved?.normalizedPart?.category), partName);
+    if (category === 'cristalli') return null; // i cristalli restano sul flusso attuale
 
     const veh = await rtwsGetVehicleCompletoByPlate({ plate });
     if (veh.status !== 'READY' || !veh.vehicle) return null;
     const codes = meccVehicleCodes(veh.vehicle);
 
+    // Caso A: targa nota ma nessun pezzo (e nessun OE) -> menu categorie annidato.
+    if (!partName && !oeCode) {
+      if (request?.id) logPartEvent(request.id, 'mecc_entry_categorie', `Menu categorie per ${plate}`, 'rtws_bdrt', { plate, codes });
+      return presentMeccCategoryMenu({ vehicleCodes: codes, plate });
+    }
+    if (!partName) return null; // c'e' un OE: lascia il flusso OE esistente
+
+    // Caso B: targa + pezzo -> varianti.
     const idparRes = await resolveIdparFromMedia({ mediaAnalysis, partNameOverride: partName, bodyText });
     if (!idparRes || !idparRes.idpar) return null;
 
@@ -3277,6 +3406,39 @@ async function handleMeccContinuation({ request, intakeState, bodyText, mediaAna
     }
     if (/^(chiudi(\s+sessione)?|basta|fine|no grazie|stop|annulla)$/i.test(text)) {
       return buildMeccResolved({ whatsappText: 'Sessione chiusa. Il preventivo resta salvato per l\'operatore. A presto!', stage: 'session_closed', slots: {}, resolvedStatus: 'completata', plate });
+    }
+
+    if (stage === 'mecc_category_menu') {
+      if (/^(categorie|menu|indietro)$/i.test(text)) return presentMeccCategoryMenu({ vehicleCodes: codes, plate });
+      const cat = matchMeccCategory(text);
+      if (cat) {
+        const parts = await getMeccPartsForCategory({ idMarca: codes.id_marca, idModello: codes.id_modello, idVersione: codes.id_versione, categoria: cat });
+        if (request?.id) logPartEvent(request.id, 'mecc_category', `Categoria "${cat}": ${parts.length} pezzi disponibili`, 'rtws_bdrt', { categoria: cat, count: parts.length });
+        return presentMeccCategoryParts({ vehicleCodes: codes, plate, categoria: cat, parts, page: 0 });
+      }
+      // non e' una categoria: trattalo come nome pezzo
+      return await meccNewPartOnSameVehicle({ request, codes, plate, text, mediaAnalysis });
+    }
+
+    if (stage === 'mecc_part_menu') {
+      const parts = Array.isArray(slots.category_parts) ? slots.category_parts : [];
+      const page = i(slots.category_page) || 0;
+      const categoria = s(slots.current_category);
+      if (/^(categorie|menu|indietro)$/i.test(text)) return presentMeccCategoryMenu({ vehicleCodes: codes, plate });
+      if (/(prossim|avanti|next)/i.test(lower)) return presentMeccCategoryParts({ vehicleCodes: codes, plate, categoria, parts, page: page + 1 });
+      if (/(precedent|prev)/i.test(lower)) return presentMeccCategoryParts({ vehicleCodes: codes, plate, categoria, parts, page: Math.max(0, page - 1) });
+      const numP = text.match(/^\s*(\d{1,3})\s*$/);
+      if (numP) {
+        const idx = parseInt(numP[1], 10) - 1;
+        if (idx >= 0 && idx < parts.length) {
+          const chosen = parts[idx];
+          const varRes = await getVariantsForIdpar({ idMarca: codes.id_marca, idModello: codes.id_modello, idVersione: codes.id_versione, idpar: chosen.idpar });
+          if (request?.id) logPartEvent(request.id, 'mecc_variants', `Varianti "${chosen.descrizione}": ${varRes.originaliCount} orig, ${varRes.compatibiliCount} comp`, 'rtws_bdrt', { idpar: chosen.idpar });
+          return presentMeccVariants({ vehicleCodes: codes, plate, partName: chosen.descrizione, idpar: chosen.idpar, descrizione: chosen.descrizione, variants: varRes.variants, page: 0 });
+        }
+        return buildMeccResolved({ whatsappText: `Numero non valido. Scegli un numero dalla lista (1-${parts.length}).`, stage: 'mecc_part_menu', slots, plate, partName: '' });
+      }
+      return await meccNewPartOnSameVehicle({ request, codes, plate, text, mediaAnalysis });
     }
 
     if (stage === 'mecc_variant_selection') {
