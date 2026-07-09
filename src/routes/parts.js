@@ -3361,9 +3361,15 @@ async function maybeEnterMeccFlow({ request, resolved, mediaAnalysis, bodyText }
     const plate = normalizePlate(s(resolved?.parsed?.plate) || s(resolved?.intakeState?.slots?.plate) || s(request?.plate));
     if (!plate) return null;
     const oeCode = s(resolved?.parsed?.oeCode);
-    const partName = s(resolved?.normalizedPart?.name) || s(resolved?.parsed?.requestedPartText);
+    let partName = s(resolved?.normalizedPart?.name) || s(resolved?.parsed?.requestedPartText);
+    // Il resolver a volte mette come "pezzo" la targa/VIN stessa: scartala.
+    if (partName) {
+      const pn = normalizePlate(partName);
+      const vinNorm = normalizePlate(s(resolved?.parsed?.vin) || s(resolved?.intakeState?.slots?.vin) || s(request?.vin));
+      if (pn === plate || (vinNorm && pn === vinNorm)) partName = '';
+    }
     const category = normalizePartCategory(s(resolved?.normalizedPart?.category), partName);
-    if (category === 'cristalli') return null; // i cristalli restano sul flusso attuale
+    if (partName && category === 'cristalli') return null; // i cristalli restano sul flusso attuale
 
     const veh = await rtwsGetVehicleCompletoByPlate({ plate });
     if (veh.status !== 'READY' || !veh.vehicle) return null;
