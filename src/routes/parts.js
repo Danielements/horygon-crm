@@ -657,6 +657,19 @@ function buildWhatsAppReplyOptionsForResolved(resolved = {}) {
   const pendingSlot = String(resolved?.intakeState?.pendingSlot || '').toLowerCase();
   const intent = String(resolved?.aiRequest?.intent || '').toLowerCase();
 
+  if (stage === 'mecc_vehicle_menu') {
+    const vslots = resolved?.intakeState?.slots || {};
+    const vehicles = Array.isArray(vslots.mecc_vehicles) ? vslots.mecc_vehicles : [];
+    const page = parseInt(vslots.vehicle_page, 10) || 0;
+    const pg = buildPagedList(vehicles, page, 10, (v) => v.label || '');
+    const rows = pg.pageItems.map((v, idx) => {
+      const n = pg.startIndex + idx + 1;
+      return { id: String(n), title: String(n), description: String(v.label || '').slice(0, 72) };
+    });
+    if (pg.hasNext) rows.push({ id: 'prossimi_10', title: 'Prossimi 10' });
+    if (pg.hasPrev) rows.push({ id: 'precedenti_10', title: 'Precedenti 10' });
+    return buildWhatsAppListOptions(rows.slice(0, 9), { headerText: 'Veicoli', buttonText: 'Scegli', sectionTitle: 'Qual e il tuo veicolo?' });
+  }
   if (stage === 'mecc_category_menu') {
     const cats = Array.isArray(resolved?.intakeState?.slots?.mecc_categories) ? resolved.intakeState.slots.mecc_categories : [];
     const rows = cats.slice(0, 9).map((c) => ({ id: String(c), title: String(c).slice(0, 24) }));
@@ -822,6 +835,20 @@ function buildTelegramReplyOptionsForResolved(resolved = {}) {
   const slots = resolved?.intakeState?.slots || {};
   const hasVehicleKey = !!(s(slots.plate) || s(slots.vin) || s(slots.oe_code));
 
+  if (stage === 'mecc_vehicle_menu') {
+    const vehicles = Array.isArray(slots.mecc_vehicles) ? slots.mecc_vehicles : [];
+    const page = parseInt(slots.vehicle_page, 10) || 0;
+    const pg = buildPagedList(vehicles, page, 10, (v) => v.label || '');
+    const numbers = pg.pageItems.map((_, idx) => String(pg.startIndex + idx + 1));
+    const rows = [];
+    for (let k = 0; k < numbers.length; k += 5) rows.push(numbers.slice(k, k + 5));
+    const nav = [];
+    if (pg.hasPrev) nav.push('Precedenti 10');
+    if (pg.hasNext) nav.push('Prossimi 10');
+    if (nav.length) rows.push(nav);
+    rows.push(['Chiudi sessione']);
+    return buildTelegramReplyKeyboard(rows, 'Scegli il tuo veicolo (numero)', { includeCloseSession: false });
+  }
   if (stage === 'mecc_category_menu') {
     const cats = Array.isArray(slots.mecc_categories) ? slots.mecc_categories : [];
     const rows = [];
@@ -3172,7 +3199,7 @@ function buildVariantPage(variants = [], page = 0, pageSize = 10) {
 // il comportamento resta identico a prima. I cristalli restano sul loro flusso.
 // ===========================================================================
 const MECC_PAGE_SIZE = 10;
-const MECC_STAGES = ['mecc_category_menu', 'mecc_part_menu', 'mecc_variant_selection', 'mecc_another_part'];
+const MECC_STAGES = ['mecc_vehicle_menu', 'mecc_category_menu', 'mecc_part_menu', 'mecc_variant_selection', 'mecc_another_part'];
 
 function isMeccFlowEnabled() {
   const f = String(process.env.PARTS_ENABLE_MECC_FLOW || '').trim().toLowerCase();
@@ -3337,6 +3364,38 @@ function presentMeccCategoryParts({ vehicleCodes, plate, categoria, parts, page 
   });
 }
 
+// Veicoli che montano un OE (SearchRTByOe, BDRT). Dedup su marca/modello/versione.
+async function getVehiclesForOe(oeCode) {
+  const res = await rtwsSearchVehiclesByOe({ oeCode, top: 15 });
+  const seen = {};
+  const out = [];
+  (res.items || []).forEach((v) => {
+    if (!v.id_marca || !v.id_modello || !v.id_versione) return;
+    const key = `${v.id_marca}-${v.id_modello}-${v.id_versione}`;
+    if (seen[key]) return;
+    seen[key] = true;
+    out.push({
+      id_marca: v.id_marca, id_modello: v.id_modello, id_versione: v.id_versione,
+      label: [v.make, v.model, v.version].map((x) => s(x)).filter(Boolean).join(' ')
+    });
+  });
+  return out;
+}
+
+// Menu veicoli compatibili con un OE (dalla foto/testo del pezzo).
+function presentMeccVehicleMenu({ oeCode, vehicles, page = 0 }) {
+  if (!vehicles || !vehicles.length) {
+    return buildMeccResolved({ whatsappText: `Non ho trovato veicoli che montano il codice OE ${oeCode}. Verifica il codice, oppure inviami la targa del tuo veicolo.`, stage: 'session_closed', slots: {}, resolvedStatus: 'in_attesa_dati_cliente' });
+  }
+  const pageObj = buildPagedList(vehicles, page, 10, (v) => v.label || `${v.id_marca}/${v.id_modello}/${v.id_versione}`);
+  const nav = ['Scegli col numero il TUO veicolo'];
+  if (pageObj.hasNext) nav.push('"Prossimi 10"');
+  if (pageObj.hasPrev) nav.push('"Precedenti 10"');
+  nav.push('"Chiudi sessione"');
+  const txt = `Il codice OE ${oeCode} è montato su:\n${pageObj.text}\n\n${nav.join(' · ')}`;
+  return buildMeccResolved({ whatsappText: txt, stage: 'mecc_vehicle_menu', slots: { mecc_oe: oeCode, mecc_vehicles: vehicles, vehicle_page: pageObj.page }, plate: '' });
+}
+
 // Nuovo pezzo sullo stesso veicolo (riusa i codici in slot: nessun credito TARGATELAIO).
 async function meccNewPartOnSameVehicle({ request, codes, plate, text, mediaAnalysis }) {
   const partName = s(text) || s(mediaAnalysis?.data?.normalized_part_name);
@@ -3358,9 +3417,17 @@ async function maybeEnterMeccFlow({ request, resolved, mediaAnalysis, bodyText }
   try {
     if (!resolved || resolved.status === 'ERROR') return null;
     if (resolved?.glassCatalog?.status === 'READY') return null;
+    const oeCode = s(resolved?.parsed?.oeCode) || s(mediaAnalysis?.data?.oe_code);
     const plate = normalizePlate(s(resolved?.parsed?.plate) || s(resolved?.intakeState?.slots?.plate) || s(request?.plate));
+
+    // Caso C: OE (da testo o foto del pezzo) senza targa -> veicoli che lo montano.
+    if (oeCode && !plate) {
+      const vehicles = await getVehiclesForOe(oeCode);
+      if (request?.id) logPartEvent(request.id, 'mecc_entry_oe', `OE ${oeCode} -> ${vehicles.length} veicoli`, 'rtws_bdrt', { oeCode, count: vehicles.length });
+      return presentMeccVehicleMenu({ oeCode, vehicles, page: 0 });
+    }
+
     if (!plate) return null;
-    const oeCode = s(resolved?.parsed?.oeCode);
     let partName = s(resolved?.normalizedPart?.name) || s(resolved?.parsed?.requestedPartText);
     // Il resolver a volte mette come "pezzo" la targa/VIN stessa: scartala.
     if (partName) {
@@ -3412,6 +3479,34 @@ async function handleMeccContinuation({ request, intakeState, bodyText, mediaAna
     }
     if (/^(chiudi(\s+sessione)?|basta|fine|no grazie|stop|annulla)$/i.test(text)) {
       return buildMeccResolved({ whatsappText: 'Sessione chiusa. Il preventivo resta salvato per l\'operatore. A presto!', stage: 'session_closed', slots: {}, resolvedStatus: 'completata', plate });
+    }
+
+    if (stage === 'mecc_vehicle_menu') {
+      const vehicles = Array.isArray(slots.mecc_vehicles) ? slots.mecc_vehicles : [];
+      const page = i(slots.vehicle_page) || 0;
+      const oeCode = s(slots.mecc_oe);
+      if (/(prossim|avanti|next)/i.test(lower)) return presentMeccVehicleMenu({ oeCode, vehicles, page: page + 1 });
+      if (/(precedent|prev|indietro)/i.test(lower)) return presentMeccVehicleMenu({ oeCode, vehicles, page: Math.max(0, page - 1) });
+      const numV = text.match(/^\s*(\d{1,3})\s*$/);
+      if (numV) {
+        const idx = parseInt(numV[1], 10) - 1;
+        if (idx >= 0 && idx < vehicles.length) {
+          const chosen = vehicles[idx];
+          const vcodes = { id_marca: s(chosen.id_marca), id_modello: s(chosen.id_modello), id_versione: s(chosen.id_versione), label: s(chosen.label) };
+          const byOe = await rtwsGetRicambiByOe({ idMar: vcodes.id_marca, idMod: vcodes.id_modello, idVer: vcodes.id_versione, oeCodes: [oeCode] });
+          const idparHit = (byOe.items || []).map((it) => i(it.id_par)).find((x) => x !== null);
+          const descr = s(byOe.items && byOe.items[0] && byOe.items[0].description);
+          if (idparHit) {
+            const varRes = await getVariantsForIdpar({ idMarca: vcodes.id_marca, idModello: vcodes.id_modello, idVersione: vcodes.id_versione, idpar: idparHit });
+            if (request && request.id) logPartEvent(request.id, 'mecc_oe_vehicle', `OE ${oeCode} -> ${vcodes.label} -> idpar ${idparHit}`, 'rtws_bdrt', { oeCode, idpar: idparHit });
+            return presentMeccVariants({ vehicleCodes: vcodes, plate: '', partName: descr || `OE ${oeCode}`, idpar: idparHit, descrizione: descr || `OE ${oeCode}`, variants: varRes.variants, page: 0 });
+          }
+          const single = [{ tipo: 'originale', oe_code: oeCode, descrizione: descr || '', prezzo: '' }];
+          return presentMeccVariants({ vehicleCodes: vcodes, plate: '', partName: descr || `OE ${oeCode}`, idpar: null, descrizione: descr || `OE ${oeCode}`, variants: single, page: 0 });
+        }
+        return buildMeccResolved({ whatsappText: `Numero non valido. Scegli un numero (1-${vehicles.length}).`, stage: 'mecc_vehicle_menu', slots, plate: '' });
+      }
+      return null;
     }
 
     if (stage === 'mecc_category_menu') {
