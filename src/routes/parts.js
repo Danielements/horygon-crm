@@ -3714,6 +3714,7 @@ async function analyzeInboundMediaWithOpenAI({ channel, bodyText, mediaUrl, medi
     return {
       skipped: false,
       data: parsedData,
+      imageDataUrl,
       meta: {
         model,
         statusCode: response.status,
@@ -3733,6 +3734,110 @@ async function analyzeInboundMediaWithOpenAI({ channel, bodyText, mediaUrl, medi
       meta: { model, statusCode: response.status, raw, parsed, content, mimeType }
     };
   }
+}
+
+// Verifica AI: data la foto del pezzo e i candidati idpar dal dizionario,
+// chiede all'AI quale idpar corrisponde al ricambio nella foto. Ritorna
+// { idpar, confidence, motivo } oppure idpar 0 se nessuno corrisponde.
+// Vincola la scelta ai candidati (niente idpar inventati).
+async function aiPickIdparFromCandidates({ imageDataUrl, candidates = [], partName = '', bodyText = '', model } = {}) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return { skipped: true, reason: 'openai_non_configurato' };
+  if (!imageDataUrl) return { skipped: true, reason: 'immagine_mancante' };
+  if (!Array.isArray(candidates) || !candidates.length) return { skipped: true, reason: 'nessun_candidato' };
+
+  const chosenModel = model || process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  const shortlist = candidates.slice(0, 12);
+  const allowedIds = shortlist.map((c) => i(c.idpar)).filter((n) => n !== null);
+  const candList = shortlist.map((c) => `${c.idpar}: ${c.descrizione}`).join('\n');
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: chosenModel,
+        temperature: 0,
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'idpar_match',
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                idpar: { type: 'integer' },
+                confidence: { type: 'number' },
+                motivo: { type: 'string' }
+              },
+              required: ['idpar', 'confidence', 'motivo']
+            }
+          }
+        },
+        messages: [
+          {
+            role: 'system',
+            content: 'Ti mostro la foto di un ricambio auto e una lista di ricambi candidati nel formato "idpar: descrizione". Scegli l idpar che corrisponde meglio al pezzo mostrato nella foto. Rispondi SOLO con un idpar presente nella lista. Se nessun candidato corrisponde al pezzo nella foto, rispondi idpar=0. Metti in motivo una brevissima spiegazione. confidence tra 0 e 1.'
+          },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: `Ricambio ipotizzato dal testo: ${s(partName) || '[n/d]'}. Caption cliente: ${s(bodyText) || '[vuoto]'}.\nCandidati:\n${candList}` },
+              { type: 'image_url', image_url: { url: imageDataUrl, detail: 'high' } }
+            ]
+          }
+        ]
+      })
+    });
+    const raw = await response.text();
+    const parsed = parseWhatsappResponseBody(raw);
+    if (!response.ok) {
+      return { skipped: false, error: parsed?.error?.message || `OpenAI idpar-match HTTP ${response.status}`, meta: { model: chosenModel, statusCode: response.status } };
+    }
+    const content = parsed?.choices?.[0]?.message?.content;
+    if (!content) return { skipped: false, error: 'Risposta AI idpar-match vuota', meta: { model: chosenModel } };
+    let data;
+    try { data = JSON.parse(content); } catch { return { skipped: false, error: 'JSON idpar-match non valido', meta: { model: chosenModel, content } }; }
+    const idpar = i(data.idpar);
+    // Vincolo: l'idpar deve essere tra i candidati (o 0 = nessuno)
+    if (idpar && allowedIds.indexOf(idpar) === -1) {
+      return { skipped: false, status: 'OUT_OF_LIST', idpar: 0, confidence: 0, motivo: 'AI ha risposto un idpar fuori lista', meta: { model: chosenModel, aiIdpar: idpar } };
+    }
+    const matched = shortlist.find((c) => i(c.idpar) === idpar) || null;
+    return {
+      skipped: false,
+      status: idpar ? 'MATCH' : 'NO_MATCH',
+      idpar: idpar || 0,
+      descrizione: matched ? matched.descrizione : '',
+      confidence: Number(data.confidence) || 0,
+      motivo: s(data.motivo) || '',
+      meta: { model: chosenModel }
+    };
+  } catch (error) {
+    return { skipped: false, error: error?.message || 'Eccezione idpar-match' };
+  }
+}
+
+// Da un'analisi vision (normalized_part_name) + eventuale immagine, ricava
+// l'idpar: candidati dal dizionario e, se c'e' la foto, verifica AI.
+async function resolveIdparFromMedia({ mediaAnalysis, partNameOverride = '', bodyText = '' } = {}) {
+  const data = mediaAnalysis?.data || {};
+  const partName = s(partNameOverride) || s(data.normalized_part_name) || s(data.requested_part_text) || '';
+  if (!partName) return { status: 'NO_PART_TEXT', candidates: [] };
+  const candidates = lookupIdparByText(partName, 10);
+  if (!candidates.length) return { status: 'NO_CANDIDATES', partName, candidates: [] };
+
+  const imageDataUrl = mediaAnalysis?.imageDataUrl || '';
+  if (imageDataUrl) {
+    const verify = await aiPickIdparFromCandidates({ imageDataUrl, candidates, partName, bodyText });
+    if (verify.status === 'MATCH' && verify.idpar) {
+      return { status: 'VERIFIED', idpar: verify.idpar, descrizione: verify.descrizione, confidence: verify.confidence, candidates, verifiedByAi: true };
+    }
+    // AI non ha confermato: ripieghiamo sul miglior candidato del dizionario
+    return { status: 'UNVERIFIED', idpar: candidates[0].idpar, descrizione: candidates[0].descrizione, candidates, verifiedByAi: false, aiMotivo: verify.motivo || verify.reason || '' };
+  }
+  // Nessuna immagine: usa il miglior candidato del dizionario
+  return { status: 'TEXT_ONLY', idpar: candidates[0].idpar, descrizione: candidates[0].descrizione, candidates, verifiedByAi: false };
 }
 
 async function analyzeInboundEvidenceWithOpenAI({
