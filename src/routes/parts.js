@@ -3019,6 +3019,70 @@ async function rtwsGetRicambiDbrt({ idMarca, idModello, idVersione, idPars = [] 
   }
 }
 
+// Varianti complete per un idpar su un veicolo: originali (GetRicambiDBRT) +
+// compatibili/equivalenti (GetListiniEquivalenti per ogni OE, dedup). Gestisce
+// il caso vuoto: ritorna sempre { variants: [] } senza lanciare.
+async function getVariantsForIdpar({ idMarca, idModello, idVersione, idpar, includeCompatibili = true }) {
+  const variants = [];
+  const seenOe = {};
+  const original = await rtwsGetRicambiDbrt({ idMarca, idModello, idVersione, idPars: [idpar] });
+  (original.items || []).forEach((it) => {
+    const oe = s(it.oe_code);
+    if (oe) seenOe[oe] = true;
+    variants.push({ tipo: 'originale', oe_code: oe, descrizione: s(it.description), prezzo: s(it.price), colore: s(it.color) });
+  });
+
+  if (includeCompatibili) {
+    const oeList = (original.items || []).map((it) => s(it.oe_code)).filter(Boolean);
+    for (let k = 0; k < oeList.length; k++) {
+      const eq = await rtwsGetListiniEquivalenti({ partNumber: oeList[k] });
+      (eq.items || []).forEach((c) => {
+        const code = s(c.oe_code) || s(c.part_number);
+        if (!code || seenOe[code]) return;
+        seenOe[code] = true;
+        variants.push({ tipo: 'compatibile', oe_code: code, descrizione: s(c.description), prezzo: s(c.price), source_oe: oeList[k] });
+      });
+    }
+  }
+  return {
+    status: variants.length ? 'READY' : 'EMPTY',
+    variants,
+    originaliCount: variants.filter((v) => v.tipo === 'originale').length,
+    compatibiliCount: variants.filter((v) => v.tipo === 'compatibile').length,
+    rtwsStatus: original.status
+  };
+}
+
+// --- Presentazione varianti in chat (etichette + paginazione 10) ---
+function formatPartPrice(value) {
+  const n = Number(String(value === undefined || value === null ? '' : value).replace(',', '.'));
+  return Number.isFinite(n) && n > 0 ? `${n.toFixed(2)}€` : 'prezzo n/d';
+}
+function formatVariantLine(variant, number) {
+  const tipo = s(variant?.tipo) === 'compatibile' ? 'Compatibile' : 'Originale';
+  const parts = [`${number}) ${tipo}`];
+  if (s(variant?.oe_code)) parts.push(`OE ${s(variant.oe_code)}`);
+  parts.push(formatPartPrice(variant?.prezzo));
+  return parts.join(' · ');
+}
+// Ritorna testo + item della pagina corrente + flag prossimi/precedenti.
+function buildVariantPage(variants = [], page = 0, pageSize = 10) {
+  const total = variants.length;
+  if (!total) return { total: 0, page: 0, pageItems: [], text: '', hasPrev: false, hasNext: false };
+  const maxPage = Math.max(0, Math.ceil(total / pageSize) - 1);
+  const safePage = Math.min(Math.max(0, page), maxPage);
+  const start = safePage * pageSize;
+  const pageItems = variants.slice(start, start + pageSize);
+  const text = pageItems.map((v, idx) => formatVariantLine(v, start + idx + 1)).join('\n');
+  return {
+    total, page: safePage, pageItems,
+    startIndex: start,
+    hasPrev: start > 0,
+    hasNext: start + pageSize < total,
+    text
+  };
+}
+
 // Matcher testo cliente -> idpar dal dizionario rtws_idpar_dizionario.
 // Punteggio per sovrapposizione token; ritorna i migliori candidati.
 function normalizeForMatch(value) {
@@ -6942,35 +7006,17 @@ router.post('/parts/rtws-lookup', requirePermesso('ricambi', 'read'), async (req
     }
     const chosen = candidates[0];
 
-    // 3) idpar -> ricambi originali (BDRT, illimitato)
-    const original = await rtwsGetRicambiDbrt({
-      idMarca: v.id_marca, idModello: v.id_modello, idVersione: v.id_versione, idPars: [chosen.idpar]
+    // 3-4) idpar -> varianti originali + compatibili (logica condivisa col resolver)
+    const varRes = await getVariantsForIdpar({
+      idMarca: v.id_marca, idModello: v.id_modello, idVersione: v.id_versione, idpar: chosen.idpar, includeCompatibili
     });
-
-    const variants = [];
-    const seenOe = {};
-    (original.items || []).forEach((it) => {
-      const oe = s(it.oe_code);
-      if (oe) seenOe[oe] = true;
-      variants.push({ tipo: 'originale', oe_code: oe, descrizione: it.description, prezzo: it.price, colore: it.color || '' });
-    });
-
-    // 4) per ogni OE originale -> compatibili aftermarket (LISTINI, illimitato)
-    if (includeCompatibili) {
-      const oeList = (original.items || []).map((it) => s(it.oe_code)).filter(Boolean);
-      for (let k = 0; k < oeList.length; k++) {
-        const eq = await rtwsGetListiniEquivalenti({ partNumber: oeList[k] });
-        (eq.items || []).forEach((c) => {
-          const code = s(c.oe_code) || s(c.part_number);
-          if (!code || seenOe[code]) return;
-          seenOe[code] = true;
-          variants.push({ tipo: 'compatibile', oe_code: code, descrizione: c.description || '', prezzo: c.price || '', source_oe: oeList[k] });
-        });
-      }
-    }
+    const variants = varRes.variants;
 
     // aggiorna hit_count sull'idpar scelto
     try { db.prepare('UPDATE rtws_idpar_dizionario SET hit_count = hit_count + 1 WHERE idpar = ?').run(chosen.idpar); } catch (e) {}
+
+    // anteprima della lista come apparira' in chat (paginata)
+    const preview = buildVariantPage(variants, 0, 10);
 
     return res.json({
       step: 'ok',
@@ -6980,9 +7026,11 @@ router.post('/parts/rtws-lookup', requirePermesso('ricambi', 'read'), async (req
       candidates,
       chosen_idpar: chosen.idpar,
       chosen_descrizione: chosen.descrizione,
-      originali: variants.filter((x) => x.tipo === 'originale').length,
-      compatibili: variants.filter((x) => x.tipo === 'compatibile').length,
-      variants
+      originali: varRes.originaliCount,
+      compatibili: varRes.compatibiliCount,
+      variants,
+      chat_preview: preview.text,
+      has_next_page: preview.hasNext
     });
   } catch (error) {
     return res.status(500).json({ error: error?.message || 'Errore rtws-lookup' });
