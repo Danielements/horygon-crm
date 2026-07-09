@@ -6972,9 +6972,12 @@ async function processInboundPartsMessage({
     // resta intatto: qui lo intercettiamo solo se siamo gia' in uno stato mecc
     // (continuazione) o se, dopo il resolver, abbiamo targa + pezzo non-vetro (entry).
     const meccRequest = db.prepare('SELECT * FROM parts_requests WHERE id = ? LIMIT 1').get(partsRequestId);
+    const meccFlagOn = isMeccFlowEnabled();
     let resolved = null;
-    if (isMeccFlowEnabled() && isMeccStage(intakeState)) {
+    let meccEntered = false;
+    if (meccFlagOn && isMeccStage(intakeState)) {
       resolved = await handleMeccContinuation({ request: meccRequest, intakeState, bodyText, mediaAnalysis });
+      if (resolved) meccEntered = true;
     }
     if (!resolved) {
       resolved = await resolvePartsMessageV2({
@@ -6984,11 +6987,15 @@ async function processInboundPartsMessage({
         intakeState,
         mediaAnalysis
       });
-      if (isMeccFlowEnabled()) {
+      if (meccFlagOn) {
         const meccEntry = await maybeEnterMeccFlow({ request: meccRequest, resolved, mediaAnalysis, bodyText });
-        if (meccEntry) resolved = meccEntry;
+        if (meccEntry) { resolved = meccEntry; meccEntered = true; }
       }
     }
+    // Diagnostica visibile nella timeline: stato flag ed entry meccanici.
+    try {
+      logPartEvent(partsRequestId, 'mecc_debug', `flusso meccanici: flag=${meccFlagOn} entrato=${meccEntered} stage=${String(intakeState?.stage || 'new')} plate=${s(resolved?.parsed?.plate) || s(meccRequest?.plate) || '-'} part=${s(resolved?.normalizedPart?.name) || '-'}`, 'mecc', { flag: meccFlagOn, entered: meccEntered });
+    } catch (e) { /* no-op */ }
     if (resolved?.whatsappText) {
       resolved.whatsappText = decorateFlowReplyText(resolved.whatsappText, resolved);
     }
