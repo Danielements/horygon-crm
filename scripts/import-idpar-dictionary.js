@@ -12,6 +12,7 @@
 // Opzionale: passare un percorso JSON alternativo come primo argomento.
 
 require('../src/config/load-env');
+const { categorizeIdparDescription } = require('../src/services/idpar-categories');
 const fs = require('fs');
 const path = require('path');
 const db = require('../src/db/database');
@@ -36,12 +37,12 @@ function main() {
   console.log('Voci nel file: ' + entries.length + '  (' + jsonPath + ')');
 
   const upsert = db.prepare(`
-    INSERT INTO rtws_idpar_dizionario (idpar, descrizione, fonte)
-    VALUES (?, ?, 'scan')
+    INSERT INTO rtws_idpar_dizionario (idpar, descrizione, categoria, fonte)
+    VALUES (?, ?, ?, 'scan')
     ON CONFLICT(idpar) DO UPDATE SET
       descrizione = excluded.descrizione,
+      categoria = excluded.categoria,
       updated_at = datetime('now')
-    WHERE rtws_idpar_dizionario.descrizione <> excluded.descrizione
   `);
 
   const before = db.prepare('SELECT COUNT(*) AS c FROM rtws_idpar_dizionario').get().c;
@@ -51,7 +52,7 @@ function main() {
     entries.forEach(function (idpar) {
       const n = parseInt(idpar, 10);
       const descr = String(dict[idpar] || '').trim();
-      if (!Number.isNaN(n) && descr) upsert.run(n, descr);
+      if (!Number.isNaN(n) && descr) upsert.run(n, descr, categorizeIdparDescription(descr));
     });
     db.exec('COMMIT');
   } catch (e) {
@@ -71,6 +72,10 @@ function main() {
   console.log('\nEsempi in tabella:');
   db.prepare('SELECT idpar, descrizione FROM rtws_idpar_dizionario ORDER BY idpar LIMIT 8').all().forEach(function (r) {
     console.log('  ' + r.idpar + '  ' + r.descrizione);
+  });
+  console.log('\nDistribuzione per categoria:');
+  db.prepare("SELECT COALESCE(categoria, 'Altro') AS categoria, COUNT(*) AS c FROM rtws_idpar_dizionario GROUP BY categoria ORDER BY c DESC").all().forEach(function (r) {
+    console.log('  ' + String(r.categoria).padEnd(26) + r.c);
   });
   console.log('\nImport completato.');
 }
