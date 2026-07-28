@@ -65,12 +65,45 @@ function drawCommonFrame(doc, theme, topRightLines = []) {
   const startX = 40;
   const pageWidth = doc.page.width - 80;
   const contentRight = startX + pageWidth;
-  const logoSize = 50;
-  const companyBlockX = 112;
+  const logoSize = 66;
+  const companyBlockX = 132;
+  const normalizedTopRightLines = topRightLines.map((line) => String(line || ''));
+  const widestTopRightLine = normalizedTopRightLines.reduce((max, line) => Math.max(max, line.length), 0);
+  const labelBoxWidth = widestTopRightLine > 28 ? 260 : (theme.label.length > 8 ? 212 : 196);
+  const labelBoxX = contentRight - (labelBoxWidth + 16);
+  const labelFontSize = theme.label.length > 8 ? 20 : 22;
+  const titleY = 58;
+  const topRightTextY = 100;
+  const topRightGap = 8;
+  const topRightTextWidth = labelBoxWidth - 22;
+  const topRightLabelWidth = 54;
+  const topRightValueX = labelBoxX + 16 + topRightLabelWidth + 8;
+  const topRightValueWidth = labelBoxWidth - 24 - topRightLabelWidth - 8;
+  const topRightItems = normalizedTopRightLines.map((line) => {
+    const separatorIndex = line.indexOf(':');
+    if (separatorIndex === -1) return { label: '', value: line };
+    return {
+      label: line.slice(0, separatorIndex + 1).trim(),
+      value: line.slice(separatorIndex + 1).trim()
+    };
+  });
 
-  doc.roundedRect(startX, 36, pageWidth, 102, 12).fillAndStroke('#ffffff', colors.border);
+  doc.font('Helvetica').fontSize(8.5).fillColor(colors.ink);
+  const topRightHeights = topRightItems.map((item) => {
+    const valueHeight = doc.heightOfString(item.value || '-', {
+      width: item.label ? topRightValueWidth : topRightTextWidth,
+      lineGap: 1
+    });
+    return Math.max(10, valueHeight);
+  });
+  const topRightTextHeight = topRightHeights.reduce((sum, height) => sum + height, 0)
+    + (Math.max(0, topRightHeights.length - 1) * topRightGap);
+  const labelBoxHeight = Math.max(112, (topRightTextY - 48) + topRightTextHeight + 14);
+  const frameHeight = Math.max(126, labelBoxHeight + 24);
+
+  doc.roundedRect(startX, 36, pageWidth, frameHeight, 12).fillAndStroke('#ffffff', colors.border);
   doc.save();
-  doc.translate(startX + 16, 50);
+  doc.translate(startX + 18, 44);
   doc.scale(logoSize / 220);
   doc.path(LOGO_PATH_DATA).fill(theme.accent);
   doc.restore();
@@ -82,14 +115,29 @@ function drawCommonFrame(doc, theme, topRightLines = []) {
     .text(`Email ${COMPANY_INFO.email}  |  ${COMPANY_INFO.website}`, companyBlockX, 96)
     .text(`PEC ${COMPANY_INFO.pec}`, companyBlockX, 108);
 
-  const labelBoxWidth = theme.label.length > 8 ? 188 : 172;
-  const labelBoxX = contentRight - (labelBoxWidth + 16);
-  const labelFontSize = theme.label.length > 8 ? 20 : 22;
-  doc.roundedRect(labelBoxX, 48, labelBoxWidth, 78, 10).fillAndStroke(theme.fill, colors.border);
-  doc.fillColor(theme.accent).font('Helvetica-Bold').fontSize(labelFontSize).text(theme.label, labelBoxX + 16, 60, { width: labelBoxWidth - 24, align: 'left' });
-  doc.fontSize(9).fillColor(colors.ink).font('Helvetica');
-  topRightLines.forEach((line, index) => {
-    doc.text(line, labelBoxX + 16, 90 + (index * 14), { width: labelBoxWidth - 22 });
+  doc.roundedRect(labelBoxX, 48, labelBoxWidth, labelBoxHeight, 10).fillAndStroke(theme.fill, colors.border);
+  doc.fillColor(theme.accent).font('Helvetica-Bold').fontSize(labelFontSize).text(theme.label, labelBoxX + 16, titleY, {
+    width: labelBoxWidth - 24,
+    align: 'left'
+  });
+  doc.fontSize(8.5).fillColor(colors.ink).font('Helvetica');
+  let currentTopRightY = topRightTextY;
+  topRightItems.forEach((item, index) => {
+    if (item.label) {
+      doc.font('Helvetica-Bold').text(item.label, labelBoxX + 16, currentTopRightY, {
+        width: topRightLabelWidth
+      });
+      doc.font('Helvetica').text(item.value || '-', topRightValueX, currentTopRightY, {
+        width: topRightValueWidth,
+        lineGap: 1
+      });
+    } else {
+      doc.font('Helvetica').text(item.value || '-', labelBoxX + 16, currentTopRightY, {
+        width: topRightTextWidth,
+        lineGap: 1
+      });
+    }
+    currentTopRightY += topRightHeights[index] + topRightGap;
   });
 
   doc.moveTo(startX, 786).lineTo(contentRight, 786).stroke(colors.line);
