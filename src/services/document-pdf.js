@@ -65,17 +65,59 @@ function drawCommonFrame(doc, theme, topRightLines = []) {
   const startX = 40;
   const pageWidth = doc.page.width - 80;
   const contentRight = startX + pageWidth;
-  const logoSize = 66;
-  const companyBlockX = 132;
-  const normalizedTopRightLines = topRightLines.map((line) => String(line || ''));
-  const widestTopRightLine = normalizedTopRightLines.reduce((max, line) => Math.max(max, line.length), 0);
-  const labelBoxWidth = widestTopRightLine > 28 ? 260 : (theme.label.length > 8 ? 212 : 196);
+  const logoSize = 50;
+  const companyBlockX = 112;
+
+  doc.roundedRect(startX, 36, pageWidth, 102, 12).fillAndStroke('#ffffff', colors.border);
+  doc.save();
+  doc.translate(startX + 16, 50);
+  doc.scale(logoSize / 220);
+  doc.path(LOGO_PATH_DATA).fill(theme.accent);
+  doc.restore();
+
+  doc.fillColor(theme.accent).font('Helvetica-Bold').fontSize(18).text(COMPANY_INFO.name, companyBlockX, 48);
+  doc.font('Helvetica').fontSize(9).fillColor(colors.ink)
+    .text(COMPANY_INFO.addressLine1, companyBlockX, 72)
+    .text(COMPANY_INFO.addressLine2, companyBlockX, 84)
+    .text(`Email ${COMPANY_INFO.email}  |  ${COMPANY_INFO.website}`, companyBlockX, 96)
+    .text(`PEC ${COMPANY_INFO.pec}`, companyBlockX, 108);
+
+  const labelBoxWidth = theme.label.length > 8 ? 188 : 172;
   const labelBoxX = contentRight - (labelBoxWidth + 16);
   const labelFontSize = theme.label.length > 8 ? 20 : 22;
-  const titleY = 64;
-  const topRightTextY = 118;
+  doc.roundedRect(labelBoxX, 48, labelBoxWidth, 78, 10).fillAndStroke(theme.fill, colors.border);
+  doc.fillColor(theme.accent).font('Helvetica-Bold').fontSize(labelFontSize).text(theme.label, labelBoxX + 16, 60, {
+    width: labelBoxWidth - 24,
+    align: 'left'
+  });
+  doc.fontSize(9).fillColor(colors.ink).font('Helvetica');
+  topRightLines.forEach((line, index) => {
+    doc.text(line, labelBoxX + 16, 90 + (index * 14), { width: labelBoxWidth - 22 });
+  });
+
+  doc.moveTo(startX, 786).lineTo(contentRight, 786).stroke(colors.line);
+  doc.font('Helvetica').fontSize(8).fillColor(colors.muted)
+    .text(`REA ${COMPANY_INFO.rea}  |  P.IVA ${COMPANY_INFO.piva}`, startX, 792, { width: 260 })
+    .text(`${COMPANY_INFO.website}  |  ${COMPANY_INFO.email}`, contentRight - 200, 792, { width: 200, align: 'right' });
+
+  return { colors, startX, pageWidth, contentRight };
+}
+
+function drawDdtFrame(doc, theme, topRightLines = []) {
+  const colors = getBaseColors(theme.accent);
+  const startX = 40;
+  const pageWidth = doc.page.width - 80;
+  const contentRight = startX + pageWidth;
+  const logoSize = 50;
+  const companyBlockX = 112;
+  const normalizedTopRightLines = topRightLines.map((line) => String(line || ''));
+  const widestTopRightLine = normalizedTopRightLines.reduce((max, line) => Math.max(max, line.length), 0);
+  const labelBoxWidth = widestTopRightLine > 28 ? 260 : 196;
+  const labelBoxX = contentRight - (labelBoxWidth + 16);
+  const labelFontSize = 22;
+  const titleY = 60;
+  const topRightTextY = 96;
   const topRightGap = 8;
-  const topRightTextWidth = labelBoxWidth - 22;
   const companyTextWidth = Math.max(150, labelBoxX - companyBlockX - 20);
   const topRightLabelWidth = 54;
   const topRightValueX = labelBoxX + 16 + topRightLabelWidth + 8;
@@ -92,7 +134,7 @@ function drawCommonFrame(doc, theme, topRightLines = []) {
   doc.font('Helvetica').fontSize(8.5).fillColor(colors.ink);
   const topRightHeights = topRightItems.map((item) => {
     const valueHeight = doc.heightOfString(item.value || '-', {
-      width: item.label ? topRightValueWidth : topRightTextWidth,
+      width: item.label ? topRightValueWidth : labelBoxWidth - 22,
       lineGap: 1
     });
     return Math.max(10, valueHeight);
@@ -104,7 +146,7 @@ function drawCommonFrame(doc, theme, topRightLines = []) {
 
   doc.roundedRect(startX, 36, pageWidth, frameHeight, 12).fillAndStroke('#ffffff', colors.border);
   doc.save();
-  doc.translate(startX + 18, 44);
+  doc.translate(startX + 16, 50);
   doc.scale(logoSize / 220);
   doc.path(LOGO_PATH_DATA).fill(theme.accent);
   doc.restore();
@@ -119,9 +161,9 @@ function drawCommonFrame(doc, theme, topRightLines = []) {
     .text(`PEC ${COMPANY_INFO.pec}`, companyBlockX, 108, { width: companyTextWidth });
 
   doc.roundedRect(labelBoxX, 48, labelBoxWidth, labelBoxHeight, 10).fillAndStroke(theme.fill, colors.border);
-  doc.fillColor(theme.accent).font('Helvetica-Bold').fontSize(labelFontSize).text(theme.label, labelBoxX, titleY, {
-    width: labelBoxWidth,
-    align: 'center'
+  doc.fillColor(theme.accent).font('Helvetica-Bold').fontSize(labelFontSize).text(theme.label, labelBoxX + 16, titleY, {
+    width: labelBoxWidth - 24,
+    align: 'left'
   });
   doc.fontSize(8.5).fillColor(colors.ink).font('Helvetica');
   let currentTopRightY = topRightTextY;
@@ -136,7 +178,7 @@ function drawCommonFrame(doc, theme, topRightLines = []) {
       });
     } else {
       doc.font('Helvetica').text(item.value || '-', labelBoxX + 16, currentTopRightY, {
-        width: topRightTextWidth,
+        width: labelBoxWidth - 22,
         lineGap: 1
       });
     }
@@ -188,7 +230,8 @@ function drawRowsTable(doc, theme, setup) {
     const rowHeight = typeof setup.rowHeight === 'function' ? setup.rowHeight(row) : (setup.rowHeight || 26);
     if (y + rowHeight > footerTop) {
       doc.addPage();
-      drawCommonFrame(doc, theme, setup.headerLines || []);
+      const drawFrame = setup.drawFrame || drawCommonFrame;
+      drawFrame(doc, theme, setup.headerLines || []);
       y = continuationY;
       drawHeader();
     }
@@ -209,11 +252,12 @@ function drawRowsTable(doc, theme, setup) {
   return y;
 }
 
-function ensureDocumentSpace(doc, theme, headerLines, requiredHeight, currentY, continuationY = 156) {
+function ensureDocumentSpace(doc, theme, headerLines, requiredHeight, currentY, continuationY = 156, options = {}) {
   const footerTop = 730;
   if (currentY + requiredHeight <= footerTop) return currentY;
   doc.addPage();
-  drawCommonFrame(doc, theme, headerLines || []);
+  const drawFrame = options.drawFrame || drawCommonFrame;
+  drawFrame(doc, theme, headerLines || []);
   return continuationY;
 }
 
@@ -464,7 +508,7 @@ async function createDdtPdfBuffer(id) {
     `Data: ${row.data || '-'}`,
     `Tipo: ${row.tipo || '-'}`
   ];
-  const frame = drawCommonFrame(doc, theme, headerLines);
+  const frame = drawDdtFrame(doc, theme, headerLines);
   const { colors, startX } = frame;
   const notesText = [
     row.vettore ? `Vettore: ${row.vettore}` : '',
@@ -506,6 +550,7 @@ async function createDdtPdfBuffer(id) {
     y,
     title: 'Beni trasportati',
     continuationY: 156,
+    drawFrame: drawDdtFrame,
     headerLines,
     rows: righe,
     rowHeight: (r) => {
@@ -535,7 +580,7 @@ async function createDdtPdfBuffer(id) {
   y += 18;
   doc.font('Helvetica').fontSize(10);
   const notesHeight = Math.max(72, Math.min(160, doc.heightOfString(notesText, { width: 495 }) + 34));
-  y = ensureDocumentSpace(doc, theme, headerLines, notesHeight + 6, y);
+  y = ensureDocumentSpace(doc, theme, headerLines, notesHeight + 6, y, 156, { drawFrame: drawDdtFrame });
   drawInfoBox(doc, colors, theme.accent, 40, y, 515, notesHeight, 'Annotazioni', notesText);
 
   addPageNumbers(doc);
