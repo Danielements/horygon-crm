@@ -1,0 +1,530 @@
+HORYGON CRM - Memo Tecnico Operativo
+Data memo: 2026-06-30
+
+1. Panoramica applicazione
+
+Stack principale
+- Backend Node.js + Express
+- Database SQLite (`horygon.db`)
+- Frontend statico servito da `public/`
+- Upload locali in `uploads/`
+- PDF generati server-side
+- Integrazioni attive: Google, OpenAI, WhatsApp, Telegram, RTWS
+
+Entry point
+- `src/index.js`
+
+Rotte principali registrate
+- `/api/auth`
+- `/api/utenti`
+- `/api/anagrafiche`
+- `/api/prodotti`
+- `/api/kits`
+- `/api/ordini`
+- `/api/preventivi`
+- `/api/fatture`
+- `/api/proforme`
+- `/api/spedizioni`
+- `/api/documenti`
+- `/api/ai`
+- `/api/google`
+- `/api/contatti`
+- `/api/system`
+- `/api/mepa`
+- `/api/rdo`
+- `/api/cig`
+- `/api/analytics`
+- `/api/audit`
+- `/api/system-log`
+- `/api` via `src/routes/parts.js`
+- `/api` via `src/routes/operativo.js`
+- Pubblico: `src/routes/public-products.js`
+
+2. Funzionalita CRM oggi presenti
+
+Anagrafiche
+- Clienti, fornitori, PA, misti
+- Contatti associati
+- Geolocalizzazione e mappe
+- Dati PA dedicati
+
+Prodotti
+- Catalogo prodotti
+- Categorie
+- Media allegati
+- Listini per canale
+- Collegamento fornitori
+- Storico prezzi acquisto
+- QR prodotto
+- Giacenze aggregate da movimenti di magazzino
+
+Kit
+- Anagrafica kit
+- Componenti kit con quantita
+
+Ordini
+- Ordini acquisto e vendita
+- Righe ordine
+- Allegati
+- Tracking
+- PDF ordine
+
+Preventivi
+- Testata e righe
+- PDF preventivo
+- Conversione a ordine
+- Link pubblico PDF tramite `public_token`
+
+Fatture
+- Import/export fatture
+- Righe, riepilogo IVA
+- Stati pagamento e collegamenti con ordini/proforme/spedizioni
+
+DDT e magazzino
+- DDT entrata/uscita
+- Righe DDT
+- Movimenti di magazzino
+
+Attivita CRM
+- Telefonate, appuntamenti, email, visite, note
+- Supporto Google Calendar / Meet
+
+Google
+- Token utente
+- Sync log
+- Mail/documenti lato Google
+
+Spedizioni e import/export
+- Spedizioni
+- Costi spedizione
+- Documenti spedizione
+- Proforme e alert
+- Container e righe container
+
+AI e logging
+- AI usage log
+- Audit log
+- System log
+- Web push subscriptions
+
+MEPA / CIG / analytics
+- Moduli dedicati gia presenti a routing
+
+3. Modulo ricambi/chat: stato attuale
+
+File principale
+- `src/routes/parts.js`
+
+Canali inbound gestiti
+- WhatsApp webhook: `GET/POST /api/webhook/whatsapp`
+- Telegram webhook: `POST /api/webhook/telegram`
+
+Funzioni ricambi principali gia implementate
+- Triage richiesta ricambi
+- Raccolta progressiva dati cliente
+- Stato conversazione e richiesta in DB
+- Lookup cristalli via RTWS_LISTINI `CheckEurocodeDaTargaOE2`
+- Gestione varianti RTWS e selezione via numero
+- Creazione articolo da richiesta ricambi
+- Creazione preventivo bozza
+- Generazione PDF preventivo
+- Invio PDF e link pubblico su WhatsApp / Telegram
+- Chiusura automatica richieste inattive
+- Logging eventi tecnici richiesta
+
+Vision / immagini
+- Download media inbound WhatsApp
+- Download media inbound Telegram
+- Analisi immagini con OpenAI Vision
+- Fusione dati immagine + testo nel flow intake
+- Placeholder inbound piu leggibili: `[foto ricevuta]`, `[documento ricevuto]`, `[audio ricevuto]`
+- Logging quando la vision viene eseguita o saltata
+
+Note importanti sul flow ricambi
+- Le richieste aperte oggi sono considerate solo con stati:
+  `nuova`, `in_lavorazione`, `in_attesa_dati_cliente`, `in_attesa_verifica_tecnica`, `oe_trovato`
+- `preventivo_pronto` non e piu considerato stato aperto per il riuso del contesto
+- Dopo conferma PDF o rifiuto PDF, la richiesta viene chiusa logicamente come `completata`
+- Il contesto storico viene pescato solo da richieste ancora aperte
+
+Problemi gia emersi e fix applicati
+- `options is not defined` nel flow AI: corretto
+- RTWS state code `-100` non piu trattato come errore fatale
+- richiesta vecchia riusata anche dopo preventivo: corretto
+- placeholder foto prima appariva come `[messaggio senza testo]`: corretto
+- Telegram photo poteva saltare Vision per MIME generico: corretto preferendo MIME dichiarato del messaggio
+
+Problemi da ricordare
+- In chat CRM oggi si vede il placeholder testo della foto, non ancora una preview visuale vera
+- Per mostrare l’allegato nel frontend serve estendere il rendering dei messaggi leggendo `message_type`, `media_url`, `media_mime_type`, `media_metadata_json`
+
+4. Variabili ambiente importanti
+
+Core
+- `DB_PATH`
+- `PORT`
+- `NODE_ENV`
+- `SESSION_SECRET`
+- `BASE_URL`
+- `ALLOWED_ORIGINS`
+
+OpenAI
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL`
+- `OPENAI_VISION_MODEL` facoltativo
+
+WhatsApp
+- `WHATSAPP_ACCESS_TOKEN`
+- `WHATSAPP_PHONE_NUMBER_ID`
+- `WHATSAPP_VERIFY_TOKEN`
+- `WHATSAPP_API_VERSION`
+
+Telegram
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_WEBHOOK_SECRET`
+
+RTWS
+- `RTWS_WSDL_URL`
+- `RTWS_AZIENDA_NAME`
+- `RTWS_CLIENT_NAME`
+- `RTWS_PASSWORD`
+- `RTWS_PRODUCT_LISTINI`
+- `RTWS_TIMEOUT_MS`
+- `RTWS_SESSION_TTL_SECONDS`
+
+Parts backend opzionale
+- `PARTS_BACKEND_BASE_URL`
+- `PARTS_BACKEND_API_KEY`
+
+5. Tabelle database principali
+
+Sicurezza e utenti
+- `ruoli`
+- `permessi`
+- `utenti`
+
+CRM base
+- `anagrafiche`
+- `anagrafiche_contatti`
+- `pa_dettagli`
+
+Catalogo e acquisti
+- `categorie`
+- `prodotti`
+- `prodotti_media`
+- `prodotti_listini`
+- `prodotti_fornitori`
+- `prezzi_storico`
+- `kit`
+- `kit_componenti`
+
+Ciclo documentale
+- `preventivi`
+- `preventivi_righe`
+- `ordini`
+- `ordini_righe`
+- `ddt`
+- `ddt_righe`
+- `fatture`
+- `fatture_righe`
+- `fatture_iva_riepilogo`
+
+Logistica/import
+- `container`
+- `container_righe`
+- `proforme_invoice`
+- `proforme_righe`
+- `proforme_alert`
+- `spedizioni`
+- `spedizioni_documenti`
+- `spedizioni_costi`
+
+Integrazioni e logging
+- `google_tokens`
+- `sync_log`
+- `email_templates`
+- `ai_usage_log`
+- `audit_log`
+- `system_log`
+- `web_push_subscriptions`
+
+Ricambi/chat
+- `parts_requests`
+- `parts_request_vehicle_data`
+- `parts_request_oe_results`
+- `parts_request_equivalents`
+- `parts_request_events`
+- `parts_request_notes`
+- `parts_request_intake_state`
+- `whatsapp_conversations`
+- `whatsapp_messages`
+- `parts_request_metrics_daily`
+
+6. Relazioni principali da ricordare
+
+CRM base
+- `anagrafiche_contatti.anagrafica_id -> anagrafiche.id`
+- `pa_dettagli.anagrafica_id -> anagrafiche.id`
+
+Prodotti
+- `prodotti.categoria_id -> categorie.id`
+- `prodotti_media.prodotto_id -> prodotti.id`
+- `prodotti_listini.prodotto_id -> prodotti.id`
+- `prodotti_fornitori.prodotto_id -> prodotti.id`
+- `prodotti_fornitori.fornitore_id -> anagrafiche.id`
+- `prezzi_storico.prodotto_fornitore_id -> prodotti_fornitori.id`
+
+Kit
+- `kit.categoria_id -> categorie.id`
+- `kit_componenti.kit_id -> kit.id`
+- `kit_componenti.prodotto_id -> prodotti.id`
+
+Documenti commerciali
+- `preventivi.anagrafica_id -> anagrafiche.id`
+- `preventivi_righe.preventivo_id -> preventivi.id`
+- `preventivi_righe.prodotto_id -> prodotti.id`
+- `ordini.anagrafica_id -> anagrafiche.id`
+- `ordini.preventivo_id -> preventivi.id` logica aggiunta via colonna
+- `ordini_righe.ordine_id -> ordini.id`
+- `ordini_righe.prodotto_id -> prodotti.id`
+- `fatture.anagrafica_id -> anagrafiche.id`
+- `fatture_righe.fattura_id -> fatture.id`
+- `fatture_righe.prodotto_id -> prodotti.id`
+- `ddt.ordine_id -> ordini.id`
+- `ddt.mittente_id -> anagrafiche.id`
+- `ddt.destinatario_id -> anagrafiche.id`
+- `ddt_righe.ddt_id -> ddt.id`
+- `ddt_righe.prodotto_id -> prodotti.id`
+
+Magazzino
+- `magazzino_movimenti.prodotto_id -> prodotti.id`
+
+Ricambi/chat
+- `parts_requests.customer_id -> anagrafiche.id`
+- `parts_requests.assigned_to_user_id -> utenti.id`
+- `parts_request_vehicle_data.parts_request_id -> parts_requests.id`
+- `parts_request_oe_results.parts_request_id -> parts_requests.id`
+- `parts_request_equivalents.parts_request_id -> parts_requests.id`
+- `parts_request_equivalents.oe_result_id -> parts_request_oe_results.id`
+- `parts_request_events.parts_request_id -> parts_requests.id`
+- `parts_request_notes.parts_request_id -> parts_requests.id`
+- `parts_request_notes.author_user_id -> utenti.id`
+- `parts_request_intake_state.parts_request_id -> parts_requests.id`
+- `whatsapp_conversations.parts_request_id -> parts_requests.id`
+- `whatsapp_conversations.customer_id -> anagrafiche.id`
+- `whatsapp_conversations.assigned_to_user_id -> utenti.id`
+- `whatsapp_messages.conversation_id -> whatsapp_conversations.id`
+
+7. Colonne ricambi piu importanti
+
+`parts_requests`
+- identificazione: `id`, `request_uuid`, `channel`, `external_message_id`, `user_phone`
+- input: `original_message`, `plate`, `vin`, `requested_part_text`, `oe_code`
+- classificazione: `normalized_part_name`, `normalized_part_category`, `priority`, `tags_json`
+- esito: `status`, `ai_summary`, `whatsapp_reply_text`
+- collegamenti: `customer_id`, `assigned_to_user_id`, `linked_product_id`, `linked_preventivo_id`
+- tempi: `last_message_at`, `created_at`, `updated_at`
+
+`parts_request_intake_state`
+- `stage`
+- `pending_slot`
+- `pending_question`
+- `slots_json`
+
+`whatsapp_messages`
+- `direction`
+- `channel`
+- `message_type`
+- `body_text`
+- `media_url`
+- `media_mime_type`
+- `media_metadata_json`
+- `delivery_status`
+- `error_message`
+- `raw_payload_json`
+
+8. Endpoint utili da ricordare
+
+Pubblici
+- `GET /api/public/preventivi/:token/pdf`
+- `GET /api/public/prodotti/:id`
+- `GET /prodotto/:id`
+
+Ricambi
+- `GET /api/webhook/whatsapp`
+- `POST /api/webhook/whatsapp`
+- `POST /api/webhook/telegram`
+- `POST /api/parts/resolve`
+- `GET /api/parts/dashboard`
+- `GET /api/parts/requests`
+- `GET /api/parts/requests/:id`
+- `POST /api/parts/requests`
+- `POST /api/parts/requests/:id/notes`
+- `POST /api/parts/requests/:id/create-quote`
+- `GET /api/parts/conversations`
+- `GET /api/parts/conversations/:id/messages`
+- `POST /api/parts/conversations/:id/messages`
+- `GET /api/parts/stats`
+
+Commerciali
+- Preventivi: lista, dettaglio, pdf, crea, aggiorna, elimina, convert-to-order
+- Ordini: lista, dettaglio, pdf, crea, aggiorna, allegati, tracking, elimina
+- Prodotti: categorie, CRUD, media, listino, fornitore, giacenze, QR
+- Anagrafiche: CRUD, mappe, dettaglio
+
+9. Query SQLite utili per debug
+
+Ultime richieste ricambi
+SELECT id, request_uuid, user_phone, channel, status, original_message, plate, requested_part_text, oe_code, updated_at
+FROM parts_requests
+ORDER BY id DESC
+LIMIT 20;
+
+Richieste aperte ricambi
+SELECT id, request_uuid, user_phone, status, last_message_at, updated_at
+FROM parts_requests
+WHERE status IN ('nuova','in_lavorazione','in_attesa_dati_cliente','in_attesa_verifica_tecnica','oe_trovato')
+ORDER BY updated_at DESC;
+
+Eventi di una richiesta
+SELECT id, event_type, event_message, event_source, payload_json, created_at
+FROM parts_request_events
+WHERE parts_request_id = ?
+ORDER BY id DESC;
+
+Stato intake di una richiesta
+SELECT parts_request_id, stage, pending_slot, pending_question, slots_json, updated_at
+FROM parts_request_intake_state
+WHERE parts_request_id = ?;
+
+Messaggi di una conversazione ricambi
+SELECT wm.id, wm.direction, wm.channel, wm.message_type, wm.body_text, wm.media_url, wm.media_mime_type, wm.delivery_status, wm.error_message, wm.created_at
+FROM whatsapp_messages wm
+JOIN whatsapp_conversations wc ON wc.id = wm.conversation_id
+WHERE wc.parts_request_id = ?
+ORDER BY wm.id DESC;
+
+Ultime conversazioni
+SELECT id, user_phone, parts_request_id, status, last_message_at, updated_at
+FROM whatsapp_conversations
+ORDER BY id DESC
+LIMIT 20;
+
+Richieste con errori integrazione
+SELECT id, request_uuid, user_phone, status, original_message, updated_at
+FROM parts_requests
+WHERE status = 'errore_integrazione'
+ORDER BY updated_at DESC;
+
+Eventi errore ricambi
+SELECT pre.id, pre.parts_request_id, pre.event_message, pre.payload_json, pre.created_at
+FROM parts_request_events pre
+WHERE pre.event_type = 'errore_integrazione'
+ORDER BY pre.id DESC
+LIMIT 50;
+
+Controllo vision eseguita/skippata
+SELECT id, event_type, event_message, payload_json, created_at
+FROM parts_request_events
+WHERE parts_request_id = ?
+  AND event_type IN ('media_ai_analysis','media_ai_skipped','errore_integrazione')
+ORDER BY id DESC;
+
+Varianti OE salvate per richiesta
+SELECT id, oe_code, description, list_price, source, created_at
+FROM parts_request_oe_results
+WHERE parts_request_id = ?
+ORDER BY id ASC;
+
+Prodotto e preventivo collegati a una richiesta
+SELECT id, request_uuid, linked_product_id, linked_preventivo_id, status
+FROM parts_requests
+WHERE id = ?;
+
+Dettaglio preventivo con token pubblico
+SELECT id, codice_preventivo, stato, totale, public_token, data_preventivo, note
+FROM preventivi
+ORDER BY id DESC
+LIMIT 20;
+
+Righe preventivo
+SELECT pr.id, p.codice_interno, p.nome, pr.descrizione, pr.quantita, pr.prezzo_unitario, pr.totale_riga
+FROM preventivi_righe pr
+LEFT JOIN prodotti p ON p.id = pr.prodotto_id
+WHERE pr.preventivo_id = ?;
+
+Giacenza prodotto da movimenti
+SELECT p.id, p.codice_interno, p.nome,
+       COALESCE(SUM(CASE
+         WHEN mm.tipo IN ('carico','reso','rettifica') THEN mm.quantita
+         WHEN mm.tipo = 'scarico' THEN -mm.quantita
+         ELSE 0
+       END), 0) AS giacenza
+FROM prodotti p
+LEFT JOIN magazzino_movimenti mm ON mm.prodotto_id = p.id
+WHERE p.id = ?
+GROUP BY p.id, p.codice_interno, p.nome;
+
+Ordini da preventivo
+SELECT id, codice_ordine, tipo, stato, preventivo_id, totale, data_ordine
+FROM ordini
+WHERE preventivo_id = ?;
+
+Ultimi errori applicativi
+SELECT id, livello, origine, route, metodo, status_code, messaggio, creato_il
+FROM system_log
+ORDER BY id DESC
+LIMIT 50;
+
+Ultime chiamate AI
+SELECT id, provider, modello, operazione, token_input, token_output, token_totali, costo_stimato, stato, errore, creato_il
+FROM ai_usage_log
+ORDER BY id DESC
+LIMIT 50;
+
+Integrita DB
+PRAGMA integrity_check;
+PRAGMA quick_check;
+
+10. Comandi node/sqlite utili gia usati
+
+Aprire DB in sola lettura nel container
+const { DatabaseSync } = require('node:sqlite');
+const db = new DatabaseSync('/app/horygon.db', { readOnly: true });
+
+Esempio rapido
+docker compose exec horygon-crm node -e "const { DatabaseSync } = require('node:sqlite'); const db = new DatabaseSync('/app/horygon.db', { readOnly: true }); console.log(db.prepare(\"SELECT id, request_uuid, status FROM parts_requests ORDER BY id DESC LIMIT 10\").all());"
+
+Copia DB e check integrita nel container
+docker compose exec horygon-crm sh -lc "cp /app/horygon.db /tmp/horygon-check.db && node -e \"const { DatabaseSync } = require('node:sqlite'); const db = new DatabaseSync('/tmp/horygon-check.db', { readOnly: true }); console.log(db.prepare('PRAGMA integrity_check').all()); console.log(db.prepare('PRAGMA quick_check').all());\""
+
+11. Stato lavori ricambi/chat al 2026-06-30
+
+Completato
+- Webhook WhatsApp verificato
+- Webhook Telegram attivo
+- RTWS cristalli funzionante via targa
+- Varianti RTWS mostrate e selezionabili
+- Creazione articolo automatica da richiesta
+- Creazione preventivo automatica
+- PDF preventivo + link pubblico
+- Invio outbound WhatsApp/Telegram
+- Timeout chiusura richiesta
+- Vision inbound da immagini implementata
+
+Da rifinire
+- Preview immagini vera nel frontend chat CRM
+- Migliore fallback OCR/vision e domande contestuali per ricambi non cristalli
+- Gestione futura servizi RTWS aggiuntivi
+- Possibile preventivo con quantita richiesta dal cliente
+- Possibile follow-up automatico post inattivita
+
+12. Note operative per domani
+
+- Se una foto non viene capita, controllare prima `parts_request_events`
+- Se compare `media_ai_skipped`, il motivo e nel payload
+- Se compare `media_ai_analysis` ma gli slot restano vuoti, il problema e nel merge dati
+- Se la chat riusa un contesto sbagliato, verificare lo stato della richiesta precedente
+- Se il PDF non parte su WhatsApp, controllare `whatsapp_messages.delivery_status` e `error_message`
+- Se Telegram/WhatsApp non rispondono ma il CRM si aggiorna, guardare l’outbound in `whatsapp_messages`
+

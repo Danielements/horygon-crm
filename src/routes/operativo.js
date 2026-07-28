@@ -4,6 +4,7 @@ const db = require('../db/database');
 const { authMiddleware, requirePermesso } = require('../middleware/auth');
 const { createEvent, updateEvent, deleteEvent, processMepaAutomation, notifyUsersWithEmail, emailCustomerIfEnabled, sendMail, getSetting } = require('../services/google');
 const { writeSystemLog } = require('../services/system-log');
+const { createDdtPdfBuffer } = require('../services/document-pdf');
 const QRCode = require('qrcode');
 const PDFDocument = require('pdfkit');
 
@@ -309,194 +310,15 @@ router.post('/ordini/:id/convert-to-ddt', (req, res) => {
   }
 });
 
-router.get('/ddt/:id/pdf', (req, res) => {
-  const d = db.prepare(`SELECT d.*,
-      dest.ragione_sociale as destinatario_nome,
-      dest.indirizzo as destinatario_indirizzo,
-      dest.cap as destinatario_cap,
-      dest.citta as destinatario_citta,
-      dest.provincia as destinatario_provincia,
-      dest.email as destinatario_email,
-      dest.telefono as destinatario_telefono,
-      mitt.ragione_sociale as mittente_nome,
-      mitt.indirizzo as mittente_indirizzo,
-      mitt.cap as mittente_cap,
-      mitt.citta as mittente_citta,
-      mitt.provincia as mittente_provincia,
-      f.numero as fattura_numero
-    FROM ddt d
-    LEFT JOIN anagrafiche dest ON dest.id = d.destinatario_id
-    LEFT JOIN anagrafiche mitt ON mitt.id = d.mittente_id
-    LEFT JOIN fatture f ON f.id = d.fattura_id
-    WHERE d.id = ?`).get(req.params.id);
-  if (!d) return res.status(404).json({ error: 'Non trovato' });
-  const righe = db.prepare(`SELECT r.*, p.codice_interno, p.nome FROM ddt_righe r
-    JOIN prodotti p ON p.id = r.prodotto_id WHERE r.ddt_id = ?`).all(req.params.id);
-
-  const doc = new PDFDocument({ size: 'A4', margin: 40 });
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `inline; filename=ddt-${d.numero_ddt || d.id}.pdf`);
-  doc.pipe(res);
-  const colors = {
-    ink: '#1f2937',
-    muted: '#6b7280',
-    border: '#cbd5e1',
-    soft: '#eef2ff',
-    line: '#e5e7eb'
-  };
-  const startX = 40;
-  const pageWidth = doc.page.width - 80;
-  const contentRight = startX + pageWidth;
-  const logoSize = 50;
-  const companyBlockX = 112;
-
-  const formatAddress = (name, address, cap, city, province) => {
-    const line2 = [cap, city, province ? `(${province})` : ''].filter(Boolean).join(' ').trim();
-    return [name, address, line2].filter(Boolean).join('\n') || '-';
-  };
-
-  const infoBox = (x, y, w, h, title, body, opts = {}) => {
-    const titleColor = opts.titleColor || DDT_COLOR;
-    const fill = opts.fill || '#ffffff';
-    doc.roundedRect(x, y, w, h, 8).fillAndStroke(fill, colors.border);
-    doc.fillColor(titleColor).fontSize(8).font('Helvetica-Bold').text(String(title).toUpperCase(), x + 10, y + 8);
-    doc.fillColor(colors.ink).fontSize(10).font('Helvetica').text(body || '-', x + 10, y + 23, {
-      width: w - 20,
-      height: h - 28
-    });
-  };
-
-  const drawHeader = () => {
-    doc.roundedRect(startX, 36, pageWidth, 102, 12).fillAndStroke('#ffffff', colors.border);
-    doc.save();
-    doc.translate(startX + 16, 50);
-    doc.scale(logoSize / 220);
-    doc.path(DDT_LOGO_PATH_DATA).fill(DDT_COLOR);
-    doc.restore();
-    doc.fillColor(DDT_COLOR).font('Helvetica-Bold').fontSize(18).text(COMPANY_INFO.name, companyBlockX, 48);
-    doc.font('Helvetica').fontSize(9).fillColor(colors.ink)
-      .text(COMPANY_INFO.addressLine1, companyBlockX, 72)
-      .text(COMPANY_INFO.addressLine2, companyBlockX, 84)
-      .text(`Email ${COMPANY_INFO.email}  |  ${COMPANY_INFO.website}`, companyBlockX, 96)
-      .text(`PEC ${COMPANY_INFO.pec}`, companyBlockX, 108);
-
-    doc.roundedRect(contentRight - 188, 48, 172, 78, 10).fillAndStroke(colors.soft, colors.border);
-    doc.fillColor(DDT_COLOR).font('Helvetica-Bold').fontSize(22).text('DDT', contentRight - 172, 60, { width: 120, align: 'left' });
-    doc.fontSize(9).fillColor(colors.ink).font('Helvetica')
-      .text(`Numero: ${d.numero_ddt || '-'}`, contentRight - 172, 90, { width: 150 })
-      .text(`Data: ${d.data || '-'}`, contentRight - 172, 104, { width: 150 });
-  };
-
-  const drawFooter = () => {
-    doc.moveTo(startX, 786).lineTo(contentRight, 786).stroke(colors.line);
-    doc.font('Helvetica').fontSize(8).fillColor(colors.muted)
-      .text(`REA ${COMPANY_INFO.rea}  |  P.IVA ${COMPANY_INFO.piva}`, startX, 792, { width: 260 })
-      .text(`${COMPANY_INFO.website}  |  ${COMPANY_INFO.email}`, contentRight - 200, 792, { width: 200, align: 'right' });
-  };
-
-  drawHeader();
-  drawFooter();
-
-  let y = 156;
-  infoBox(startX, y, 250, 76, 'Mittente', formatAddress(
-    d.mittente_nome || COMPANY_INFO.name,
-    d.mittente_indirizzo || COMPANY_INFO.addressLine1,
-    d.mittente_cap || '04100',
-    d.mittente_citta || 'Latina',
-    d.mittente_provincia || 'LT'
-  ));
-  infoBox(305, y, 250, 76, 'Destinatario', formatAddress(
-    d.destinatario_nome,
-    d.indirizzo_consegna || d.destinatario_indirizzo,
-    d.destinatario_cap,
-    d.destinatario_citta,
-    d.destinatario_provincia
-  ));
-
-  y += 90;
-  infoBox(40, y, 118, 54, 'Causale', d.causale || (d.tipo === 'entrata' ? 'Reso / entrata merce' : 'Vendita'));
-  infoBox(168, y, 86, 54, 'Porto', d.porto || '-');
-  infoBox(264, y, 86, 54, 'Resa', d.resa || '-');
-  infoBox(360, y, 90, 54, 'Colli', d.colli || '-');
-  infoBox(460, y, 95, 54, 'Peso', d.peso_totale ? `${d.peso_totale} kg` : '-');
-
-  y += 66;
-  infoBox(40, y, 165, 54, 'Aspetto beni', d.aspetto_beni || '-');
-  infoBox(215, y, 165, 54, 'Fattura', d.fattura_numero || '-');
-  infoBox(390, y, 165, 54, 'Trasporto a cura di', d.vettore || d.corriere || '-');
-
-  y += 66;
-  const trasportoText = [
-    d.corriere ? `Corriere: ${d.corriere}` : '',
-    d.numero_spedizione ? `Spedizione n. ${d.numero_spedizione}` : '',
-    d.data_ora_trasporto ? `Data/ora trasporto: ${d.data_ora_trasporto}` : ''
-  ].filter(Boolean).join('  |  ');
-  infoBox(40, y, 515, 54, 'Annotazioni trasporto', trasportoText || 'Nessuna annotazione di trasporto');
-
-  y += 78;
-  doc.font('Helvetica-Bold').fontSize(11).fillColor(colors.ink).text('Dettaglio beni trasportati', startX, y);
-  y += 18;
-  doc.roundedRect(startX, y, 515, 22, 6).fill(DDT_COLOR);
-  doc.fillColor('#ffffff').fontSize(8).font('Helvetica-Bold')
-    .text('Codice', 48, y + 7, { width: 72 })
-    .text('Descrizione', 126, y + 7, { width: 258 })
-    .text('Lotto', 390, y + 7, { width: 86 })
-    .text('Q.tà', 500, y + 7, { width: 35, align: 'right' });
-  y += 24;
-
-  const drawRowsHeader = () => {
-    doc.roundedRect(startX, y, 515, 22, 6).fill(DDT_COLOR);
-    doc.fillColor('#ffffff').fontSize(8).font('Helvetica-Bold')
-      .text('Codice', 48, y + 7, { width: 72 })
-      .text('Descrizione', 126, y + 7, { width: 258 })
-      .text('Lotto', 390, y + 7, { width: 86 })
-      .text('Q.tà', 500, y + 7, { width: 35, align: 'right' });
-    y += 24;
-  };
-
-  righe.forEach((r, idx) => {
-    if (y > 710) {
-      doc.addPage();
-      drawHeader();
-      drawFooter();
-      y = 72;
-      drawRowsHeader();
-    }
-    const rowFill = idx % 2 === 0 ? '#ffffff' : '#f8fafc';
-    doc.roundedRect(startX, y, 515, 24, 4).fillAndStroke(rowFill, colors.line);
-    doc.fillColor(colors.ink).font('Helvetica').fontSize(8)
-      .text(r.codice_interno || '-', 48, y + 7, { width: 70 })
-      .text(r.nome || '-', 126, y + 7, { width: 255 })
-      .text(r.lotto || '-', 390, y + 7, { width: 84 })
-      .text(String(r.quantita || '-'), 500, y + 7, { width: 35, align: 'right' });
-    y += 26;
-  });
-
-  if (!righe.length) {
-    doc.roundedRect(startX, y, 515, 24, 4).fillAndStroke('#ffffff', colors.line);
-    doc.fillColor(colors.muted).font('Helvetica').fontSize(8).text('Nessun articolo indicato', 48, y + 7);
-    y += 26;
+router.get('/ddt/:id/pdf', requirePermesso('ddt', 'read'), async (req, res) => {
+  try {
+    const pdf = await createDdtPdfBuffer(req.params.id);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename=${pdf.filename}`);
+    res.end(pdf.buffer);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
   }
-
-  y += 12;
-  if (d.note || d.note_spedizione) {
-    const notes = [d.note, d.note_spedizione ? `Note spedizione: ${d.note_spedizione}` : ''].filter(Boolean).join('\n');
-    const notesHeight = Math.max(58, Math.min(100, doc.heightOfString(notes, { width: 495 }) + 26));
-    infoBox(40, y, 515, notesHeight, 'Note', notes);
-    y += notesHeight + 18;
-  }
-
-  if (y > 700) {
-    doc.addPage();
-    drawHeader();
-    drawFooter();
-    y = 640;
-  }
-
-  doc.font('Helvetica').fontSize(9).fillColor(colors.ink)
-    .text('Firma del vettore ________________________________', 40, 748)
-    .text('Firma del destinatario ________________________________', 290, 748);
-  doc.end();
 });
 
 // ═══════════════════════════════

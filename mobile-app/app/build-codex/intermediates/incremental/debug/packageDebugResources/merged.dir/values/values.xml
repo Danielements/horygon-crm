@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="horygon_primary">#0F4C5C</color>
+    <color name="horygon_primary_dark">#0A313B</color>
+    <color name="horygon_secondary">#E36414</color>
+    <color name="horygon_surface">#F5F1EA</color>
+    <color name="horygon_surface_dark">#101A1D</color>
+    <color name="horygon_text_dark">#102027</color>
+    <color name="horygon_text_light">#F8FAFB</color>
+    <color name="white">#FFFFFFFF</color>
+    <string name="app_name">Horygon CRM Tablet</string>
+    <style name="Theme.MyApplication" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

@@ -98,8 +98,8 @@ router.use(authMiddleware);
 
 // Lista ordini
 router.get('/', (req, res) => {
-  const { tipo, stato, anagrafica_id } = req.query;
-  let sql = `SELECT o.*, a.ragione_sociale,
+  const { tipo, stato, anagrafica_id, mine } = req.query;
+  let sql = `SELECT o.*, a.ragione_sociale, cu.nome AS created_by_user_name,
     (
       SELECT COUNT(*)
       FROM audit_log l
@@ -111,12 +111,31 @@ router.get('/', (req, res) => {
       WHERE l.entita_tipo = 'ordine' AND l.entita_id = o.id AND l.azione = 'documento_inviato'
     ) AS last_sent_at
     FROM ordini o
-    LEFT JOIN anagrafiche a ON a.id = o.anagrafica_id WHERE 1=1`;
+    LEFT JOIN anagrafiche a ON a.id = o.anagrafica_id
+    LEFT JOIN utenti cu ON cu.id = o.created_by_user_id
+    WHERE 1=1`;
   const params = [];
   if (tipo) { sql += ' AND o.tipo = ?'; params.push(tipo); }
   if (stato) { sql += ' AND o.stato = ?'; params.push(stato); }
   if (anagrafica_id) { sql += ' AND o.anagrafica_id = ?'; params.push(anagrafica_id); }
+  if (String(mine) === '1') { sql += ' AND o.created_by_user_id = ?'; params.push(req.user.id); }
   res.json(db.prepare(sql + ' ORDER BY o.creato_il DESC').all(...params));
+});
+
+router.get('/mine', (req, res) => {
+  const { tipo, stato } = req.query;
+  let sql = `
+    SELECT o.*, a.ragione_sociale, cu.nome AS created_by_user_name
+    FROM ordini o
+    LEFT JOIN anagrafiche a ON a.id = o.anagrafica_id
+    LEFT JOIN utenti cu ON cu.id = o.created_by_user_id
+    WHERE o.created_by_user_id = ?
+  `;
+  const params = [req.user.id];
+  if (tipo) { sql += ' AND o.tipo = ?'; params.push(tipo); }
+  if (stato) { sql += ' AND o.stato = ?'; params.push(stato); }
+  sql += ' ORDER BY COALESCE(o.data_ordine, o.creato_il) DESC, o.id DESC';
+  res.json(db.prepare(sql).all(...params));
 });
 
 // Singolo ordine
@@ -148,11 +167,14 @@ router.post('/', requirePermesso('ordini', 'edit'), (req, res) => {
     const cleanRighe = normalizeOrdineRighe(b.righe);
     db.exec('BEGIN');
     const r = db.prepare(`
-      INSERT INTO ordini (codice_ordine,tipo,anagrafica_id,canale,data_ordine,data_consegna_prevista,imponibile,iva,totale,note,numero_spedizione,corriere,preventivo_id)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO ordini (
+        codice_ordine,tipo,anagrafica_id,canale,data_ordine,data_consegna_prevista,
+        imponibile,iva,totale,note,numero_spedizione,corriere,preventivo_id,created_by_user_id
+      )
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(s(b.codice_ordine), s(b.tipo), i(b.anagrafica_id), s(b.canale),
            s(b.data_ordine), s(b.data_consegna_prevista), n(b.imponibile) || 0, n(b.iva) || 0, n(b.totale), s(b.note),
-           s(b.numero_spedizione), s(b.corriere), i(b.preventivo_id));
+           s(b.numero_spedizione), s(b.corriere), i(b.preventivo_id), req.user.id);
     const id = Number(r.lastInsertRowid);
     if (cleanRighe.length) {
       const ins = db.prepare('INSERT INTO ordini_righe (ordine_id,prodotto_id,quantita,prezzo_unitario,sconto) VALUES (?,?,?,?,?)');
