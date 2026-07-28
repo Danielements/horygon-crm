@@ -1,0 +1,20 @@
+R_DEF: Internal format may change without notice
+local
+color black
+color horygon_primary
+color horygon_primary_dark
+color horygon_secondary
+color horygon_surface
+color horygon_surface_dark
+color horygon_text_dark
+color horygon_text_light
+color white
+drawable ic_launcher_background
+drawable ic_launcher_foreground
+mipmap ic_launcher
+mipmap ic_launcher_round
+string app_name
+style Theme.MyApplication
+xml backup_rules
+xml data_extraction_rules
+xml file_paths

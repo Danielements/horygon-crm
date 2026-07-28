@@ -384,9 +384,15 @@ async function createDdtPdfBuffer(id) {
       dest.citta as destinatario_citta,
       dest.provincia as destinatario_provincia,
       dest.email as destinatario_email,
+      mitt.ragione_sociale as mittente_nome,
+      mitt.indirizzo as mittente_indirizzo,
+      mitt.cap as mittente_cap,
+      mitt.citta as mittente_citta,
+      mitt.provincia as mittente_provincia,
       f.numero as fattura_numero
     FROM ddt d
     LEFT JOIN anagrafiche dest ON dest.id = d.destinatario_id
+    LEFT JOIN anagrafiche mitt ON mitt.id = d.mittente_id
     LEFT JOIN fatture f ON f.id = d.fattura_id
     WHERE d.id = ?
   `).get(id);
@@ -402,20 +408,31 @@ async function createDdtPdfBuffer(id) {
   const doc = new PDFDocument({ size: 'A4', margin: 40, bufferPages: true });
   const done = bufferFromDoc(doc);
   const theme = DOC_THEMES.ddt;
-  const frame = drawCommonFrame(doc, theme, [
+  const headerLines = [
     `Numero: ${row.numero_ddt || row.id}`,
     `Data: ${row.data || '-'}`,
     `Tipo: ${row.tipo || '-'}`
-  ]);
+  ];
+  const frame = drawCommonFrame(doc, theme, headerLines);
   const { colors, startX } = frame;
+  const notesText = [
+    row.vettore ? `Vettore: ${row.vettore}` : '',
+    row.corriere ? `Corriere: ${row.corriere}` : '',
+    row.numero_spedizione ? `Tracking: ${row.numero_spedizione}` : '',
+    row.data_ora_trasporto ? `Data/ora trasporto: ${row.data_ora_trasporto}` : '',
+    row.aspetto_beni ? `Aspetto beni: ${row.aspetto_beni}` : '',
+    row.fattura_numero ? `Fattura collegata: ${row.fattura_numero}` : '',
+    row.note_spedizione ? `Note spedizione: ${row.note_spedizione}` : '',
+    row.note ? `Note: ${row.note}` : ''
+  ].filter(Boolean).join('\n') || 'Nessuna annotazione';
 
   let y = 156;
   drawInfoBox(doc, colors, theme.accent, startX, y, 250, 76, 'Mittente', formatAddress(
-    COMPANY_INFO.name,
-    COMPANY_INFO.addressLine1,
-    '04100',
-    'Latina',
-    'LT'
+    row.mittente_nome || COMPANY_INFO.name,
+    row.mittente_indirizzo || COMPANY_INFO.addressLine1,
+    row.mittente_cap || '04100',
+    row.mittente_citta || 'Latina',
+    row.mittente_provincia || 'LT'
   ));
   drawInfoBox(doc, colors, theme.accent, 305, y, 250, 76, 'Destinatario', formatAddress(
     row.destinatario_nome,
@@ -437,12 +454,25 @@ async function createDdtPdfBuffer(id) {
     ...frame,
     y,
     title: 'Beni trasportati',
-    headerLines: [
-      `Numero: ${row.numero_ddt || row.id}`,
-      `Data: ${row.data || '-'}`,
-      `Tipo: ${row.tipo || '-'}`
-    ],
+    continuationY: 156,
+    headerLines,
     rows: righe,
+    rowHeight: (r) => {
+      doc.font('Helvetica').fontSize(8.3);
+      const descriptionHeight = doc.heightOfString(r.nome || '-', { width: 280 });
+      const lottoHeight = doc.heightOfString(r.lotto || '-', { width: 70 });
+      return Math.max(26, 14 + Math.max(descriptionHeight, lottoHeight));
+    },
+    drawRow: ({ doc: currentDoc, row: currentRow, y: rowY, startX: tableStartX, colors: tableColors }) => {
+      currentDoc.fillColor(tableColors.ink).font('Helvetica').fontSize(8.3);
+      currentDoc.text(currentRow.codice_interno || '-', tableStartX + 8, rowY + 8, { width: 80 });
+      currentDoc.text(currentRow.nome || '-', tableStartX + 94, rowY + 8, { width: 280 });
+      currentDoc.text(currentRow.lotto || '-', tableStartX + 380, rowY + 8, { width: 70 });
+      currentDoc.text(Number(currentRow.quantita || 0).toFixed(0), tableStartX + 456, rowY + 8, {
+        width: 51,
+        align: 'right'
+      });
+    },
     columns: [
       { label: 'Codice', x: 8, width: 80, value: (r) => r.codice_interno || '-' },
       { label: 'Descrizione', x: 94, width: 280, value: (r) => r.nome || '-' },
@@ -452,18 +482,10 @@ async function createDdtPdfBuffer(id) {
   });
 
   y += 18;
-  y = ensureDocumentSpace(doc, theme, [
-    `Numero: ${row.numero_ddt || row.id}`,
-    `Data: ${row.data || '-'}`,
-    `Tipo: ${row.tipo || '-'}`
-  ], 78, y);
-  drawInfoBox(doc, colors, theme.accent, 40, y, 515, 72, 'Annotazioni', [
-    row.vettore ? `Vettore: ${row.vettore}` : '',
-    row.corriere ? `Corriere: ${row.corriere}` : '',
-    row.numero_spedizione ? `Tracking: ${row.numero_spedizione}` : '',
-    row.fattura_numero ? `Fattura collegata: ${row.fattura_numero}` : '',
-    row.note ? `Note: ${row.note}` : ''
-  ].filter(Boolean).join('\n') || 'Nessuna annotazione');
+  doc.font('Helvetica').fontSize(10);
+  const notesHeight = Math.max(72, Math.min(160, doc.heightOfString(notesText, { width: 495 }) + 34));
+  y = ensureDocumentSpace(doc, theme, headerLines, notesHeight + 6, y);
+  drawInfoBox(doc, colors, theme.accent, 40, y, 515, notesHeight, 'Annotazioni', notesText);
 
   addPageNumbers(doc);
   doc.end();

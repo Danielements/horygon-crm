@@ -12,9 +12,9 @@ const i = (v) => { const p = parseInt(v, 10); return Number.isFinite(p) ? p : nu
 router.use(authMiddleware);
 
 router.get('/', requirePermesso('ordini', 'read'), (req, res) => {
-  const { stato, anagrafica_id } = req.query;
+  const { stato, anagrafica_id, mine } = req.query;
   let sql = `
-    SELECT p.*, a.ragione_sociale,
+    SELECT p.*, a.ragione_sociale, cu.nome AS created_by_user_name,
       (
         SELECT COUNT(*)
         FROM audit_log l
@@ -27,11 +27,28 @@ router.get('/', requirePermesso('ordini', 'read'), (req, res) => {
       ) AS last_sent_at
     FROM preventivi p
     LEFT JOIN anagrafiche a ON a.id = p.anagrafica_id
+    LEFT JOIN utenti cu ON cu.id = p.created_by_user_id
     WHERE 1=1
   `;
   const params = [];
   if (stato) { sql += ' AND p.stato = ?'; params.push(stato); }
   if (anagrafica_id) { sql += ' AND p.anagrafica_id = ?'; params.push(anagrafica_id); }
+  if (String(mine) === '1') { sql += ' AND p.created_by_user_id = ?'; params.push(req.user.id); }
+  sql += ' ORDER BY COALESCE(p.data_preventivo, p.creato_il) DESC, p.id DESC';
+  res.json(db.prepare(sql).all(...params));
+});
+
+router.get('/mine', requirePermesso('ordini', 'read'), (req, res) => {
+  const { stato } = req.query;
+  let sql = `
+    SELECT p.*, a.ragione_sociale, cu.nome AS created_by_user_name
+    FROM preventivi p
+    LEFT JOIN anagrafiche a ON a.id = p.anagrafica_id
+    LEFT JOIN utenti cu ON cu.id = p.created_by_user_id
+    WHERE p.created_by_user_id = ?
+  `;
+  const params = [req.user.id];
+  if (stato) { sql += ' AND p.stato = ?'; params.push(stato); }
   sql += ' ORDER BY COALESCE(p.data_preventivo, p.creato_il) DESC, p.id DESC';
   res.json(db.prepare(sql).all(...params));
 });
@@ -69,8 +86,11 @@ router.post('/', requirePermesso('ordini', 'edit'), (req, res) => {
   const b = req.body || {};
   try {
     const r = db.prepare(`
-      INSERT INTO preventivi (codice_preventivo, anagrafica_id, stato, data_preventivo, data_scadenza, imponibile, iva, totale, valuta, note)
-      VALUES (?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO preventivi (
+        codice_preventivo, anagrafica_id, stato, data_preventivo, data_scadenza,
+        imponibile, iva, totale, valuta, note, created_by_user_id
+      )
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       s(b.codice_preventivo),
       i(b.anagrafica_id),
@@ -81,7 +101,8 @@ router.post('/', requirePermesso('ordini', 'edit'), (req, res) => {
       n(b.iva),
       n(b.totale),
       s(b.valuta) || 'EUR',
-      s(b.note)
+      s(b.note),
+      req.user.id
     );
     const id = r.lastInsertRowid;
     if (b.righe?.length) {
@@ -218,8 +239,8 @@ router.post('/:id/convert-to-order', requirePermesso('ordini', 'edit'), (req, re
   }
 
   const orderResult = db.prepare(`
-    INSERT INTO ordini (codice_ordine, tipo, anagrafica_id, canale, stato, data_ordine, data_consegna_prevista, imponibile, iva, totale, note, preventivo_id)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+    INSERT INTO ordini (codice_ordine, tipo, anagrafica_id, canale, stato, data_ordine, data_consegna_prevista, imponibile, iva, totale, note, preventivo_id, created_by_user_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     codiceOrdine,
     'vendita',
@@ -232,7 +253,8 @@ router.post('/:id/convert-to-order', requirePermesso('ordini', 'edit'), (req, re
     n(preventivo.iva) || 0,
     n(preventivo.totale) || 0,
     s(preventivo.note),
-    req.params.id
+    req.params.id,
+    i(preventivo.created_by_user_id) || req.user.id
   );
 
   const ordineId = orderResult.lastInsertRowid;

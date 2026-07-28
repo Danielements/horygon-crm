@@ -7,48 +7,8 @@ const { writeAudit } = require('../services/audit');
 
 router.use(authMiddleware);
 
-router.get('/settings', requirePermesso('utenti', 'admin'), (req, res) => {
-  res.json(getAiSettings());
-});
-
-router.put('/settings', requirePermesso('utenti', 'admin'), (req, res) => {
-  const saved = saveAiSettings(req.body || {});
-  writeAudit({ utente_id: req.user.id, azione: 'ai.settings.update', entita_tipo: 'ai', dettagli: { providers: Object.keys(req.body || {}) } });
-  res.json(saved);
-});
-
-router.get('/usage-log', requirePermesso('utenti', 'admin'), (req, res) => {
-  const rows = db.prepare('SELECT * FROM ai_usage_log ORDER BY creato_il DESC LIMIT 500').all();
-  res.json(rows);
-});
-
-router.post('/test', requirePermesso('utenti', 'admin'), (req, res) => {
-  const settings = getAiSettings();
-  const openaiConfigured = !!settings?.openai?.api_key_configured;
-  const claudeConfigured = !!settings?.claude?.api_key_configured;
-  writeAudit({ utente_id: req.user.id, azione: 'ai.test.connection', entita_tipo: 'ai', dettagli: { openaiConfigured, claudeConfigured } });
-  res.json({
-    ok: openaiConfigured || claudeConfigured,
-    message: openaiConfigured || claudeConfigured
-      ? 'Configurazione provider AI presente. Le chiamate operative possono essere abilitate.'
-      : 'Configura un provider AI in Impostazioni > AI'
-  });
-});
-
-router.get('/status', (req, res) => {
-  const settings = getAiSettings();
-  res.json({
-    enabled: !!settings?.openai?.api_key_configured || !!settings?.claude?.api_key_configured,
-    message: (!!settings?.openai?.api_key_configured || !!settings?.claude?.api_key_configured)
-      ? 'Provider AI configurato'
-      : 'Configura un provider AI in Impostazioni > AI'
-  });
-});
-
-router.post('/assist', (req, res) => {
-  const prompt = String(req.body?.prompt || '').trim();
-  if (!prompt) return res.status(400).json({ error: 'Prompt obbligatorio' });
-  const lower = prompt.toLowerCase();
+function buildAssistResult(prompt = '', userId = null) {
+  const lower = String(prompt || '').trim().toLowerCase();
   const settings = getAiSettings();
   const providerEnabled = !!settings?.openai?.api_key_configured || !!settings?.claude?.api_key_configured;
   let result = {
@@ -56,11 +16,11 @@ router.post('/assist', (req, res) => {
     answer: '',
     items: [],
     suggestions: [
-      'Cerca clienti con CAP 04100',
-      'Trova fatture passive scadute',
-      'Mostrami ordini aperti',
+      'Mostrami i miei ordini aperti',
+      'Mostrami i miei preventivi in bozza',
+      'Trova clienti con CAP 04100',
       'Elenca spedizioni in transito',
-      'Trova proforme aperte'
+      'Trova fatture passive scadute'
     ]
   };
 
@@ -76,6 +36,28 @@ router.post('/assist', (req, res) => {
     result.answer = rows.length
       ? `Ho trovato ${rows.length} anagrafiche con CAP ${capMatch[1]}.`
       : `Non ho trovato anagrafiche con CAP ${capMatch[1]}.`;
+    result.items = rows;
+  } else if (lower.includes('miei ordini') || lower.includes('i miei ordini')) {
+    const rows = db.prepare(`
+      SELECT o.id, o.codice_ordine, o.tipo, o.stato, o.data_ordine, a.ragione_sociale
+      FROM ordini o
+      LEFT JOIN anagrafiche a ON a.id = o.anagrafica_id
+      WHERE o.created_by_user_id = ?
+      ORDER BY COALESCE(o.data_ordine, o.creato_il) DESC
+      LIMIT 25
+    `).all(userId || -1);
+    result.answer = rows.length ? `Ho trovato ${rows.length} ordini creati da te.` : 'Non risultano ordini creati da te.';
+    result.items = rows;
+  } else if (lower.includes('miei preventivi') || lower.includes('i miei preventivi')) {
+    const rows = db.prepare(`
+      SELECT p.id, p.codice_preventivo, p.stato, p.data_preventivo, p.totale, a.ragione_sociale
+      FROM preventivi p
+      LEFT JOIN anagrafiche a ON a.id = p.anagrafica_id
+      WHERE p.created_by_user_id = ?
+      ORDER BY COALESCE(p.data_preventivo, p.creato_il) DESC
+      LIMIT 25
+    `).all(userId || -1);
+    result.answer = rows.length ? `Ho trovato ${rows.length} preventivi creati da te.` : 'Non risultano preventivi creati da te.';
     result.items = rows;
   } else if (lower.includes('fatture') && lower.includes('passiv') && (lower.includes('scad') || lower.includes('scadenza'))) {
     const rows = db.prepare(`
@@ -125,12 +107,101 @@ router.post('/assist', (req, res) => {
     result.items = rows;
   } else {
     result.answer = providerEnabled
-      ? 'Provider AI configurato. Il prossimo step e collegare i prompt a funzioni CRM e, dove serve, a un modello esterno.'
-      : 'Posso gia aiutarti con ricerche operative nel CRM. Per analisi avanzate e generazione testi, configura OpenAI o Claude in Impostazioni > AI.';
+      ? 'Provider AI configurato. Posso aiutarti con dati CRM, ordini, preventivi e ricerche operative.'
+      : 'Posso aiutarti con ricerche operative nel CRM. Prova con: "mostrami i miei ordini" o "mostrami i miei preventivi".';
   }
 
+  return result;
+}
+
+router.get('/settings', requirePermesso('utenti', 'admin'), (req, res) => {
+  res.json(getAiSettings());
+});
+
+router.put('/settings', requirePermesso('utenti', 'admin'), (req, res) => {
+  const saved = saveAiSettings(req.body || {});
+  writeAudit({ utente_id: req.user.id, azione: 'ai.settings.update', entita_tipo: 'ai', dettagli: { providers: Object.keys(req.body || {}) } });
+  res.json(saved);
+});
+
+router.get('/usage-log', requirePermesso('utenti', 'admin'), (req, res) => {
+  const rows = db.prepare('SELECT * FROM ai_usage_log ORDER BY creato_il DESC LIMIT 500').all();
+  res.json(rows);
+});
+
+router.post('/test', requirePermesso('utenti', 'admin'), (req, res) => {
+  const settings = getAiSettings();
+  const openaiConfigured = !!settings?.openai?.api_key_configured;
+  const claudeConfigured = !!settings?.claude?.api_key_configured;
+  writeAudit({ utente_id: req.user.id, azione: 'ai.test.connection', entita_tipo: 'ai', dettagli: { openaiConfigured, claudeConfigured } });
+  res.json({
+    ok: openaiConfigured || claudeConfigured,
+    message: openaiConfigured || claudeConfigured
+      ? 'Configurazione provider AI presente. Le chiamate operative possono essere abilitate.'
+      : 'Configura un provider AI in Impostazioni > AI'
+  });
+});
+
+router.get('/status', (req, res) => {
+  const settings = getAiSettings();
+  res.json({
+    enabled: !!settings?.openai?.api_key_configured || !!settings?.claude?.api_key_configured,
+    message: (!!settings?.openai?.api_key_configured || !!settings?.claude?.api_key_configured)
+      ? 'Provider AI configurato'
+      : 'Configura un provider AI in Impostazioni > AI'
+  });
+});
+
+router.post('/assist', (req, res) => {
+  const prompt = String(req.body?.prompt || '').trim();
+  if (!prompt) return res.status(400).json({ error: 'Prompt obbligatorio' });
+  const result = buildAssistResult(prompt, req.user.id);
   writeAudit({ utente_id: req.user.id, azione: 'ai.assist', entita_tipo: 'ai', dettagli: { prompt, mode: result.mode, items: result.items.length } });
   res.json(result);
+});
+
+router.get('/chat/messages', (req, res) => {
+  const rows = db.prepare(`
+    SELECT id, role, content, metadata_json, creato_il
+    FROM mobile_chat_messages
+    WHERE utente_id = ?
+    ORDER BY id ASC
+    LIMIT 200
+  `).all(req.user.id);
+  res.json(rows.map((row) => ({
+    ...row,
+    metadata: row.metadata_json ? JSON.parse(row.metadata_json) : null
+  })));
+});
+
+router.post('/chat/messages', (req, res) => {
+  const prompt = String(req.body?.prompt || '').trim();
+  if (!prompt) return res.status(400).json({ error: 'Prompt obbligatorio' });
+  const result = buildAssistResult(prompt, req.user.id);
+  db.prepare(`
+    INSERT INTO mobile_chat_messages (utente_id, role, content, metadata_json)
+    VALUES (?, 'user', ?, NULL)
+  `).run(req.user.id, prompt);
+  const assistantMetadata = JSON.stringify({
+    mode: result.mode,
+    items: result.items,
+    suggestions: result.suggestions
+  });
+  const assistantInsert = db.prepare(`
+    INSERT INTO mobile_chat_messages (utente_id, role, content, metadata_json)
+    VALUES (?, 'assistant', ?, ?)
+  `).run(req.user.id, result.answer, assistantMetadata);
+  writeAudit({ utente_id: req.user.id, azione: 'ai.chat.message', entita_tipo: 'ai', dettagli: { prompt, items: result.items.length } });
+  res.json({
+    id: Number(assistantInsert.lastInsertRowid),
+    role: 'assistant',
+    content: result.answer,
+    metadata: {
+      mode: result.mode,
+      items: result.items,
+      suggestions: result.suggestions
+    }
+  });
 });
 
 module.exports = router;
