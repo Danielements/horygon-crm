@@ -76,6 +76,7 @@ function drawCommonFrame(doc, theme, topRightLines = []) {
   const topRightTextY = 118;
   const topRightGap = 8;
   const topRightTextWidth = labelBoxWidth - 22;
+  const companyTextWidth = Math.max(150, labelBoxX - companyBlockX - 20);
   const topRightLabelWidth = 54;
   const topRightValueX = labelBoxX + 16 + topRightLabelWidth + 8;
   const topRightValueWidth = labelBoxWidth - 24 - topRightLabelWidth - 8;
@@ -108,17 +109,19 @@ function drawCommonFrame(doc, theme, topRightLines = []) {
   doc.path(LOGO_PATH_DATA).fill(theme.accent);
   doc.restore();
 
-  doc.fillColor(theme.accent).font('Helvetica-Bold').fontSize(18).text(COMPANY_INFO.name, companyBlockX, 48);
+  doc.fillColor(theme.accent).font('Helvetica-Bold').fontSize(18).text(COMPANY_INFO.name, companyBlockX, 48, {
+    width: companyTextWidth
+  });
   doc.font('Helvetica').fontSize(9).fillColor(colors.ink)
-    .text(COMPANY_INFO.addressLine1, companyBlockX, 72)
-    .text(COMPANY_INFO.addressLine2, companyBlockX, 84)
-    .text(`Email ${COMPANY_INFO.email}  |  ${COMPANY_INFO.website}`, companyBlockX, 96)
-    .text(`PEC ${COMPANY_INFO.pec}`, companyBlockX, 108);
+    .text(COMPANY_INFO.addressLine1, companyBlockX, 72, { width: companyTextWidth })
+    .text(COMPANY_INFO.addressLine2, companyBlockX, 84, { width: companyTextWidth })
+    .text(`Email ${COMPANY_INFO.email}  |  ${COMPANY_INFO.website}`, companyBlockX, 96, { width: companyTextWidth })
+    .text(`PEC ${COMPANY_INFO.pec}`, companyBlockX, 108, { width: companyTextWidth });
 
   doc.roundedRect(labelBoxX, 48, labelBoxWidth, labelBoxHeight, 10).fillAndStroke(theme.fill, colors.border);
-  doc.fillColor(theme.accent).font('Helvetica-Bold').fontSize(labelFontSize).text(theme.label, labelBoxX + 16, titleY, {
-    width: labelBoxWidth - 24,
-    align: 'left'
+  doc.fillColor(theme.accent).font('Helvetica-Bold').fontSize(labelFontSize).text(theme.label, labelBoxX, titleY, {
+    width: labelBoxWidth,
+    align: 'center'
   });
   doc.fontSize(8.5).fillColor(colors.ink).font('Helvetica');
   let currentTopRightY = topRightTextY;
