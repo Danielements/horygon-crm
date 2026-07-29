@@ -40,6 +40,7 @@ let notificationsPollTimer = null;
 let serviceWorkerRegistrationPromise = null;
 let pushSupport = { configured: false, publicKey: '', activeSubscriptions: 0 };
 let openNotificationsOnBoot = new URLSearchParams(window.location.search).get('openNotifications') === '1';
+let modalZIndexSeed = 101;
 
 // Redirect da Google OAuth
 const urlToken = new URLSearchParams(window.location.search).get('token');
@@ -5069,12 +5070,26 @@ async function openModal(id, context = null) {
   if (id === 'modal-ordine') await prepareOrdineModal(context);
   if (id === 'modal-fattura') await prepareFatturaModal(context);
   ensureModalChrome(id);
-  document.getElementById('overlay').style.display = 'block';
-  document.getElementById(id).style.display = 'block';
+  const overlay = document.getElementById('overlay');
+  const modal = document.getElementById(id);
+  if (!overlay || !modal) return;
+  modalZIndexSeed += 2;
+  overlay.style.display = 'block';
+  overlay.style.zIndex = String(modalZIndexSeed - 1);
+  modal.style.display = 'block';
+  modal.style.zIndex = String(modalZIndexSeed);
 }
 function closeAllModals() {
-  document.getElementById('overlay').style.display = 'none';
-  document.querySelectorAll('.modal').forEach(m => { m.style.display = 'none'; });
+  const overlay = document.getElementById('overlay');
+  if (overlay) {
+    overlay.style.display = 'none';
+    overlay.style.zIndex = '';
+  }
+  document.querySelectorAll('.modal').forEach(m => {
+    m.style.display = 'none';
+    m.style.zIndex = '';
+  });
+  modalZIndexSeed = 101;
 }
 
 function ensureModalChrome(id) {
