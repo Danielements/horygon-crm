@@ -32,6 +32,7 @@ let ordineAnagraficheCache = [];
 let fatturaProdottiCache = [];
 let kitProdottiCache = [];
 let fatturaAnagraficheCache = [];
+let magazzinoProdottiCache = [];
 let recordPickerState = null;
 let documentRecipientOptions = [];
 let FORCE_PASSWORD_CHANGE = false;
@@ -2112,11 +2113,20 @@ async function eliminaCategoriaProdotto(id, nome) {
 // �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
 async function loadMagazzino() {
   const rows = await api('GET', '/prodotti/magazzino/giacenze');
+  magazzinoProdottiCache = rows || [];
   document.getElementById('mag-body').innerHTML = (rows||[]).map(p => `
     <tr><td><code>${p.codice_interno}</code></td><td>${p.nome}</td><td>${p.categoria||'�'}</td>
     <td><strong style="color:${p.giacenza>0?'var(--success)':'var(--danger)'}">${p.giacenza}</strong></td></tr>`).join('');
   const sel = document.getElementById('mov-prodotto');
   sel.innerHTML = '<option value="">Seleziona...</option>' + (rows||[]).map(p => `<option value="${p.id}">${p.codice_interno} � ${p.nome}</option>`).join('');
+}
+
+function openMovimentoProductPicker() {
+  openRecordPicker('prodotti', {
+    rows: magazzinoProdottiCache,
+    targetId: 'mov-prodotto',
+    labelId: 'mov-prodotto-label'
+  });
 }
 
 async function salvaMovimento() {
@@ -2158,7 +2168,7 @@ async function openRecordPicker(entity, options = {}) {
   if (search) search.value = '';
   if (head) {
     head.innerHTML = entity === 'prodotti'
-      ? '<th>Codice</th><th>Nome</th><th>Categoria</th><th></th>'
+      ? '<th>Codice</th><th>Nome</th><th>Categoria</th><th>Giacenza</th><th></th>'
       : entity === 'preventivo-items'
         ? '<th>Codice</th><th>Nome</th><th>Tipo</th><th></th>'
       : entity === 'kits'
@@ -2186,6 +2196,7 @@ function renderRecordPickerRows(rows = []) {
         <td>${escapeHtml(row.codice_interno || '-')}</td>
         <td>${escapeHtml(row.nome || '-')}</td>
         <td>${escapeHtml(row.categoria || row.categoria_nome || '-')}</td>
+        <td><strong style="color:${Number(row.giacenza || 0) > 0 ? 'var(--success)' : 'var(--danger)'}">${escapeHtml(String(row.giacenza ?? 0))}</strong></td>
         <td><button type="button" class="btn btn-outline btn-sm" onclick="selectRecordPicker(${row.id})">Seleziona</button></td>
       </tr>`
     : recordPickerState.entity === 'preventivo-items'
@@ -2215,7 +2226,7 @@ function renderRecordPickerRows(rows = []) {
         <td>${escapeHtml(row.piva || '-')}</td>
         <td><button type="button" class="btn btn-outline btn-sm" onclick="selectRecordPicker(${row.id})">Seleziona</button></td>
       </tr>`
-  ).join('') || `<tr><td colspan="4" style="color:var(--text-muted)">${escapeHtml(recordPickerState.options?.emptyMessage || 'Nessun record trovato.')}</td></tr>`;
+  ).join('') || `<tr><td colspan="${recordPickerState.entity === 'prodotti' ? 5 : 4}" style="color:var(--text-muted)">${escapeHtml(recordPickerState.options?.emptyMessage || 'Nessun record trovato.')}</td></tr>`;
 }
 
 function selectRecordPicker(id) {
@@ -2258,6 +2269,47 @@ function calcolaTotaleRiga({ quantita, prezzo_unitario, sconto = 0, aliquota_iva
 
 function getPublicProductUrl(productId) {
   return productId ? `${window.location.origin}/prodotto/${productId}` : '';
+}
+
+function getRequestedDocumentoQuantity(row, prefix) {
+  return parseFloat(row.querySelector(`.${prefix}-quantita`)?.value || 0) || 0;
+}
+
+function resolveDocumentoQuantityForProduct(product, requestedQty = 1) {
+  const availableQty = Number(product?.giacenza || 0) || 0;
+  const fallbackQty = requestedQty > 0 ? requestedQty : 1;
+  if (availableQty > 0 && fallbackQty <= availableQty) return fallbackQty;
+  const productLabel = product?.nome || product?.codice_interno || 'questo prodotto';
+  const message = availableQty <= 0
+    ? `Il prodotto "${productLabel}" non risulta disponibile in magazzino.\nInserisci la quantita desiderata:`
+    : `Disponibilita insufficiente per "${productLabel}".\nDisponibili: ${availableQty}\nInserisci la quantita desiderata:`;
+  const prompted = window.prompt(message, String(fallbackQty));
+  if (prompted === null) return fallbackQty;
+  const parsed = parseFloat(String(prompted).replace(',', '.'));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackQty;
+}
+
+function applyProductSelectionToDocumentoRow(row, prefix, product) {
+  if (!row || !product) return;
+  const hidden = row.querySelector(`.${prefix}-prodotto`);
+  const label = row.querySelector(`.${prefix}-prodotto-label`);
+  if (hidden) hidden.value = product.id;
+  if (label) label.value = getRecordLabel('prodotti', product);
+  const desc = row.querySelector(`.${prefix}-descrizione`);
+  if (desc && !desc.value) desc.value = product.nome || product.descrizione || '';
+  const quantityInput = row.querySelector(`.${prefix}-quantita`);
+  if ((prefix === 'prev' || prefix === 'ord') && quantityInput) {
+    quantityInput.value = String(resolveDocumentoQuantityForProduct(product, getRequestedDocumentoQuantity(row, prefix) || 1));
+  }
+  const publicLink = row.querySelector(`.${prefix}-public-link`);
+  if (publicLink) {
+    publicLink.href = getPublicProductUrl(product.id);
+    publicLink.textContent = 'Apri scheda prodotto via QR';
+    publicLink.style.opacity = '1';
+    publicLink.style.pointerEvents = 'auto';
+    publicLink.onclick = null;
+  }
+  ricalcolaRigheDocumento(prefix);
 }
 
 function buildDocumentoRigaHtml(prefix, cache, data = {}) {
@@ -2339,18 +2391,7 @@ function openProductPickerForRow(button, prefix) {
     targetId: tempId,
     labelId: tempLabelId,
     onSelect: (product) => {
-      hidden.value = product.id;
-      label.value = getRecordLabel('prodotti', product);
-      const desc = row.querySelector(`.${prefix}-descrizione`);
-      if (desc && !desc.value) desc.value = product.nome || product.descrizione || '';
-      const publicLink = row.querySelector(`.${prefix}-public-link`);
-      if (publicLink) {
-        publicLink.href = getPublicProductUrl(product.id);
-        publicLink.textContent = 'Apri scheda prodotto via QR';
-        publicLink.style.opacity = '1';
-        publicLink.style.pointerEvents = 'auto';
-        publicLink.onclick = null;
-      }
+      applyProductSelectionToDocumentoRow(row, prefix, product);
     }
   });
 }
@@ -2449,10 +2490,11 @@ function addProductToPreventivo(productId) {
   const product = (preventivoProdottiCache || []).find((row) => String(row.id) === String(productId));
   if (!product) return;
   const listino = product.listini?.find((row) => row.canale === 'diretto' || row.canale === 'entrambi') || product.listini?.[0];
+  const quantita = resolveDocumentoQuantityForProduct(product, 1);
   aggiungiRigaPreventivo({
     prodotto_id: product.id,
     descrizione: product.nome || product.descrizione || '',
-    quantita: 1,
+    quantita,
     prezzo_unitario: listino?.prezzo ?? 0,
     sconto: 0,
     aliquota_iva: 22
