@@ -119,6 +119,8 @@ function drawDdtFrame(doc, theme, topRightLines = []) {
   const topRightTextY = 96;
   const topRightGap = 8;
   const companyTextWidth = Math.max(150, labelBoxX - companyBlockX - 20);
+  const companyInfoStartY = 72;
+  const companyLineGap = 2;
   const topRightLabelWidth = 54;
   const topRightValueX = labelBoxX + 16 + topRightLabelWidth + 8;
   const topRightValueWidth = labelBoxWidth - 24 - topRightLabelWidth - 8;
@@ -130,6 +132,13 @@ function drawDdtFrame(doc, theme, topRightLines = []) {
       value: line.slice(separatorIndex + 1).trim()
     };
   });
+  const companyInfoLines = [
+    COMPANY_INFO.addressLine1,
+    COMPANY_INFO.addressLine2,
+    `Email ${COMPANY_INFO.email}`,
+    `Web ${COMPANY_INFO.website}`,
+    `PEC ${COMPANY_INFO.pec}`
+  ];
 
   doc.font('Helvetica').fontSize(8.5).fillColor(colors.ink);
   const topRightHeights = topRightItems.map((item) => {
@@ -139,10 +148,18 @@ function drawDdtFrame(doc, theme, topRightLines = []) {
     });
     return Math.max(10, valueHeight);
   });
+  const companyInfoHeights = companyInfoLines.map((line) => Math.max(10, doc.heightOfString(line, {
+    width: companyTextWidth,
+    lineGap: companyLineGap
+  })));
+  const companyInfoHeight = companyInfoHeights.reduce((sum, height) => sum + height, 0)
+    + (Math.max(0, companyInfoHeights.length - 1) * companyLineGap);
+  const companyBottomY = companyInfoStartY + companyInfoHeight;
   const topRightTextHeight = topRightHeights.reduce((sum, height) => sum + height, 0)
     + (Math.max(0, topRightHeights.length - 1) * topRightGap);
   const labelBoxHeight = Math.max(112, (topRightTextY - 48) + topRightTextHeight + 14);
-  const frameHeight = Math.max(126, labelBoxHeight + 24);
+  const frameHeight = Math.max(126, labelBoxHeight + 24, companyBottomY - 36 + 18);
+  const contentStartY = Math.max(156, 36 + frameHeight + 12);
 
   doc.roundedRect(startX, 36, pageWidth, frameHeight, 12).fillAndStroke('#ffffff', colors.border);
   doc.save();
@@ -154,11 +171,12 @@ function drawDdtFrame(doc, theme, topRightLines = []) {
   doc.fillColor(theme.accent).font('Helvetica-Bold').fontSize(18).text(COMPANY_INFO.name, companyBlockX, 48, {
     width: companyTextWidth
   });
-  doc.font('Helvetica').fontSize(9).fillColor(colors.ink)
-    .text(COMPANY_INFO.addressLine1, companyBlockX, 72, { width: companyTextWidth })
-    .text(COMPANY_INFO.addressLine2, companyBlockX, 84, { width: companyTextWidth })
-    .text(`Email ${COMPANY_INFO.email}  |  ${COMPANY_INFO.website}`, companyBlockX, 96, { width: companyTextWidth })
-    .text(`PEC ${COMPANY_INFO.pec}`, companyBlockX, 108, { width: companyTextWidth });
+  doc.font('Helvetica').fontSize(9).fillColor(colors.ink);
+  let currentCompanyY = companyInfoStartY;
+  companyInfoLines.forEach((line, index) => {
+    doc.text(line, companyBlockX, currentCompanyY, { width: companyTextWidth, lineGap: companyLineGap });
+    currentCompanyY += companyInfoHeights[index] + companyLineGap;
+  });
 
   doc.roundedRect(labelBoxX, 48, labelBoxWidth, labelBoxHeight, 10).fillAndStroke(theme.fill, colors.border);
   doc.fillColor(theme.accent).font('Helvetica-Bold').fontSize(labelFontSize).text(theme.label, labelBoxX + 16, titleY, {
@@ -190,7 +208,7 @@ function drawDdtFrame(doc, theme, topRightLines = []) {
     .text(`REA ${COMPANY_INFO.rea}  |  P.IVA ${COMPANY_INFO.piva}`, startX, 792, { width: 260 })
     .text(`${COMPANY_INFO.website}  |  ${COMPANY_INFO.email}`, contentRight - 200, 792, { width: 200, align: 'right' });
 
-  return { colors, startX, pageWidth, contentRight };
+  return { colors, startX, pageWidth, contentRight, contentStartY };
 }
 
 function drawInfoBox(doc, colors, accent, x, y, w, h, title, body, fill = '#ffffff') {
@@ -509,7 +527,7 @@ async function createDdtPdfBuffer(id) {
     `Tipo: ${row.tipo || '-'}`
   ];
   const frame = drawDdtFrame(doc, theme, headerLines);
-  const { colors, startX } = frame;
+  const { colors, startX, contentStartY } = frame;
   const notesText = [
     row.vettore ? `Vettore: ${row.vettore}` : '',
     row.corriere ? `Corriere: ${row.corriere}` : '',
@@ -521,7 +539,7 @@ async function createDdtPdfBuffer(id) {
     row.note ? `Note: ${row.note}` : ''
   ].filter(Boolean).join('\n') || 'Nessuna annotazione';
 
-  let y = 156;
+  let y = contentStartY;
   drawInfoBox(doc, colors, theme.accent, startX, y, 250, 76, 'Mittente', formatAddress(
     row.mittente_nome || COMPANY_INFO.name,
     row.mittente_indirizzo || COMPANY_INFO.addressLine1,
@@ -549,7 +567,7 @@ async function createDdtPdfBuffer(id) {
     ...frame,
     y,
     title: 'Beni trasportati',
-    continuationY: 156,
+    continuationY: contentStartY,
     drawFrame: drawDdtFrame,
     headerLines,
     rows: righe,
@@ -580,7 +598,7 @@ async function createDdtPdfBuffer(id) {
   y += 18;
   doc.font('Helvetica').fontSize(10);
   const notesHeight = Math.max(72, Math.min(160, doc.heightOfString(notesText, { width: 495 }) + 34));
-  y = ensureDocumentSpace(doc, theme, headerLines, notesHeight + 6, y, 156, { drawFrame: drawDdtFrame });
+  y = ensureDocumentSpace(doc, theme, headerLines, notesHeight + 6, y, contentStartY, { drawFrame: drawDdtFrame });
   drawInfoBox(doc, colors, theme.accent, 40, y, 515, notesHeight, 'Annotazioni', notesText);
 
   addPageNumbers(doc);
