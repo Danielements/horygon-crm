@@ -3,8 +3,10 @@ const { XMLParser } = require('fast-xml-parser');
 
 const NOTIFICATION_MAP = {
   NotificaScarto: 'scarto',
+  RicevutaScarto: 'scarto',
   RicevutaConsegna: 'consegnata',
   NotificaMancataConsegna: 'mancata_consegna',
+  RicevutaImpossibilitaRecapito: 'mancata_consegna',
   NotificaEsito: 'esito',
   NotificaDecorrenzaTermini: 'decorrenza_termini',
   AttestazioneTrasmissioneFattura: 'attestazione_trasmissione',

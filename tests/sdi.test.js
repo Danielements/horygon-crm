@@ -191,6 +191,25 @@ test('notification parser recognizes scarto and extracts metadata', () => {
   assert.equal(parsed.codiceErrore, '00404');
 });
 
+test('notification parser recognizes B2B scarto and mancata consegna variants', () => {
+  const scarto = parseSdiNotificationXml('<RicevutaScarto><IdentificativoSdI>10</IdentificativoSdI><NomeFile>IT03365990591_00001.xml</NomeFile></RicevutaScarto>');
+  assert.equal(scarto.tipoNotifica, 'RicevutaScarto');
+  assert.equal(scarto.statoNormalizzato, 'scarto');
+
+  const impossibilita = parseSdiNotificationXml('<RicevutaImpossibilitaRecapito><IdentificativoSdI>11</IdentificativoSdI><NomeFile>IT03365990591_00002.xml</NomeFile></RicevutaImpossibilitaRecapito>');
+  assert.equal(impossibilita.tipoNotifica, 'RicevutaImpossibilitaRecapito');
+  assert.equal(impossibilita.statoNormalizzato, 'mancata_consegna');
+});
+
+test('progressivo invio stays within SdI limits and differs across invoices', () => {
+  const values = [1, 2, 3, 4, 5, 6].map((id) => buildProgressivoInvio(id));
+  assert.equal(new Set(values).size, values.length);
+  values.forEach((value) => {
+    assert.match(value, /^[A-Z0-9]{1,10}$/);
+    assert.equal(value.length <= 10, true);
+  });
+});
+
 test('inbound notification links to existing flow and updates state', () => {
   const uniqueInvoice = `TST-SDI-${Date.now()}`;
   const uniqueFlowFile = `IT03365990591_TEST_${Date.now()}.xml`;

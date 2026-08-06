@@ -227,8 +227,9 @@ function summarizeVat(lines) {
 }
 
 function buildProgressivoInvio(invoiceId) {
-  const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(2, 12);
-  return `${stamp}${String(invoiceId || 0).padStart(4, '0')}`.slice(0, 10);
+  const timePart = Date.now().toString(36).toUpperCase().slice(-7).padStart(7, '0');
+  const invoicePart = Math.abs(Number(invoiceId) || 0).toString(36).toUpperCase().slice(-3).padStart(3, '0');
+  return `${timePart}${invoicePart}`.slice(0, 10);
 }
 
 function mapDocumentType(value) {
