@@ -9,6 +9,7 @@ const { writeSystemLog } = require('../services/system-log');
 const { generateOutboundXmlForInvoice } = require('../services/sdi-fatturapa');
 const { receiveSdiNotificationXml } = require('../services/sdi-inbound');
 const { importInvoiceXml } = require('../services/fattura-import');
+const { XMLParser } = require('fast-xml-parser');
 
 const ROOT = path.resolve(__dirname, '../../');
 const INBOUND_DIR = path.join(ROOT, 'uploads', 'sdi-inbound');
@@ -39,7 +40,8 @@ router.post('/ws/inbound', xmlTextParser, (req, res) => {
     const rawXml = String(req.body || '').trim();
     if (!rawXml) return res.status(400).json({ error: 'Body XML mancante' });
     const envelope = unwrapInboundEnvelope(rawXml);
-    const payloadXml = envelope.payloadXml;
+    const wrappedPayload = extractWrappedInboundPayload(envelope.payloadXml);
+    const payloadXml = wrappedPayload.payloadXml;
     const envelopeRootElement = detectRootElement(rawXml);
     const rootElement = detectRootElement(payloadXml);
     const rawStorage = persistInboundXml(rawXml, req.headers['x-original-filename'] ? String(req.headers['x-original-filename']) : 'sdi-envelope');
@@ -55,24 +57,30 @@ router.post('/ws/inbound', xmlTextParser, (req, res) => {
         soapVersion: detectSoapVersion(req),
         envelopeRootElement,
         payloadRootElement: rootElement,
+        operationName: wrappedPayload.operationName,
         isSoap: envelope.isSoap,
         requestPath: rawStorage.relativePath
       }
     });
     let result;
     if (isInvoiceRoot(rootElement)) {
-      const storage = persistInboundXml(payloadXml, req.headers['x-original-filename'] ? String(req.headers['x-original-filename']) : 'fattura-ricevuta');
+      const inboundFileName = wrappedPayload.fileName
+        || (req.headers['x-original-filename'] ? String(req.headers['x-original-filename']) : null)
+        || 'fattura-ricevuta';
+      const storage = persistInboundXml(payloadXml, inboundFileName);
       const imported = importInvoiceXml(payloadXml, {
         xmlPath: storage.relativePath,
         source: 'sdi-ws'
       });
       result = {
         kind: 'invoice',
+        operationName: wrappedPayload.operationName,
         importedId: imported.duplicate ? imported.existingId : imported.id,
         duplicate: imported.duplicate,
         storage,
         parsed: imported.parsed,
-        rootElement
+        rootElement,
+        metadataXml: wrappedPayload.metadataXml || null
       };
       writeSystemLog({
         livello: 'info',
@@ -98,6 +106,7 @@ router.post('/ws/inbound', xmlTextParser, (req, res) => {
         });
         result = {
           kind: 'notification',
+          operationName: wrappedPayload.operationName,
           flowId: notification.flowId,
           fatturaId: notification.fatturaId,
           tipoNotifica: notification.parsed.tipoNotifica,
@@ -123,6 +132,7 @@ router.post('/ws/inbound', xmlTextParser, (req, res) => {
         const storage = persistInboundXml(payloadXml, req.headers['x-original-filename'] ? String(req.headers['x-original-filename']) : 'notifica-sdi');
         result = {
           kind: 'notification-unmatched',
+          operationName: wrappedPayload.operationName,
           accepted: true,
           storage,
           rootElement
@@ -304,6 +314,40 @@ function unwrapInboundEnvelope(xml) {
   return { payloadXml: bodyContent, isSoap: true };
 }
 
+function extractWrappedInboundPayload(bodyXml) {
+  const raw = String(bodyXml || '').trim();
+  const parser = new XMLParser({
+    ignoreAttributes: false,
+    attributeNamePrefix: '@_',
+    removeNSPrefix: true,
+    parseTagValue: false,
+    trimValues: true
+  });
+  try {
+    const parsed = parser.parse(raw);
+    const rootKey = Object.keys(parsed || {}).find((key) => key !== '?xml') || '';
+    const rootNode = rootKey ? parsed[rootKey] : null;
+    if (rootKey === 'fileSdIConMetadati' && rootNode && typeof rootNode === 'object') {
+      const fileContent = decodeBase64Xml(rootNode.File);
+      const metadataXml = decodeBase64Xml(rootNode.Metadati);
+      return {
+        operationName: rootKey,
+        fileName: rootNode.NomeFile || null,
+        payloadXml: fileContent || raw,
+        metadataXml: metadataXml || null,
+        metadataFileName: rootNode.NomeFileMetadati || null
+      };
+    }
+  } catch {}
+  return {
+    operationName: detectRootElement(raw),
+    fileName: null,
+    payloadXml: raw,
+    metadataXml: null,
+    metadataFileName: null
+  };
+}
+
 function detectRootElement(xml) {
   const match = String(xml || '').trim().match(/^<\??xml[^>]*>\s*<([\w:-]+)|^<([\w:-]+)/i);
   const root = match ? (match[1] || match[2] || '') : '';
@@ -348,7 +392,7 @@ function respondInboundSuccess(req, res, result) {
   res
     .set('Content-Type', soapVersion === '1.2' ? 'application/soap+xml; charset=utf-8' : 'text/xml; charset=utf-8')
     .status(200)
-    .send(buildSoapAck('OK', result.kind === 'invoice' ? 'Fattura acquisita' : 'Messaggio acquisito', soapVersion));
+    .send(buildSoapAck('OK', result.kind === 'invoice' ? 'Fattura acquisita' : 'Messaggio acquisito', soapVersion, result.operationName));
 }
 
 function respondInboundError(req, res, error) {
@@ -367,19 +411,33 @@ function detectSoapVersion(req) {
   return '1.1';
 }
 
-function buildSoapAck(esito, messaggio, soapVersion = '1.1') {
+function buildSoapAck(esito, messaggio, soapVersion = '1.1', operationName = null) {
   const envelopeNs = soapVersion === '1.2'
     ? 'http://www.w3.org/2003/05/soap-envelope'
     : 'http://schemas.xmlsoap.org/soap/envelope/';
+  const responseTag = operationName === 'fileSdIConMetadati' ? 'fileSdIConMetadatiResponse' : 'RicezioneSdIResponse';
+  const responseNs = operationName === 'fileSdIConMetadati'
+    ? 'http://www.fatturapa.gov.it/sdi/ws/ricezione/v1.0/types'
+    : 'https://crm.horygon.it/ws/sdi';
   return `<?xml version="1.0" encoding="UTF-8"?>
 <soap:Envelope xmlns:soap="${envelopeNs}">
   <soap:Body>
-    <RicezioneSdIResponse xmlns="https://crm.horygon.it/ws/sdi">
+    <${responseTag} xmlns="${responseNs}">
       <esito>${xmlEscape(esito)}</esito>
       <messaggio>${xmlEscape(messaggio || '')}</messaggio>
-    </RicezioneSdIResponse>
+    </${responseTag}>
   </soap:Body>
 </soap:Envelope>`;
+}
+
+function decodeBase64Xml(value) {
+  const clean = String(value || '').trim();
+  if (!clean) return null;
+  try {
+    return Buffer.from(clean, 'base64').toString('utf8').trim();
+  } catch {
+    return null;
+  }
 }
 
 function xmlEscape(value) {
