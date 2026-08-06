@@ -92,7 +92,9 @@ router.get('/:id', (req, res) => {
   const a = db.prepare('SELECT * FROM anagrafiche WHERE id = ?').get(req.params.id);
   if (!a) return res.status(404).json({ error: 'Non trovato' });
   a.contatti = db.prepare('SELECT * FROM anagrafiche_contatti WHERE anagrafica_id = ?').all(req.params.id);
-  if (a.tipo === 'pa') a.pa_dettagli = db.prepare('SELECT * FROM pa_dettagli WHERE anagrafica_id = ?').get(req.params.id);
+  if (a.tipo === 'pa' || a.tipologia_cliente === 'pa') {
+    a.pa_dettagli = db.prepare('SELECT * FROM pa_dettagli WHERE anagrafica_id = ?').get(req.params.id);
+  }
   res.json(a);
 });
 
@@ -117,7 +119,7 @@ router.post('/', requirePermesso('clienti', 'edit'), (req, res) => {
       b.pa_rdo ? 1 : 0
     );
     const id = r.lastInsertRowid;
-    if (b.tipo === 'pa' && b.pa_dettagli) {
+    if ((s(b.tipo) === 'pa' || s(b.tipologia_cliente) === 'pa') && b.pa_dettagli) {
       db.prepare(`INSERT OR IGNORE INTO pa_dettagli (anagrafica_id,codice_ipa,codice_univoco_sdi,categoria_pa,cpv_abituali) VALUES (?,?,?,?,?)`)
         .run(id, s(b.pa_dettagli.codice_ipa), s(b.pa_dettagli.codice_univoco_sdi), s(b.pa_dettagli.categoria_pa), s(b.pa_dettagli.cpv_abituali));
     }
@@ -146,6 +148,23 @@ router.put('/:id', requirePermesso('clienti', 'edit'), (req, res) => {
       b.attivo !== undefined ? i(b.attivo) : 1,
       req.params.id
     );
+    if (s(b.tipologia_cliente) === 'pa' && b.pa_dettagli) {
+      db.prepare(`
+        INSERT INTO pa_dettagli (anagrafica_id,codice_ipa,codice_univoco_sdi,categoria_pa,cpv_abituali)
+        VALUES (?,?,?,?,?)
+        ON CONFLICT(anagrafica_id) DO UPDATE SET
+          codice_ipa=excluded.codice_ipa,
+          codice_univoco_sdi=excluded.codice_univoco_sdi,
+          categoria_pa=COALESCE(excluded.categoria_pa, pa_dettagli.categoria_pa),
+          cpv_abituali=COALESCE(excluded.cpv_abituali, pa_dettagli.cpv_abituali)
+      `).run(
+        req.params.id,
+        s(b.pa_dettagli.codice_ipa),
+        s(b.pa_dettagli.codice_univoco_sdi),
+        s(b.pa_dettagli.categoria_pa),
+        s(b.pa_dettagli.cpv_abituali)
+      );
+    }
     res.json({ ok: true });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });

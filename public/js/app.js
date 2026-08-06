@@ -677,6 +677,7 @@ function ensureAnagraficaLogisticaFields() {
       <label style="display:inline-flex;align-items:center;gap:6px;margin-right:14px"><input type="checkbox" id="anag-pa-mepa"> MEPA</label>
       <label style="display:inline-flex;align-items:center;gap:6px;margin-right:14px"><input type="checkbox" id="anag-pa-sda"> SDA</label>
       <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="anag-pa-rdo"> RdO</label>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:10px">Per la fatturazione elettronica PA valorizza almeno Codice IPA o Codice Univoco Ufficio.</div>
     </div>`;
   note.parentElement.insertAdjacentElement('beforebegin', wrap);
 }
@@ -685,6 +686,10 @@ function toggleAnagraficaPaFields() {
   const tipo = document.getElementById('anag-tipologia-cliente')?.value || 'privato';
   const box = document.getElementById('anag-pa-flags');
   if (box) box.style.display = tipo === 'pa' ? 'block' : 'none';
+  ['anag-codice-ipa', 'anag-codice-univoco-sdi'].forEach(id => {
+    const field = document.getElementById(id);
+    if (field) field.disabled = tipo !== 'pa';
+  });
 }
 
 // �"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"��"�
@@ -1226,7 +1231,7 @@ function openModalAnagrafica(tipo) {
   document.getElementById('anag-id').value = '';
   document.getElementById('anag-tipo').value = tipo;
   document.getElementById('modal-anag-title').textContent = tipo === 'cliente' ? '�x� Cliente' : tipo === 'fornitore' ? '�x�� Fornitore' : '�x�:️ PA';
-  ['ragione','piva','cf','indirizzo','cap','citta','prov','email','tel','lat','lng','note'].forEach(f => {
+  ['ragione','piva','cf','indirizzo','cap','citta','prov','paese','email','pec','tel','codice-destinatario','codice-ipa','codice-univoco-sdi','lat','lng','note'].forEach(f => {
     const el = document.getElementById(`anag-${f}`);
     if (el) el.value = f === 'paese' ? 'IT' : '';
   });
@@ -1277,8 +1282,13 @@ async function editAnagrafica(id) {
   document.getElementById('anag-cap').value = a.cap || '';
   document.getElementById('anag-citta').value = a.citta || '';
   document.getElementById('anag-prov').value = a.provincia || '';
+  document.getElementById('anag-paese').value = a.paese || 'IT';
   document.getElementById('anag-email').value = a.email || '';
+  document.getElementById('anag-pec').value = a.pec || '';
   document.getElementById('anag-tel').value = a.telefono || '';
+  document.getElementById('anag-codice-destinatario').value = a.codice_destinatario || '';
+  document.getElementById('anag-codice-ipa').value = a.pa_dettagli?.codice_ipa || '';
+  document.getElementById('anag-codice-univoco-sdi').value = a.pa_dettagli?.codice_univoco_sdi || '';
   document.getElementById('anag-lat').value = a.lat || '';
   document.getElementById('anag-lng').value = a.lng || '';
   document.getElementById('anag-note').value = a.note || '';
@@ -1305,7 +1315,9 @@ async function salvaAnagrafica() {
     provincia:document.getElementById('anag-prov')?.value   || null,
     paese:    document.getElementById('anag-paese')?.value  || 'IT',
     email:    document.getElementById('anag-email')?.value  || null,
+    pec:      document.getElementById('anag-pec')?.value    || null,
     telefono: document.getElementById('anag-tel')?.value    || null,
+    codice_destinatario: document.getElementById('anag-codice-destinatario')?.value || null,
     lat:      parseFloat(document.getElementById('anag-lat')?.value) || null,
     lng:      parseFloat(document.getElementById('anag-lng')?.value) || null,
     note:     document.getElementById('anag-note')?.value   || null,
@@ -1316,6 +1328,12 @@ async function salvaAnagrafica() {
     canale_cliente: document.getElementById('anag-tipologia-cliente')?.value === 'pa' ? 'mepa' : 'privato',
     attivo: 1,
   };
+  if (body.tipologia_cliente === 'pa') {
+    body.pa_dettagli = {
+      codice_ipa: document.getElementById('anag-codice-ipa')?.value || null,
+      codice_univoco_sdi: document.getElementById('anag-codice-univoco-sdi')?.value || null,
+    };
+  }
   try {
     if (id) await api('PUT', `/anagrafiche/${id}`, body);
     else await api('POST', '/anagrafiche', body);
@@ -2254,8 +2272,7 @@ function selectRecordPicker(id) {
     if (document.getElementById('fatt-cf') && !document.getElementById('fatt-cf').value) document.getElementById('fatt-cf').value = row.cf || '';
   }
   if (typeof onSelect === 'function') onSelect(row);
-  const picker = document.getElementById('modal-record-picker');
-  if (picker) picker.style.display = 'none';
+  closeModal('modal-record-picker');
   recordPickerState = null;
 }
 
@@ -5155,6 +5172,15 @@ async function openModal(id, context = null) {
   modal.style.display = 'block';
   modal.style.zIndex = String(modalZIndexSeed);
 }
+
+function closeModal(id) {
+  const modal = document.getElementById(id);
+  if (!modal) return;
+  modal.style.display = 'none';
+  modal.style.zIndex = '';
+  syncModalOverlay();
+}
+
 function closeAllModals() {
   const overlay = document.getElementById('overlay');
   if (overlay) {
@@ -5166,6 +5192,26 @@ function closeAllModals() {
     m.style.zIndex = '';
   });
   modalZIndexSeed = 101;
+}
+
+function syncModalOverlay() {
+  const overlay = document.getElementById('overlay');
+  if (!overlay) return;
+  const openModals = Array.from(document.querySelectorAll('.modal'))
+    .filter(m => m.style.display === 'block');
+  if (!openModals.length) {
+    overlay.style.display = 'none';
+    overlay.style.zIndex = '';
+    modalZIndexSeed = 101;
+    return;
+  }
+  const highestZIndex = openModals.reduce((max, modal) => {
+    const zIndex = parseInt(modal.style.zIndex || '0', 10);
+    return Number.isFinite(zIndex) ? Math.max(max, zIndex) : max;
+  }, 101);
+  overlay.style.display = 'block';
+  overlay.style.zIndex = String(Math.max(100, highestZIndex - 1));
+  modalZIndexSeed = Math.max(modalZIndexSeed, highestZIndex);
 }
 
 function ensureModalChrome(id) {
