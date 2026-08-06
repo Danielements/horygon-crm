@@ -16,9 +16,9 @@ const RECIPIENTS = [
     tipo: 'cliente',
     ragione_sociale: 'CLIENTE TEST SDI B2C 0000000 SENZA PEC',
     piva: '',
-    cf: 'RSSMRA80A01H501U',
+    cf: '01043931003',
     codice_destinatario: '0000000',
-    note: 'TEST B2C: CodiceDestinatario 0000000 senza PECDestinatario per verificare RicevutaImpossibilitaRecapito.'
+    note: 'TEST B2C/no-channel: CodiceDestinatario 0000000 senza PECDestinatario per verificare RicevutaImpossibilitaRecapito.'
   },
   {
     tipo: 'pa',

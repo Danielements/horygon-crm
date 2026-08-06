@@ -425,6 +425,7 @@ Nota `RicevutaImpossibilitaRecapito`:
 - L'operazione SOAP esterna resta `TrasmissioneFatture/NotificaMancataConsegna`, ma il file interno B2B/B2C puo avere root `RicevutaImpossibilitaRecapito`.
 - Il CRM classifica `NotificaMancataConsegna` come `B2G_MANCATA_CONSEGNA` e `RicevutaImpossibilitaRecapito` come `B2X_IMPOSSIBILITA_RECAPITO`, entrambe con stato `UNDELIVERABLE`.
 - I callback one-way rispondono `HTTP 200` con `Content-Length: 0` e body di zero byte.
+- Un tentativo B2C con codice fiscale fittizio `RSSMRA80A01H501U` e' arrivato correttamente al CRM ma SdI lo ha scartato con `00306 CodiceFiscale non valido`; la seed usa quindi `01043931003` come codice fiscale numerico test senza valorizzare `IdFiscaleIVA`.
 
 ## Comandi operativi VPS
 

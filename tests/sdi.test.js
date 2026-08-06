@@ -178,11 +178,11 @@ test('FPR12 B2C sample validates with 0000000 and no PEC', async () => {
   payload.pecDestinatario = '';
   payload.customer.denomination = 'Cliente Consumatore Test';
   payload.customer.vat = { country: '', code: '' };
-  payload.customer.fiscalCode = 'RSSMRA80A01H501U';
+  payload.customer.fiscalCode = '01043931003';
   const xml = buildOrdinaryInvoiceXml(payload);
   assert.match(xml, /<CodiceDestinatario>0000000<\/CodiceDestinatario>/);
   assert.equal(xml.includes('<PECDestinatario>'), false);
-  assert.match(xml, /<CodiceFiscale>RSSMRA80A01H501U<\/CodiceFiscale>/);
+  assert.match(xml, /<CodiceFiscale>01043931003<\/CodiceFiscale>/);
   const result = await validateInvoiceXml({ xml, format: 'FPR12' });
   assert.equal(result.ok, true, JSON.stringify(result, null, 2));
 });
