@@ -9,13 +9,13 @@ Questo documento raccoglie lo stato operativo dell'integrazione SdI nel CRM HORY
 Gia superati sul portale SdI:
 
 - Ricezione Fattura.
+- Ricevuta Consegna.
 - Notifica Scarto.
+- Notifica di esito da PA.
 
 Ancora da completare:
 
-- Ricevuta Consegna.
 - Notifica Mancata Consegna B2G / Ricevuta Impossibilita Recapito B2B/B2C.
-- Notifica di esito da PA.
 - Notifica di scarto esito a PA.
 - Notifica Decorrenza Termini a PA.
 - Notifica esito a Operatore Economico.
@@ -46,8 +46,34 @@ Componenti gia implementati:
 Ancora da completare:
 
 - Test automatici MTOM inbound reali per tutte le operazioni.
-- Verifica reale sul portale degli step PA con invio `EC01` / `EC02` da fattura passiva FPA12 ricevuta.
+- Verifica reale sul portale degli step PA con invio `EC02` e casi di scarto esito.
+- Scenario di mancata consegna / impossibilita recapito.
 - Decorrenza termini e attestazione, che dipendono dai tempi/stati del simulatore SdI.
+
+## Checkpoint portale 2026-08-06 21:11 CEST
+
+Test obbligatori:
+
+- `Ricezione Fattura`: OK dal `2026-08-06 16:53:05`.
+- `Ricevuta consegna`: OK dal `2026-08-06 21:07:52`.
+- `Notifica mancata consegna (B2G) / Notifica impossibilita recapito (B2B, B2C)`: KO.
+- `Notifica scarto (B2G) / Ricevuta scarto (B2B, B2C)`: OK dal `2026-08-06 18:52:09`.
+
+Ulteriori test FatturaPA:
+
+- `Notifica di esito da PA`: OK dal `2026-08-06 21:11:03`.
+- `Notifica di Scarto esito a PA`: KO.
+- `Notifica Decorrenza Termini a PA`: KO.
+- `Notifica esito a Operatore Economico`: KO.
+- `Notifica Decorrenza Termini a Operatore Economico`: KO.
+- `Attestazione avvenuta trasmissione`: KO.
+
+Flussi reali confermati:
+
+- Fattura PA ricevuta dal simulatore: `IT03365990591_00011.xml`, `IdentificativoSdI 32477881`, importata nel CRM come fattura passiva `id 12`, numero `ESOJKL-00011-1`.
+- Esito committente PA accettato: `IT03365990591_00011_EC_001.xml`, endpoint `https://testservizi.fatturapa.it/ricevi_notifica`, risposta `ES01`, HTTP `200`.
+- Fattura B2B inviata dal CRM: `IT03365990591_8H008.xml`, `IdentificativoSdI 32477911`, risposta `SdIRiceviFile` HTTP `200`.
+- Ricevuta consegna B2B ricevuta: `IT03365990591_8H008_RC_002.xml`, `IdentificativoSdI 32477911`, stato CRM `consegnata`.
 
 ## Ambiente server
 
@@ -168,6 +194,15 @@ Invio TEST riuscito documentato:
 - Identificativo SdI: `32477811`
 - HTTP: `200 OK`
 
+Invio B2B che ha superato la ricevuta consegna:
+
+- File: `IT03365990591_8H008.xml`
+- Identificativo SdI: `32477911`
+- Cliente test: `UMZGLCP`
+- Callback ricevuta: `RicevutaConsegna`
+- File callback: `IT03365990591_8H008_RC_002.xml`
+- Stato CRM: `consegnata`
+
 Errore risolto:
 
 - `Certificato client SDI non trovato: /app/C:\Users\...`
@@ -193,6 +228,42 @@ Correzione:
 
 - Nome file conforme: `IT03365990591_<ProgressivoInvio>.xml`.
 
+Errore risolto:
+
+- `RicevutaScarto` codice `00001`: `Nome file non valido`.
+
+Causa:
+
+- Il nome file usava un progressivo fino a 10 caratteri, ad esempio `IT03365990591_SHUSSCN008.xml`, non accettato dal piano test SdI.
+
+Correzione:
+
+- Il nome file usa ora un progressivo a 5 caratteri alfanumerici, ad esempio `IT03365990591_8H008.xml`.
+
+Errore risolto:
+
+- `RicevutaScarto` codice `00324`: `1.4.1.1 <IdFiscaleIVA> e 1.4.1.2 <CodiceFiscale> non coerenti : 01043931003 - 01043931003`.
+
+Causa:
+
+- Per i destinatari test B2B il CRM valorizzava sia `IdFiscaleIVA` sia `CodiceFiscale` con lo stesso valore numerico fittizio.
+
+Correzione:
+
+- Se il codice fiscale cliente coincide con la partita IVA, viene omesso dal `CessionarioCommittente`. Il `CodiceFiscale` resta valorizzato se e' davvero diverso, ad esempio codice fiscale persona fisica.
+
+Errore risolto:
+
+- `customerVat is not defined` durante `sdi.test-send` / `sdi.test-transmit`.
+
+Causa:
+
+- Variabile calcolata in `loadRecipientProfile` ma usata in `buildInvoicePayload`.
+
+Correzione:
+
+- `customerVat` viene calcolato nello scope locale di `buildInvoicePayload` e coperto da test automatico.
+
 ### Ricezione Notifica Scarto
 
 Funziona:
@@ -211,6 +282,23 @@ Varianti gestite:
 
 Nota: `RicevutaScarto` e' la variante B2B/B2C e ora viene normalizzata come `scarto`.
 
+### Ricezione RicevutaConsegna
+
+Funziona:
+
+- SdI chiama il nostro endpoint con operazione `TrasmissioneFatture/ricevutaConsegna`.
+- Il CRM decodifica il campo `File`.
+- Il CRM collega la ricevuta al flusso in uscita tramite `IdentificativoSdI` / `NomeFile`.
+- Il CRM aggiorna il flusso a `consegnata`.
+- Il CRM risponde `HTTP 200` con body vuoto.
+- Il portale SdI ha marcato "Ricevuta consegna" come OK.
+
+Caso confermato:
+
+- `IdentificativoSdI`: `32477911`
+- Fattura: `IT03365990591_8H008.xml`
+- Ricevuta: `IT03365990591_8H008_RC_002.xml`
+
 ### Progressivo invio
 
 Errore risolto:
@@ -228,33 +316,50 @@ Correzione:
 
 Esempio:
 
-- `IT03365990591_SHSJEJW008.xml`
+- `IT03365990591_8H008.xml`
+
+Nota:
+
+- Il `ProgressivoInvio` nel tracciato XML puo arrivare fino a 10 caratteri.
+- Il progressivo usato nel nome file e' limitato a 5 caratteri alfanumerici per compatibilita con i test SdI.
+
+### Invio NotificaEsitoCommittente a SdI TEST
+
+Funziona:
+
+- Il CRM genera `NotificaEsitoCommittente` con `EC01` o `EC02`.
+- Il CRM usa il servizio `SdIRiceviNotifica/NotificaEsito` su `https://testservizi.fatturapa.it/ricevi_notifica`.
+- Il CRM usa l'`IdentificativoSdI` ricevuto nel wrapper `RicezioneFatture`.
+- Il CRM genera nome file esito nel formato `<NomeFileFattura>_EC_001.xml`.
+- Il CRM interpreta le risposte `ES01`, `ES00`, `ES02`.
+
+Caso confermato:
+
+- Fattura PA ricevuta: `IT03365990591_00011.xml`
+- Identificativo SdI: `32477881`
+- Fattura CRM: `id 12`, numero `ESOJKL-00011-1`
+- Esito inviato: `EC01`
+- File esito: `IT03365990591_00011_EC_001.xml`
+- Risposta SdI: `ES01`
+- HTTP: `200 OK`
+- Portale: `Notifica di esito da PA` OK.
 
 ## Cosa non funziona ancora
 
-Le fatture inviate per i test successivi sono state ricevute da SdI ma scartate.
+Resta da completare il piano test, non il canale base:
 
-Conseguenza:
+- Scenario `NotificaMancataConsegna` / `RicevutaImpossibilitaRecapito`.
+- Scenario `Notifica di Scarto esito a PA`, probabilmente inviando un esito committente non accettabile o duplicato secondo piano test.
+- Scenario `Notifica Decorrenza Termini a PA`.
+- Scenario `Notifica esito a Operatore Economico`.
+- Scenario `Notifica Decorrenza Termini a Operatore Economico`.
+- Scenario `Attestazione avvenuta trasmissione`.
 
-- Non arriva `RicevutaConsegna`.
-- Non arriva `NotificaMancataConsegna` / `RicevutaImpossibilitaRecapito`.
+Attenzione PA outbound:
 
-Motivo:
-
-- Se SdI scarta il file, il flusso si ferma prima del recapito al destinatario.
-- Per ottenere consegna/mancata consegna serve una fattura formalmente e applicativamente valida per quello scenario di test.
-
-Prossimo passo tecnico:
-
-- Leggere codice e descrizione dello scarto dalle notifiche gia salvate.
-- Correggere il tracciato XML o i dati test in base al codice scarto reale.
-
-Comando VPS:
-
-```bash
-cd /opt/horygon-crm
-docker compose exec horygon-crm node scripts/inspect-sdi-notification-errors.js 30
-```
+- Gli invii PA dal CRM senza firma vengono scartati con codice `00102`: `File non integro (firma non valida) : Il file non risulta firmato`.
+- Per i test obbligatori B2B non serve firma.
+- Per completare i test PA outbound potrebbe servire implementare firma XAdES/CAdES o usare scenari del simulatore che non richiedono trasmissione PA firmata dal CRM.
 
 ## Comandi operativi VPS
 
@@ -262,8 +367,9 @@ Aggiornare branch e rebuild:
 
 ```bash
 cd /opt/horygon-crm
-git pull origin codex/sdi-diagnostics
-docker compose up -d --build
+git pull --ff-only origin codex/sdi-diagnostics
+docker compose build horygon-crm
+docker compose up -d horygon-crm
 ```
 
 Popolare anagrafiche test:
@@ -302,6 +408,19 @@ Seguire log Nginx endpoint SdI:
 tail -f /var/log/nginx/sdi_access.log
 tail -f /var/log/nginx/sdi_error.log
 ```
+
+Liberare spazio Docker se la build fallisce con `no space left on device`:
+
+```bash
+df -h
+df -i
+docker system df
+docker builder prune -af
+docker image prune -af
+docker container prune -f
+```
+
+Non eseguire `docker volume prune` senza controllo: potrebbe rimuovere volumi dati.
 
 ## Bottoni UI
 
