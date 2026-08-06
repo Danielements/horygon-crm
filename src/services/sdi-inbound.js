@@ -72,7 +72,13 @@ function receiveSdiNotificationXml(xml, options = {}) {
     soapAction: options.soapAction || null,
     contentType: options.contentType || null,
     isMtom: options.isMtom || false,
-    httpStatus: options.httpStatus || 200
+    httpStatus: options.httpStatus || 200,
+    responseLength: options.responseLength ?? null,
+    contractName: options.contractName || null,
+    flowSide: options.flowSide || null,
+    operationName: options.operationName || null,
+    operationNamespace: options.operationNamespace || null,
+    dispatcherKey: options.dispatcherKey || null
   });
 
   return {

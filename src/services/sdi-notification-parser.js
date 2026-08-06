@@ -39,6 +39,8 @@ function parseSdiNotificationXml(xml, options = {}) {
   const errors = collectErrorEntries(root);
   const deliveryFailure = DELIVERY_FAILURE_ROOTS[rootName] || null;
   const normalizedStatus = deliveryFailure?.normalizedStatus || NOTIFICATION_MAP[rootName] || 'sconosciuto';
+  const esitoCommittente = firstObject(root, ['EsitoCommittente']) || {};
+  const destinatario = firstObject(root, ['Destinatario']) || {};
   return {
     rootElement: rootName,
     namespace: rootInfo.namespace || root?.['@_xmlns'] || root?.['@_xmlns:ns2'] || root?.['@_xmlns:p'] || '',
@@ -54,14 +56,37 @@ function parseSdiNotificationXml(xml, options = {}) {
     dataOraRiferimento: firstValue(root, ['DataOraRicezione', 'DataOraConsegna', 'DataOraMessaggio', 'DataOra', 'Data']),
     dataMessaADisposizione: firstValue(root, ['DataMessaADisposizione']),
     descrizione: firstValue(root, ['Descrizione']),
+    esitoCommittente: firstValue(esitoCommittente, ['Esito']),
+    messageIdCommittente: firstValue(esitoCommittente, ['MessageIdCommittente']),
     messageId: firstValue(root, ['MessageId', 'MessageID']),
     note: firstValue(root, ['Note']),
+    destinatarioCodice: firstValue(destinatario, ['Codice']),
+    destinatarioDescrizione: firstValue(destinatario, ['Descrizione']),
+    hashFileOriginale: firstValue(root, ['HashFileOriginale', 'Hash']),
     codiceErrore: errors[0]?.codice || null,
     descrizioneErrore: errors[0]?.descrizione || null,
     errori: errors,
     originalFilename: options.originalFilename || null,
     xmlSha256: sha256(xml)
   };
+}
+
+function firstObject(node, candidates) {
+  if (node == null) return null;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const nested = firstObject(item, candidates);
+      if (nested) return nested;
+    }
+    return null;
+  }
+  if (typeof node !== 'object') return null;
+  for (const [key, value] of Object.entries(node)) {
+    if (candidates.includes(key) && value && typeof value === 'object') return value;
+    const nested = firstObject(value, candidates);
+    if (nested) return nested;
+  }
+  return null;
 }
 
 function detectXmlRootInfo(xml) {

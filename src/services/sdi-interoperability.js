@@ -27,16 +27,22 @@ function registerOutboundTransmission({ flow, invoice, customer, payloadMeta = {
     callback_atteso: inferExpectedCallback(testName),
     stato_portale: null,
     note: payloadMeta.note || null,
-    payload_meta: JSON.stringify({ payloadMeta, transmission })
+    payload_meta: JSON.stringify({ flowSide: 'outbound', payloadMeta, transmission })
   };
   return existing ? updateRow(existing.id, data) : insertRow(data);
 }
 
-function updateInteroperabilityCallback({ flow, parsed, soapAction, contentType, isMtom, httpStatus = 200 }) {
+function updateInteroperabilityCallback({ flow, parsed, soapAction, contentType, isMtom, httpStatus = 200, responseLength = null, contractName = null, flowSide = null, operationName = null, operationNamespace = null, dispatcherKey = null }) {
   if (!flow && !parsed?.identificativoSdi) return null;
-  const existing = flow?.id ? findByFlow(flow.id) : findBySdi(parsed.identificativoSdi);
+  const side = flowSide || inferFlowSide(contractName);
+  const isDeadline = parsed?.tipoNotifica === 'NotificaDecorrenzaTermini';
+  const base = flow?.id ? findByFlow(flow.id) : findBySdi(parsed.identificativoSdi);
+  const existing = isDeadline
+    ? findByFlowAndSide(flow?.id, side) || findBySdiAndSide(parsed.identificativoSdi, side) || cloneForCallbackSide(base, side)
+    : base;
   if (!existing) return null;
   const callback = CALLBACK_BY_NOTIFICATION[parsed.tipoNotifica] || parsed.tipoNotifica || null;
+  const payload = parseJsonObject(existing.payload_meta);
   return updateRow(existing.id, {
     identificativo_sdi: parsed.identificativoSdi || existing.identificativo_sdi || null,
     callback_ricevuto: callback,
@@ -45,7 +51,27 @@ function updateInteroperabilityCallback({ flow, parsed, soapAction, contentType,
     is_mtom: isMtom ? 1 : 0,
     http_status: httpStatus,
     payload_meta: JSON.stringify({
-      ...(parseJsonObject(existing.payload_meta)),
+      ...payload,
+      flowSide: side,
+      contractName,
+      operationName,
+      operationNamespace,
+      dispatcherKey,
+      responseLength,
+      callbacks: [
+        ...(Array.isArray(payload.callbacks) ? payload.callbacks : []),
+        {
+          flowSide: side,
+          contractName,
+          soapAction,
+          operationName,
+          operationNamespace,
+          dispatcherKey,
+          httpStatus,
+          responseLength,
+          parsed
+        }
+      ],
       callback: parsed
     })
   });
@@ -63,6 +89,7 @@ function inferTestName(numero, codiceDestinatario, payloadMeta = {}) {
   if (n.startsWith('TEST-MC-B2C-0000000')) return 'Mancata consegna / impossibilita recapito';
   if (n.startsWith('TEST-DT-001')) return 'Decorrenza termini';
   if (n.startsWith('TEST-AT-001')) return 'Attestazione avvenuta trasmissione';
+  if (n.startsWith('TEST-NE-001')) return 'Notifica esito a Operatore Economico';
   if (n.startsWith('TEST-EC-KO-001')) return 'Scarto esito PA';
   if (code === 'XS0000' || code === 'XS00001') return 'Mancata consegna / attestazione';
   return null;
@@ -73,6 +100,7 @@ function inferExpectedCallback(testName) {
   if (normalized.includes('mancata') || normalized.includes('impossibilita')) return 'NotificaMancataConsegna/RicevutaImpossibilitaRecapito';
   if (normalized.includes('attestazione')) return 'AttestazioneTrasmissioneFattura';
   if (normalized.includes('decorrenza')) return 'NotificaDecorrenzaTermini';
+  if (normalized.includes('notifica esito')) return 'NotificaEsito';
   if (normalized.includes('scarto esito')) return 'ScartoEsito';
   return null;
 }
@@ -83,6 +111,61 @@ function findByFlow(flowId) {
 
 function findBySdi(identificativoSdi) {
   return db.prepare('SELECT * FROM sdi_interoperability_tests WHERE identificativo_sdi = ? ORDER BY id DESC LIMIT 1').get(identificativoSdi);
+}
+
+function findByFlowAndSide(flowId, flowSide) {
+  if (!flowId || !flowSide) return null;
+  return db.prepare(`
+    SELECT *
+    FROM sdi_interoperability_tests
+    WHERE flow_id = ?
+      AND payload_meta LIKE ?
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(flowId, `%"flowSide":"${flowSide}"%`);
+}
+
+function findBySdiAndSide(identificativoSdi, flowSide) {
+  if (!identificativoSdi || !flowSide) return null;
+  return db.prepare(`
+    SELECT *
+    FROM sdi_interoperability_tests
+    WHERE identificativo_sdi = ?
+      AND payload_meta LIKE ?
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(identificativoSdi, `%"flowSide":"${flowSide}"%`);
+}
+
+function cloneForCallbackSide(base, flowSide) {
+  if (!base) return null;
+  const payload = parseJsonObject(base.payload_meta);
+  const id = insertRow({
+    test_name: base.test_name,
+    fattura_id: base.fattura_id,
+    flow_id: base.flow_id,
+    nome_file: base.nome_file,
+    progressivo_invio: base.progressivo_invio,
+    codice_destinatario: base.codice_destinatario,
+    identificativo_sdi: base.identificativo_sdi,
+    data_invio: base.data_invio,
+    callback_atteso: base.callback_atteso,
+    callback_ricevuto: null,
+    soap_action: null,
+    content_type: null,
+    is_mtom: 0,
+    http_status: null,
+    stato_portale: base.stato_portale,
+    note: base.note,
+    payload_meta: JSON.stringify({ ...payload, flowSide })
+  });
+  return db.prepare('SELECT * FROM sdi_interoperability_tests WHERE id = ?').get(id);
+}
+
+function inferFlowSide(contractName) {
+  if (contractName === 'RicezioneFatture') return 'ricezione';
+  if (contractName === 'TrasmissioneFatture') return 'trasmissione';
+  return null;
 }
 
 function insertRow(data) {

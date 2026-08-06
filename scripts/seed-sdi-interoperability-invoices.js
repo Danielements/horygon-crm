@@ -32,6 +32,15 @@ const RECIPIENTS = [
   },
   {
     tipo: 'pa',
+    ragione_sociale: 'PA TEST SDI VRRMFL NOTIFICA ESITO OE',
+    piva: 'IT90000000993',
+    cf: '90000000993',
+    codice_destinatario: 'VRRMFL',
+    codice_ipa: 'VRRMFL',
+    note: 'TEST notifica esito a operatore economico: inviare EC01 dopo RiceviFatture/ER01.'
+  },
+  {
+    tipo: 'pa',
     ragione_sociale: 'PA TEST SDI XS0000 ATTESTAZIONE',
     piva: 'IT90000000992',
     cf: '90000000992',
@@ -62,6 +71,13 @@ const INVOICES = [
     imponibile: 132,
     expected: 'NotificaDecorrenzaTermini',
     note: 'Test decorrenza termini PA. Dopo ricezione non inviare EC01/EC02.'
+  },
+  {
+    numero: 'TEST-NE-001',
+    recipientCode: 'VRRMFL',
+    imponibile: 134,
+    expected: 'NotificaEsito',
+    note: 'Test notifica esito a operatore economico. Dopo RiceviFatture/ER01 inviare EC01 e attendere NotificaEsito su TrasmissioneFatture.'
   },
   {
     numero: 'TEST-AT-001',

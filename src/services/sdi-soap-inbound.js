@@ -182,7 +182,8 @@ function processInboundSdiRequest(req) {
     decodedFileSha256: decodedFile.sha256,
     decodedInnerRoot,
     storage,
-    responseKind: operation.responseKind
+    responseKind: operation.responseKind,
+    responseLength: operation.responseKind === 'empty_200' ? 0 : null
   };
 
   if (operation.kind === 'INCOMING_INVOICE') {
@@ -352,7 +353,13 @@ function processTransmissionNotification({ result, decodedXml, payload, storage 
       soapAction: result.soapAction || null,
       contentType: result.contentType || null,
       isMtom: result.isMtom || false,
-      httpStatus: 200
+      httpStatus: 200,
+      responseLength: result.responseLength,
+      contractName: result.contractName,
+      flowSide: result.contractName === 'RicezioneFatture' ? 'ricezione' : 'trasmissione',
+      operationName: result.operationName,
+      operationNamespace: result.operationNamespace,
+      dispatcherKey: result.dispatcherKey
     });
     result.kind = 'notification';
     result.flowId = notification.flowId;
@@ -373,12 +380,24 @@ function processTransmissionNotification({ result, decodedXml, payload, storage 
       messaggio: 'sdi.flow.matched',
       dettagli: {
         requestId: result.requestId,
+        contractName: result.contractName,
+        flowSide: result.contractName === 'RicezioneFatture' ? 'ricezione' : 'trasmissione',
+        soapAction: result.soapAction,
+        operationName: result.operationName,
+        operationNamespace: result.operationNamespace,
+        outerNomeFile: payload.nomeFile,
+        innerRoot: notification.parsed.rootElement,
         transmissionId: notification.flowId,
         invoiceId: notification.fatturaId,
         tipoNotifica: notification.parsed.tipoNotifica,
         stato: notification.statoNormalizzato,
         identificativoSdI: notification.parsed.identificativoSdi,
         nomeFileFattura: notification.parsed.nomeFileFattura,
+        innerNomeFile: notification.parsed.innerNomeFile || notification.parsed.nomeFileFattura || null,
+        isMtom: result.isMtom,
+        decodedSha256: result.decodedFileSha256,
+        httpStatus: 200,
+        responseLength: result.responseLength,
         codiceErrore: notification.parsed.codiceErrore || null,
         descrizioneErrore: notification.parsed.descrizioneErrore || null,
         errori: notification.parsed.errori || []
@@ -400,10 +419,20 @@ function processTransmissionNotification({ result, decodedXml, payload, storage 
       messaggio: 'sdi.flow.unmatched',
       dettagli: {
         requestId: result.requestId,
+        contractName: result.contractName,
+        flowSide: result.contractName === 'RicezioneFatture' ? 'ricezione' : 'trasmissione',
+        soapAction: result.soapAction,
+        operationName: result.operationName,
+        operationNamespace: result.operationNamespace,
         identificativoSdI: payload.identificativoSdI,
-        nomeFile: payload.nomeFile,
+        outerNomeFile: payload.nomeFile,
+        innerRoot: result.decodedInnerRoot,
+        innerNomeFile: null,
+        isMtom: result.isMtom,
         decodedSha256: result.decodedFileSha256,
-        decodedPath: storage.decodedPath
+        decodedPath: storage.decodedPath,
+        httpStatus: 200,
+        responseLength: result.responseLength
       }
     });
   }

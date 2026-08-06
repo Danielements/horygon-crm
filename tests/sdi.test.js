@@ -512,6 +512,33 @@ test('customer outcome response parser extracts EN00 from ScartoEsito payload', 
   assert.match(rejected.scarto.xml, /ScartoEsitoCommittente/);
 });
 
+test('customer outcome response parser extracts EN00 from nested ScartoEsito Scarto', () => {
+  const scartoXml = '<ScartoEsitoCommittente><IdentificativoSdI>32477506</IdentificativoSdI><Scarto><Esito>EN00</Esito><Descrizione>Esito non conforme</Descrizione></Scarto></ScartoEsitoCommittente>';
+  const rejected = parseSdIRiceviNotificaResponse(`<rispostaSdINotificaEsito><Esito>ES00</Esito><ScartoEsito><NomeFile>IT03365990591_00008_EC_001.xml</NomeFile><File>${Buffer.from(scartoXml).toString('base64')}</File></ScartoEsito></rispostaSdINotificaEsito>`);
+  assert.equal(rejected.rejected, true);
+  assert.equal(rejected.scarto.codice, 'EN00');
+  assert.match(rejected.scarto.xml, /<Scarto>/);
+});
+
+test('notification parser extracts NotificaEsito nested EsitoCommittente fields', () => {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<p:NotificaEsito xmlns:p="http://www.fatturapa.gov.it/sdi/messaggi/v1.0" versione="1.0">
+  <IdentificativoSdI>32490001</IdentificativoSdI>
+  <NomeFile>IT03365990591_NE001.xml</NomeFile>
+  <EsitoCommittente>
+    <Esito>EC01</Esito>
+    <MessageIdCommittente>MSGCOMM1</MessageIdCommittente>
+  </EsitoCommittente>
+  <MessageId>MSGSDI1</MessageId>
+</p:NotificaEsito>`;
+  const parsed = parseSdiNotificationXml(xml, { originalFilename: 'IT03365990591_NE001_NE_001.xml' });
+  assert.equal(parsed.tipoNotifica, 'NotificaEsito');
+  assert.equal(parsed.statoNormalizzato, 'esito');
+  assert.equal(parsed.esitoCommittente, 'EC01');
+  assert.equal(parsed.messageIdCommittente, 'MSGCOMM1');
+  assert.equal(parsed.messageId, 'MSGSDI1');
+});
+
 test('SOAP parser recognizes SOAP 1.1 prefixes and default namespace', () => {
   const variants = [
     ['soapenv', '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"><soapenv:Body><types:notificaScarto xmlns:types="http://www.fatturapa.gov.it/sdi/ws/trasmissione/v1.0/types"><IdentificativoSdI>123</IdentificativoSdI><NomeFile>IT03365990591_00007.xml</NomeFile><File>PHg+eTwveD4=</File></types:notificaScarto></soapenv:Body></soapenv:Envelope>'],
@@ -729,6 +756,118 @@ test('B2X delivery failure callback uses NotificaMancataConsegna SOAP operation 
   assert.equal(result.kind, 'notification-unmatched');
   assert.equal(result.responseKind, 'empty_200');
 });
+
+test('deadline callbacks are tracked separately for RicezioneFatture and TrasmissioneFatture', () => {
+  const suffix = Date.now().toString(36).toUpperCase().slice(-5);
+  const nomeFile = `IT03365990591_${suffix}.xml`;
+  const identificativoSdi = String(32500000 + Math.floor(Math.random() * 10000));
+  const invoiceInsert = db.prepare(`
+    INSERT INTO fatture (
+      numero, numero_documento, tipo, direzione, tipo_documento, data, imponibile, iva, totale, stato, stato_pagamento, valuta
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(`TEST-DT-${suffix}`, `TEST-DT-${suffix}`, 'emessa', 'attiva', 'TD01', '2026-08-06', 100, 22, 122, 'ricevuta', 'da_pagare', 'EUR');
+  const fatturaId = Number(invoiceInsert.lastInsertRowid);
+  const flowInsert = db.prepare(`
+    INSERT INTO fatture_sdi_flussi (
+      fattura_id, direzione, modalita, tipo_messaggio, nome_file, identificativo_sdi, stato, xml_path, hash_file, payload_meta, ultimo_evento_il
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))
+  `).run(fatturaId, 'outbound', 'test', 'fattura', nomeFile, identificativoSdi, 'inviato_test', '/uploads/sdi-outbound/test-dt.xml', 'hash-dt', '{}');
+  const flowId = Number(flowInsert.lastInsertRowid);
+  db.prepare(`
+    INSERT INTO sdi_interoperability_tests (
+      test_name, fattura_id, flow_id, nome_file, identificativo_sdi, callback_atteso, payload_meta, updated_at
+    ) VALUES (?,?,?,?,?,?,?,datetime('now'))
+  `).run('Decorrenza termini', fatturaId, flowId, nomeFile, identificativoSdi, 'NotificaDecorrenzaTermini', JSON.stringify({ flowSide: 'outbound' }));
+
+  const decodedNotification = `<?xml version="1.0" encoding="UTF-8"?>
+<p:NotificaDecorrenzaTermini xmlns:p="http://www.fatturapa.gov.it/sdi/messaggi/v1.0" versione="1.0">
+  <IdentificativoSdI>${identificativoSdi}</IdentificativoSdI>
+  <NomeFile>${nomeFile}</NomeFile>
+  <DataOraRicezione>2026-08-06T22:00:00+02:00</DataOraRicezione>
+</p:NotificaDecorrenzaTermini>`;
+  const encoded = Buffer.from(decodedNotification).toString('base64');
+  const receptionReq = makeSoapReq({
+    operationName: 'notificaDecorrenzaTermini',
+    operationNamespace: RECEPTION_TYPES_NS,
+    soapAction: 'http://www.fatturapa.it/RicezioneFatture/NotificaDecorrenzaTermini',
+    identificativoSdi,
+    nomeFile: `${nomeFile.replace(/\.xml$/i, '')}_DT_PA_001.xml`,
+    encoded
+  });
+  const transmissionReq = makeSoapReq({
+    operationName: 'notificaDecorrenzaTermini',
+    operationNamespace: TRANSMISSION_TYPES_NS,
+    soapAction: 'http://www.fatturapa.it/TrasmissioneFatture/NotificaDecorrenzaTermini',
+    identificativoSdi,
+    nomeFile: `${nomeFile.replace(/\.xml$/i, '')}_DT_OE_001.xml`,
+    encoded
+  });
+
+  const reception = processInboundSdiRequest(receptionReq);
+  const transmission = processInboundSdiRequest(transmissionReq);
+  assert.equal(reception.dispatcherKey, 'ricezione|NotificaDecorrenzaTermini');
+  assert.equal(transmission.dispatcherKey, 'trasmissione|NotificaDecorrenzaTermini');
+  assert.equal(reception.responseKind, 'empty_200');
+  assert.equal(transmission.responseKind, 'empty_200');
+
+  const rows = db.prepare(`
+    SELECT callback_ricevuto, payload_meta
+    FROM sdi_interoperability_tests
+    WHERE flow_id = ?
+      AND callback_ricevuto = 'NotificaDecorrenzaTermini'
+    ORDER BY id
+  `).all(flowId);
+  const sides = rows.map((row) => JSON.parse(row.payload_meta).flowSide).sort();
+  assert.deepEqual(sides, ['ricezione', 'trasmissione']);
+});
+
+test('attestazione transmission callback inline payload is accepted and classified', () => {
+  const decodedNotification = `<?xml version="1.0" encoding="UTF-8"?>
+<p:AttestazioneTrasmissioneFattura xmlns:p="http://www.fatturapa.gov.it/sdi/messaggi/v1.0" versione="1.0">
+  <IdentificativoSdI>32490002</IdentificativoSdI>
+  <NomeFile>IT03365990591_AT001.xml</NomeFile>
+  <DataOraRicezione>2026-08-06T22:00:00+02:00</DataOraRicezione>
+  <Destinatario><Codice>XS0000</Codice><Descrizione>Canale non disponibile</Descrizione></Destinatario>
+  <MessageId>MSGAT1</MessageId>
+  <Note>Attestazione test</Note>
+  <HashFileOriginale>abcdef</HashFileOriginale>
+</p:AttestazioneTrasmissioneFattura>`;
+  const req = makeSoapReq({
+    operationName: 'attestazioneTrasmissioneFattura',
+    operationNamespace: TRANSMISSION_TYPES_NS,
+    soapAction: 'http://www.fatturapa.it/TrasmissioneFatture/AttestazioneTrasmissioneFattura',
+    identificativoSdi: '32490002',
+    nomeFile: 'IT03365990591_AT001_AT_001.xml',
+    encoded: Buffer.from(decodedNotification).toString('base64')
+  });
+  const result = processInboundSdiRequest(req);
+  assert.equal(result.operationKind, 'TRANSMISSION_ATTESTATION');
+  assert.equal(result.decodedInnerRoot, 'AttestazioneTrasmissioneFattura');
+  assert.equal(result.responseKind, 'empty_200');
+});
+
+function makeSoapReq({ operationName, operationNamespace, soapAction, identificativoSdi, nomeFile, encoded }) {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
+  <soapenv:Body>
+    <types:${operationName} xmlns:types="${operationNamespace}">
+      <IdentificativoSdI>${identificativoSdi}</IdentificativoSdI>
+      <NomeFile>${nomeFile}</NomeFile>
+      <File>${encoded}</File>
+    </types:${operationName}>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+  return {
+    body: Buffer.from(xml),
+    headers: {
+      'content-type': 'text/xml',
+      'user-agent': 'IBM WebServices/1.0',
+      soapaction: `"${soapAction}"`
+    },
+    ip: '127.0.0.1',
+    socket: { remoteAddress: '127.0.0.1' }
+  };
+}
 
 test('one-way SdI response is HTTP 200 with zero bytes and no content type', () => {
   const response = makeFakeResponse();

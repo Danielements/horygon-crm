@@ -415,7 +415,8 @@ function extractScartoEsitoCode(xml) {
   });
   try {
     const parsed = parser.parse(xml);
-    return firstValue(parsed, ['Esito', 'Codice', 'CodiceErrore']);
+    const scarto = findObjectByKey(parsed, 'Scarto');
+    return firstValue(scarto || parsed, ['Esito', 'Codice', 'CodiceErrore']);
   } catch {
     return null;
   }

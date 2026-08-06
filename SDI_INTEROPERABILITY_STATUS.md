@@ -423,6 +423,7 @@ Script aggiunti:
 docker compose exec -T horygon-crm node scripts/seed-sdi-interoperability-invoices.js
 docker compose exec -T horygon-crm node scripts/transmit-sdi-interoperability-invoice.js TEST-MC-001
 docker compose exec -T horygon-crm node scripts/send-sdi-invalid-customer-outcome.js <fatturaId-o-numero> EC99
+docker compose exec -T horygon-crm node scripts/send-sdi-valid-customer-outcome.js <fatturaId-o-numero> EC01
 ```
 
 Fatture dedicate create dallo script:
@@ -430,6 +431,7 @@ Fatture dedicate create dallo script:
 - `TEST-MC-001`: B2B/B2C verso `XS00001`, atteso `RicevutaImpossibilitaRecapito`.
 - `TEST-MC-B2C-0000000`: B2C FPR12 verso `0000000` senza `PECDestinatario`, atteso `RicevutaImpossibilitaRecapito`.
 - `TEST-DT-001`: PA verso `ESOJKL`, atteso `NotificaDecorrenzaTermini`; dopo la ricezione non inviare `EC01` o `EC02`.
+- `TEST-NE-001`: PA verso `VRRMFL`, atteso `NotificaEsito` all'operatore economico dopo invio `EC01`.
 - `TEST-AT-001`: PA verso `XS0000`, atteso `NotificaMancataConsegna` e `AttestazioneTrasmissioneFattura`; richiede fattura FPA12 firmata.
 
 Per `Scarto esito PA`:
@@ -444,6 +446,14 @@ Registro interoperabilita:
 
 - tabella `sdi_interoperability_tests`;
 - registra nome test, fattura, flusso, nome file, progressivo, codice destinatario, identificativo SdI, data invio, callback atteso/ricevuto, SOAPAction, content-type, MTOM, HTTP restituito, stato portale, metadati.
+- per `NotificaDecorrenzaTermini` registra eventi distinti con `flowSide=ricezione` e `flowSide=trasmissione`, per evitare che i due callback si sovrascrivano.
+
+Sequenza residua consigliata:
+
+- `Scarto esito PA`: usare una fattura PA ricevuta nuova e inviare `EC99` con `send-sdi-invalid-customer-outcome.js`; il test vale solo con risposta `ES00` e `ScartoEsito` decodificato con `EN00` o `EN01`.
+- `Notifica esito a Operatore Economico`: inviare `TEST-NE-001`, attendere import PA via RiceviFatture, inviare `EC01` con `send-sdi-valid-customer-outcome.js`, poi attendere callback `TrasmissioneFatture/NotificaEsito`.
+- `Decorrenze termini`: inviare `TEST-DT-001`, attendere RiceviFatture/ER01 e non inviare alcun EC; attendere due callback distinti `RicezioneFatture/NotificaDecorrenzaTermini` e `TrasmissioneFatture/NotificaDecorrenzaTermini`.
+- `Attestazione avvenuta trasmissione`: inviare `TEST-AT-001` FPA12 firmata verso `XS0000`; senza firma gli invii PA possono essere scartati con `00102`.
 
 Limite ancora aperto:
 
