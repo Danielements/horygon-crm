@@ -2186,6 +2186,13 @@ async function openRecordPicker(entity, options = {}) {
       ? await api('GET', options.apiPath || '/mepa/cpv-catalog?attivo=1')
       : await api('GET', `/anagrafiche${options.filterTipo ? `?tipo=${encodeURIComponent(options.filterTipo)}` : ''}`);
   recordPickerState = { entity, rows: rows || [], options };
+  console.debug('[SDI picker] openRecordPicker', {
+    entity,
+    targetId: options?.targetId || null,
+    labelId: options?.labelId || null,
+    rows: Array.isArray(rows) ? rows.length : 0,
+    activeSection: currentSection || null
+  });
   const head = document.getElementById('record-picker-head');
   const search = document.getElementById('record-picker-search');
   if (search) search.value = '';
@@ -2253,26 +2260,60 @@ function renderRecordPickerRows(rows = []) {
 }
 
 function selectRecordPicker(id) {
-  if (!recordPickerState) return;
+  if (!recordPickerState) {
+    console.warn('[SDI picker] selectRecordPicker without state', { id });
+    return;
+  }
   const row = recordPickerState.rows.find(item => recordPickerState.entity === 'mepa-cpv'
     ? String(item.codice_cpv) === String(id)
     : String(item.id) === String(id));
-  if (!row) return;
+  if (!row) {
+    console.warn('[SDI picker] row not found', {
+      id,
+      entity: recordPickerState.entity,
+      rowCount: recordPickerState.rows.length
+    });
+    return;
+  }
   const { targetId, labelId, onSelect } = recordPickerState.options || {};
+  console.debug('[SDI picker] selectRecordPicker start', {
+    id,
+    entity: recordPickerState.entity,
+    targetId: targetId || null,
+    labelId: labelId || null,
+    row
+  });
   if (targetId) {
     const target = document.getElementById(targetId);
     if (target) target.value = recordPickerState.entity === 'mepa-cpv' ? (row.codice_cpv || '') : row.id;
+    else console.warn('[SDI picker] target field not found', { targetId });
   }
   if (labelId) {
     const label = document.getElementById(labelId);
     if (label) label.value = getRecordLabel(recordPickerState.entity, row);
+    else console.warn('[SDI picker] label field not found', { labelId });
   }
   if (targetId === 'fatt-anagrafica') {
     if (document.getElementById('fatt-piva') && !document.getElementById('fatt-piva').value) document.getElementById('fatt-piva').value = row.piva || '';
     if (document.getElementById('fatt-cf') && !document.getElementById('fatt-cf').value) document.getElementById('fatt-cf').value = row.cf || '';
+    console.debug('[SDI picker] fattura target populated', {
+      anagraficaId: document.getElementById('fatt-anagrafica')?.value || null,
+      anagraficaLabel: document.getElementById('fatt-anagrafica-label')?.value || null,
+      piva: document.getElementById('fatt-piva')?.value || null,
+      cf: document.getElementById('fatt-cf')?.value || null
+    });
   }
-  if (typeof onSelect === 'function') onSelect(row);
+  if (typeof onSelect === 'function') {
+    console.debug('[SDI picker] running onSelect callback');
+    onSelect(row);
+  }
   closeModal('modal-record-picker');
+  console.debug('[SDI picker] selectRecordPicker end', {
+    openModals: Array.from(document.querySelectorAll('.modal'))
+      .filter(m => m.style.display === 'block')
+      .map(m => ({ id: m.id, zIndex: m.style.zIndex || null })),
+    overlayZIndex: document.getElementById('overlay')?.style?.zIndex || null
+  });
   recordPickerState = null;
 }
 
@@ -2668,6 +2709,11 @@ async function prepareFatturaModal(id = null) {
   const [anag, prodotti] = await Promise.all([api('GET', '/anagrafiche'), api('GET', '/prodotti')]);
   fatturaProdottiCache = prodotti || [];
   fatturaAnagraficheCache = anag || [];
+  console.debug('[SDI picker] prepareFatturaModal', {
+    id,
+    anagrafiche: fatturaAnagraficheCache.length,
+    prodotti: fatturaProdottiCache.length
+  });
   document.getElementById('fatt-righe').innerHTML = '';
   document.getElementById('fatt-riepilogo-iva').innerHTML = '';
   if (!id) {
@@ -5176,6 +5222,10 @@ async function openModal(id, context = null) {
 function closeModal(id) {
   const modal = document.getElementById(id);
   if (!modal) return;
+  console.debug('[SDI picker] closeModal', {
+    id,
+    zIndex: modal.style.zIndex || null
+  });
   modal.style.display = 'none';
   modal.style.zIndex = '';
   syncModalOverlay();
@@ -5199,6 +5249,9 @@ function syncModalOverlay() {
   if (!overlay) return;
   const openModals = Array.from(document.querySelectorAll('.modal'))
     .filter(m => m.style.display === 'block');
+  console.debug('[SDI picker] syncModalOverlay', {
+    openModals: openModals.map(modal => ({ id: modal.id, zIndex: modal.style.zIndex || null }))
+  });
   if (!openModals.length) {
     overlay.style.display = 'none';
     overlay.style.zIndex = '';
