@@ -266,7 +266,10 @@ function processTransmissionNotification({ result, decodedXml, payload, storage 
         tipoNotifica: notification.parsed.tipoNotifica,
         stato: notification.statoNormalizzato,
         identificativoSdI: notification.parsed.identificativoSdi,
-        nomeFileFattura: notification.parsed.nomeFileFattura
+        nomeFileFattura: notification.parsed.nomeFileFattura,
+        codiceErrore: notification.parsed.codiceErrore || null,
+        descrizioneErrore: notification.parsed.descrizioneErrore || null,
+        errori: notification.parsed.errori || []
       }
     });
   } catch (error) {
