@@ -8,7 +8,7 @@ const { validateInvoiceXml } = require('../src/services/sdi-xml-validator');
 const { parseSdiNotificationXml } = require('../src/services/sdi-notification-parser');
 const { receiveSdiNotificationXml } = require('../src/services/sdi-inbound');
 const { getSchemaRegistryEntry, listSchemaRegistry, syncSchemaRegistry } = require('../src/services/sdi-schema-registry');
-const { buildRiceviFileMtomMessage, buildRiceviFileSoapEnvelope, parseRiceviFileResponse } = require('../src/services/sdi-transmission');
+const { buildRiceviFileMtomMessage, buildRiceviFileSoapEnvelope, extractXmlFromHttpResponse, parseRiceviFileResponse } = require('../src/services/sdi-transmission');
 const {
   RECEPTION_TYPES_NS,
   TRANSMISSION_TYPES_NS,
@@ -255,6 +255,7 @@ test('transmission MTOM message carries xop include and binary attachment', () =
   assert.match(message.contentType, /application\/xop\+xml/);
   assert.match(message.envelope, /xop:Include/);
   assert.equal(message.body.includes(Buffer.from('<FatturaElettronica>ok</FatturaElettronica>')), true);
+  assert.equal(message.body.includes(Buffer.from('\r\n\r\n<FatturaElettronica>ok</FatturaElettronica>')), true);
 });
 
 test('transmission parser extracts SdI identifier from RiceviFile response', () => {
@@ -270,6 +271,18 @@ test('transmission parser extracts SdI identifier from RiceviFile response', () 
   const parsed = parseRiceviFileResponse(xml);
   assert.equal(parsed.identificativoSdi, '32480000');
   assert.equal(parsed.dataOraRicezione, '2026-08-06T15:10:00');
+});
+
+test('transmission parser extracts XML from multipart SdI response', () => {
+  const boundary = 'MIMEBoundary_test';
+  const xml = '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><ns1:rispostaSdIRiceviFile xmlns:ns1="http://www.fatturapa.gov.it/sdi/ws/trasmissione/v1.0/types"><IdentificativoSdI>32480001</IdentificativoSdI><DataOraRicezione>2026-08-06T15:11:00</DataOraRicezione></ns1:rispostaSdIRiceviFile></soap:Body></soap:Envelope>';
+  const body = Buffer.from(`--${boundary}\r\nContent-Type: application/xop+xml; charset=UTF-8; type="text/xml"\r\nContent-ID: <root@test>\r\n\r\n${xml}\r\n--${boundary}--\r\n`, 'utf8');
+  const extracted = extractXmlFromHttpResponse({
+    headers: { 'content-type': `multipart/related; boundary="${boundary}"; type="application/xop+xml"` },
+    bodyBuffer: body
+  });
+  assert.match(extracted, /rispostaSdIRiceviFile/);
+  assert.equal(parseRiceviFileResponse(extracted).identificativoSdi, '32480001');
 });
 
 test('SOAP parser recognizes SOAP 1.1 prefixes and default namespace', () => {

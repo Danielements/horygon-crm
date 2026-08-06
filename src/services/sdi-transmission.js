@@ -34,11 +34,12 @@ async function transmitGeneratedFlow(flowId, options = {}) {
   const endpoint = getTransmissionEndpoint(mode);
   const soapMessage = buildRiceviFileMtomMessage(flow.nome_file, xmlBuffer);
   const response = await postSoapToSdi(endpoint, soapMessage, mode);
-  const responseStorage = persistTransmissionResponse(response.body, flow.nome_file || `flow-${flow.id}`);
-  const parsed = parseRiceviFileResponse(response.body);
+  const responseStorage = persistTransmissionResponse(response.bodyBuffer, flow.nome_file || `flow-${flow.id}`);
+  const responseXml = extractXmlFromHttpResponse(response);
+  const parsed = parseRiceviFileResponse(responseXml || response.body);
   const success = response.statusCode >= 200 && response.statusCode < 300 && !parsed.fault;
   const stato = success ? 'inviato_test' : 'errore_invio_test';
-  const descrizione = parsed.fault?.faultstring || parsed.erroreDescrizione || response.statusMessage || null;
+  const descrizione = parsed.fault?.faultstring || parsed.erroreDescrizione || response.statusMessage || response.body.slice(0, 500) || null;
 
   db.prepare(`
     UPDATE fatture_sdi_flussi
@@ -74,6 +75,8 @@ async function transmitGeneratedFlow(flowId, options = {}) {
     identificativoSdi: parsed.identificativoSdi || null,
     esito: parsed.esito || null,
     fault: parsed.fault || null,
+    responseHeaders: response.headers,
+    responsePreview: response.body.slice(0, 1200),
     success
   };
 }
@@ -106,7 +109,7 @@ function postSoapToSdi(endpoint, soapMessage, mode = 'test') {
       Accept: 'text/xml',
       'Cache-Control': 'no-cache',
       Pragma: 'no-cache',
-      SOAPAction: SOAP_ACTION_RICEVI_FILE,
+      SOAPAction: `"${SOAP_ACTION_RICEVI_FILE}"`,
       'Content-Length': body.length
     },
     timeout: 30000
@@ -121,6 +124,7 @@ function postSoapToSdi(endpoint, soapMessage, mode = 'test') {
           statusCode: res.statusCode || 0,
           statusMessage: res.statusMessage || '',
           headers: res.headers,
+          bodyBuffer: Buffer.concat(chunks),
           body: Buffer.concat(chunks).toString('utf8')
         });
       });
@@ -204,6 +208,7 @@ function buildRiceviFileMtomMessage(filename, fileBuffer) {
     'Content-Type: application/octet-stream',
     'Content-Transfer-Encoding: binary',
     `Content-ID: ${fileContentId}`,
+    '',
     ''
   ].join('\r\n'), 'utf8');
   const closing = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
@@ -253,6 +258,27 @@ function parseRiceviFileResponse(xml) {
   }
 }
 
+function extractXmlFromHttpResponse(response) {
+  const contentType = String(response?.headers?.['content-type'] || '');
+  const bodyBuffer = response?.bodyBuffer || Buffer.from(String(response?.body || ''), 'utf8');
+  if (!/multipart\/related/i.test(contentType)) return bodyBuffer.toString('utf8');
+  const boundaryMatch = contentType.match(/boundary="?([^";]+)"?/i);
+  if (!boundaryMatch) return bodyBuffer.toString('utf8');
+  const boundary = boundaryMatch[1];
+  const raw = bodyBuffer.toString('binary');
+  const parts = raw.split(`--${boundary}`).filter((part) => part.trim() && part.trim() !== '--');
+  for (const part of parts) {
+    const separator = part.indexOf('\r\n\r\n');
+    if (separator < 0) continue;
+    const headers = part.slice(0, separator);
+    const content = part.slice(separator + 4).replace(/\r\n--$/, '');
+    if (/xml/i.test(headers) || /^\s*<\??xml|^\s*<[\w:-]+/.test(content)) {
+      return Buffer.from(content, 'binary').toString('utf8').trim();
+    }
+  }
+  return bodyBuffer.toString('utf8');
+}
+
 function findObjectByKey(value, targetKey) {
   if (!value || typeof value !== 'object') return null;
   if (Object.prototype.hasOwnProperty.call(value, targetKey)) return value[targetKey];
@@ -274,10 +300,11 @@ function firstValue(source, keys) {
 function persistTransmissionResponse(content, filename) {
   const dayDir = path.join(ROOT, 'uploads', 'sdi-outbound-responses', new Date().toISOString().slice(0, 10).replace(/-/g, '/'));
   if (!fs.existsSync(dayDir)) fs.mkdirSync(dayDir, { recursive: true });
-  const hash = crypto.createHash('sha256').update(Buffer.from(String(content || ''), 'utf8')).digest('hex');
+  const buffer = Buffer.isBuffer(content) ? content : Buffer.from(String(content || ''), 'utf8');
+  const hash = crypto.createHash('sha256').update(buffer).digest('hex');
   const safeName = String(filename || 'response').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/\.xml$/i, '');
   const absolutePath = path.join(dayDir, `${hash}_${safeName}_response.xml`);
-  if (!fs.existsSync(absolutePath)) fs.writeFileSync(absolutePath, String(content || ''), 'utf8');
+  if (!fs.existsSync(absolutePath)) fs.writeFileSync(absolutePath, buffer);
   return {
     absolutePath,
     relativePath: `/${path.relative(ROOT, absolutePath).replace(/\\/g, '/')}`,
@@ -355,6 +382,7 @@ function xmlEscape(value) {
 module.exports = {
   buildRiceviFileSoapEnvelope,
   buildRiceviFileMtomMessage,
+  extractXmlFromHttpResponse,
   getTransmissionEndpoint,
   parseRiceviFileResponse,
   transmitGeneratedFlow,
