@@ -8,7 +8,7 @@ const { validateInvoiceXml } = require('../src/services/sdi-xml-validator');
 const { parseSdiNotificationXml } = require('../src/services/sdi-notification-parser');
 const { receiveSdiNotificationXml } = require('../src/services/sdi-inbound');
 const { getSchemaRegistryEntry, listSchemaRegistry, syncSchemaRegistry } = require('../src/services/sdi-schema-registry');
-const { buildFilename, buildFilenameProgressivo, normalizeCustomerFiscalCode } = require('../src/services/sdi-fatturapa');
+const { buildFilename, buildFilenameProgressivo, buildInvoicePayload, normalizeCustomerFiscalCode } = require('../src/services/sdi-fatturapa');
 const { buildRiceviFileMtomMessage, buildRiceviFileSoapEnvelope, extractXmlFromHttpResponse, parseRiceviFileResponse } = require('../src/services/sdi-transmission');
 const {
   MESSAGGI_NS,
@@ -303,6 +303,38 @@ test('customer fiscal code is omitted when it duplicates VAT code', () => {
   assert.equal(normalizeCustomerFiscalCode('01043931003', { country: 'IT', code: '01043931003' }), '');
   assert.equal(normalizeCustomerFiscalCode('IT01043931003', { country: 'IT', code: '01043931003' }), '');
   assert.equal(normalizeCustomerFiscalCode('RSSMRA80A01H501U', { country: 'IT', code: '01043931003' }), 'RSSMRA80A01H501U');
+});
+
+test('invoice payload computes customer VAT in local scope', () => {
+  const payload = buildInvoicePayload(
+    {
+      id: 8,
+      numero: 'TESTSDI004',
+      numero_documento: 'TESTSDI004',
+      data: '2026-08-06',
+      tipo_documento: 'fattura',
+      totale: 122,
+      valuta: 'EUR',
+      righe: [{ descrizione: 'Test', quantita: 1, prezzo_unitario: 100, totale_riga: 100, aliquota_iva: 22 }],
+      riepilogo_iva: [{ aliquota_iva: 22, imponibile: 100, imposta: 22 }]
+    },
+    makeOrdinaryPayload('FPR12').company,
+    {
+      ragione_sociale: 'CLIENTE TEST SDI UMZGLCP',
+      piva: 'IT01043931003',
+      cf: '01043931003',
+      indirizzo: 'Via Test',
+      cap: '00100',
+      citta: 'Roma',
+      provincia: 'RM',
+      paese: 'IT',
+      destinationCode: 'UMZGLCP',
+      isPa: false
+    },
+    { mode: 'test' }
+  );
+  assert.deepEqual(payload.customer.vat, { country: 'IT', code: '01043931003' });
+  assert.equal(payload.customer.fiscalCode, '');
 });
 
 test('transmission MTOM message carries xop include and binary attachment', () => {

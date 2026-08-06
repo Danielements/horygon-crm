@@ -126,7 +126,6 @@ function loadRecipientProfile(anagraficaId) {
   `).get(anagraficaId);
   if (!customer) throw new Error('Cliente anagrafico non trovato');
   const destinationCode = String(customer.codice_univoco_sdi || customer.codice_destinatario || '').trim().toUpperCase();
-  const customerVat = splitVat(customer.piva);
   return {
     ...customer,
     destinationCode,
@@ -181,6 +180,7 @@ function buildInvoicePayload(invoice, company, customer, options = {}) {
   const format = options.forceFormat || (customer.isPa ? 'FPA12' : 'FPR12');
   const schema = getSchemaRegistryEntry(format);
   const totaleDocumento = toAmount(invoice.totale) || round2(lines.reduce((sum, line) => sum + line.totaleRiga, 0) + riepilogo.reduce((sum, row) => sum + row.imposta, 0));
+  const customerVat = splitVat(customer.piva);
 
   return {
     mode: String(options.mode || getSetting('sdi.mode', 'test') || 'test').trim(),
