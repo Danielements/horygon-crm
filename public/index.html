@@ -879,6 +879,16 @@
           <button class="btn btn-accent" onclick="saveSettingsPage()">Salva impostazioni</button>
         </div>
       </div>
+      <div class="dash-card" style="margin-top:18px">
+        <h3 style="margin-top:0;font-size:16px">Diagnostica SDI</h3>
+        <p style="font-size:12px;color:var(--text-muted)">Controlla certificati, CSR, key matching e handshake HTTPS verso l'ambiente SDI configurato. Ogni test viene scritto anche nei log tecnici.</p>
+        <div class="modal-actions" style="margin-top:14px">
+          <button class="btn btn-accent" id="sdi-test-button" onclick="runSdiTest()">Test SDI</button>
+          <button class="btn btn-outline" onclick="loadSdiDiagnostics()">Ricarica stato</button>
+        </div>
+        <div id="sdi-test-summary" class="app-summary-grid" style="margin-top:16px"></div>
+        <div id="sdi-test-results" style="margin-top:14px"></div>
+      </div>
     </section>
 
     <section id="section-audit-log" class="section">

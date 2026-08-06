@@ -150,7 +150,8 @@ router.post('/import/xml', requirePermesso('fatture', 'edit'), upload.single('fi
     parsed.xml_path = `/uploads/fatture/${req.file.filename}`;
     // Cerca anagrafica fornitore per P.IVA
     if (parsed.fornitore_piva) {
-      const anag = db.prepare('SELECT id FROM anagrafiche WHERE piva = ?').get(parsed.fornitore_piva);
+      const vatCandidates = [parsed.fornitore_piva, stripVatCountryPrefix(parsed.fornitore_piva)].filter(Boolean);
+      const anag = db.prepare(`SELECT id FROM anagrafiche WHERE piva IN (${vatCandidates.map(() => '?').join(',')}) LIMIT 1`).get(...vatCandidates);
       if (anag) parsed.anagrafica_id = anag.id;
     }
     const hashDocumento = buildDocumentHash({ numero: parsed.numero, data: parsed.data, partita_iva: parsed.fornitore_piva, totale: parsed.totale });
@@ -158,12 +159,12 @@ router.post('/import/xml', requirePermesso('fatture', 'edit'), upload.single('fi
     if (duplicate) return res.status(400).json({ error: 'Fattura duplicata o gia importata' });
     // Salva fattura
     const r = db.prepare(`INSERT INTO fatture (
-      numero,numero_documento,tipo,direzione,tipo_documento,anagrafica_id,data,data_ricezione,imponibile,iva,totale,sdi_id,xml_path,stato,partita_iva,hash_file,hash_documento,origine_importazione
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      numero,numero_documento,tipo,direzione,tipo_documento,anagrafica_id,data,data_ricezione,imponibile,iva,totale,sdi_id,xml_path,stato,partita_iva,codice_fiscale,cliente_fornitore_label,tipo_esteso,documento_meta,hash_file,hash_documento,origine_importazione
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       parsed.numero, parsed.numero, 'ricevuta', 'passiva', parsed.tipo_documento || 'fattura',
       parsed.anagrafica_id||null, parsed.data, new Date().toISOString().slice(0,10),
       parsed.imponibile, parsed.iva, parsed.totale, parsed.sdi_id, parsed.xml_path, 'ricevuta',
-      parsed.fornitore_piva || null, parsed.hash_file, hashDocumento, 'xml'
+      parsed.fornitore_piva || null, parsed.fornitore_codice_fiscale || null, parsed.fornitore_nome || null, parsed.tipo_esteso || null, JSON.stringify(parsed.documento_meta || {}), parsed.hash_file, hashDocumento, 'xml'
     );
     if (r.lastInsertRowid && parsed.righe?.length) {
       const ins = db.prepare('INSERT INTO fatture_righe (fattura_id,descrizione,quantita,prezzo_unitario,imponibile,aliquota_iva,natura_iva,importo_iva,totale_riga) VALUES (?,?,?,?,?,?,?,?,?)');
@@ -182,16 +183,16 @@ router.post('/import/spreadsheet', requirePermesso('fatture', 'edit'), upload.si
     const imported = [];
     const skipped = [];
     rows.forEach((row, index) => {
-      const numero = String(row.numero || row['Numero documento'] || row['Numero'] || '').trim();
+      const numero = String(getRowValue(row, ['numero', 'Numero documento', 'Numero', 'numero_documento']) || '').trim();
       if (!numero) { skipped.push({ row: index + 2, reason: 'Numero mancante' }); return; }
-      const totale = parseFloat(row.totale || row['Totale documento'] || row['Totale'] || 0) || 0;
-      const data = normalizeDate(row.data || row['Data documento'] || row['Data']);
-      const partitaIva = String(row.piva || row['Partita IVA'] || '').trim() || null;
+      const totale = parseDecimal(getRowValue(row, ['totale', 'Totale documento', 'Totale', 'importo_totale'])) || 0;
+      const data = normalizeDate(getRowValue(row, ['data', 'Data documento', 'Data', 'data_documento']));
+      const partitaIva = sanitizeVatNumber(getRowValue(row, ['piva', 'Partita IVA', 'partita_iva', 'P.IVA'])) || null;
       const hashDocumento = buildDocumentHash({ numero, data, partita_iva: partitaIva, totale });
       const duplicate = db.prepare('SELECT id FROM fatture WHERE hash_documento = ? LIMIT 1').get(hashDocumento);
       if (duplicate) { skipped.push({ row: index + 2, reason: 'Duplicato' }); return; }
       const tipo = inferInvoiceType(row);
-      const label = String(row.cliente || row.fornitore || row['Cliente/Fornitore'] || row['Ragione sociale'] || '').trim();
+      const label = String(getRowValue(row, ['cliente', 'fornitore', 'Cliente/Fornitore', 'Ragione sociale', 'ragione_sociale']) || '').trim();
       const anagrafica = partitaIva
         ? db.prepare('SELECT id FROM anagrafiche WHERE piva = ?').get(partitaIva)
         : (label ? db.prepare('SELECT id FROM anagrafiche WHERE lower(ragione_sociale) = lower(?)').get(label) : null);
@@ -199,15 +200,15 @@ router.post('/import/spreadsheet', requirePermesso('fatture', 'edit'), upload.si
         numero,numero_documento,tipo,direzione,tipo_documento,anagrafica_id,data,data_ricezione,imponibile,iva,totale,valuta,stato,stato_pagamento,partita_iva,codice_fiscale,cliente_fornitore_label,hash_documento,origine_importazione
       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
         numero, numero, tipo.tipo, tipo.direzione, tipo.tipo_documento,
-        anagrafica?.id || null, data, normalizeDate(row.data_ricezione || row['Data ricezione']) || null,
-        parseFloat(row.imponibile || row['Imponibile'] || 0) || 0,
-        parseFloat(row.iva || row['IVA'] || 0) || 0,
+        anagrafica?.id || null, data, normalizeDate(getRowValue(row, ['data_ricezione', 'Data ricezione'])) || null,
+        parseDecimal(getRowValue(row, ['imponibile', 'Imponibile'])) || 0,
+        parseDecimal(getRowValue(row, ['iva', 'IVA', 'imposta'])) || 0,
         totale,
-        String(row.valuta || row['Valuta'] || 'EUR').trim() || 'EUR',
-        String(row.stato || row['Stato'] || 'ricevuta').trim() || 'ricevuta',
-        String(row.stato_pagamento || row['Stato pagamento'] || 'da_pagare').trim() || 'da_pagare',
+        String(getRowValue(row, ['valuta', 'Valuta']) || 'EUR').trim() || 'EUR',
+        String(getRowValue(row, ['stato', 'Stato']) || 'ricevuta').trim() || 'ricevuta',
+        String(getRowValue(row, ['stato_pagamento', 'Stato pagamento']) || 'da_pagare').trim() || 'da_pagare',
         partitaIva,
-        String(row.cf || row['Codice fiscale'] || '').trim() || null,
+        sanitizeFiscalCode(getRowValue(row, ['cf', 'Codice fiscale', 'codice_fiscale'])) || null,
         label || null,
         hashDocumento,
         'spreadsheet'
@@ -228,51 +229,79 @@ router.patch('/:id/stato', requirePermesso('fatture', 'edit'), (req, res) => {
 
 // Parser XML FatturaPA semplificato
 function parseFatturaPA(xml) {
-  const tag = (name) => {
-    const m = xml.match(new RegExp(`<${name}[^>]*>([^<]*)<\/${name}>`, 'i'));
+  const normalizedXml = stripXmlNamespaces(xml);
+  const tag = (name, source = normalizedXml) => {
+    const m = source.match(new RegExp(`<${name}[^>]*>([^<]*)<\/${name}>`, 'i'));
     return m ? m[1].trim() : null;
   };
-  const imponibile = parseFloat(tag('ImponibileImporto') || '0');
-  const iva = parseFloat(tag('Imposta') || '0');
+  const supplierBlock = firstBlock(normalizedXml, 'CedentePrestatore');
+  const supplierVatBlock = firstBlock(supplierBlock, 'IdFiscaleIVA');
+  const fornitorePaese = tag('IdPaese', supplierVatBlock);
+  const fornitoreCodice = tag('IdCodice', supplierVatBlock);
+  const fornitorePiva = joinVatNumber(fornitorePaese, fornitoreCodice);
+  const supplierName = firstNonEmpty([
+    tag('Denominazione', supplierBlock),
+    [tag('Nome', supplierBlock), tag('Cognome', supplierBlock)].filter(Boolean).join(' ').trim()
+  ]);
   const righe = [];
-  const righeMatch = xml.matchAll(/<DettaglioLinee>([\s\S]*?)<\/DettaglioLinee>/gi);
+  const righeMatch = normalizedXml.matchAll(/<DettaglioLinee>([\s\S]*?)<\/DettaglioLinee>/gi);
   for (const m of righeMatch) {
     const r = m[1];
     const qtag = (n) => { const x = r.match(new RegExp(`<${n}>([^<]*)<\/${n}>`, 'i')); return x ? x[1].trim() : null; };
+    const quantita = parseDecimal(qtag('Quantita')) || 1;
+    const prezzoUnitario = parseDecimal(qtag('PrezzoUnitario')) || 0;
+    const totaleRiga = parseDecimal(qtag('PrezzoTotale')) || 0;
+    const aliquotaIva = parseDecimal(qtag('AliquotaIVA')) || 0;
     righe.push({
       descrizione: qtag('Descrizione'),
-      quantita: parseFloat(qtag('Quantita') || '1'),
-      prezzo_unitario: parseFloat(qtag('PrezzoUnitario') || '0'),
-      imponibile: parseFloat(qtag('PrezzoTotale') || '0'),
-      aliquota_iva: parseFloat(qtag('AliquotaIVA') || '0'),
+      quantita,
+      prezzo_unitario: prezzoUnitario,
+      imponibile: totaleRiga,
+      aliquota_iva: aliquotaIva,
       natura_iva: qtag('Natura'),
       importo_iva: null,
-      totale_riga: parseFloat(qtag('PrezzoTotale') || '0'),
+      totale_riga: totaleRiga,
     });
   }
   const riepilogo_iva = [];
-  const riepiloghi = xml.matchAll(/<DatiRiepilogo>([\s\S]*?)<\/DatiRiepilogo>/gi);
+  const riepiloghi = normalizedXml.matchAll(/<DatiRiepilogo>([\s\S]*?)<\/DatiRiepilogo>/gi);
   for (const m of riepiloghi) {
     const r = m[1];
     const qtag = (n) => { const x = r.match(new RegExp(`<${n}>([^<]*)<\/${n}>`, 'i')); return x ? x[1].trim() : null; };
     riepilogo_iva.push({
-      aliquota_iva: parseFloat(qtag('AliquotaIVA') || '0'),
+      aliquota_iva: parseDecimal(qtag('AliquotaIVA')) || 0,
       natura_iva: qtag('Natura'),
-      imponibile: parseFloat(qtag('ImponibileImporto') || '0'),
-      imposta: parseFloat(qtag('Imposta') || '0'),
+      imponibile: parseDecimal(qtag('ImponibileImporto')) || 0,
+      imposta: parseDecimal(qtag('Imposta')) || 0,
       riferimento_normativo: qtag('RiferimentoNormativo')
     });
   }
+  const imponibile = riepilogo_iva.length
+    ? riepilogo_iva.reduce((sum, row) => sum + Number(row.imponibile || 0), 0)
+    : righe.reduce((sum, row) => sum + Number(row.imponibile || 0), 0);
+  const iva = riepilogo_iva.reduce((sum, row) => sum + Number(row.imposta || 0), 0);
+  const totaleDocumento = parseDecimal(tag('ImportoTotaleDocumento')) || (imponibile + iva);
+  const rawTipoDocumento = tag('TipoDocumento');
   return {
     numero: tag('Numero'),
     data: tag('Data'),
-    totale: parseFloat(tag('ImportoTotaleDocumento') || '0'),
+    totale: totaleDocumento,
     imponibile, iva,
     sdi_id: tag('ProgressivoInvio'),
-    tipo_documento: tag('TipoDocumento'),
-    fornitore_piva: tag('IdCodice'),
+    tipo_documento: mapFatturaPaDocumentType(rawTipoDocumento),
+    tipo_esteso: rawTipoDocumento,
+    fornitore_piva: fornitorePiva,
+    fornitore_paese: fornitorePaese,
+    fornitore_codice_fiscale: sanitizeFiscalCode(tag('CodiceFiscale', supplierBlock)),
+    fornitore_nome: supplierName,
     righe,
-    riepilogo_iva
+    riepilogo_iva,
+    documento_meta: {
+      progressivo_invio: tag('ProgressivoInvio'),
+      formato_trasmissione: tag('FormatoTrasmissione'),
+      pec_destinatario: tag('PECDestinatario'),
+      codice_destinatario: tag('CodiceDestinatario')
+    }
   };
 }
 
@@ -314,14 +343,86 @@ function normalizeDate(value) {
 }
 
 function inferInvoiceType(row) {
-  const label = String(row.tipo_documento || row['Tipo documento'] || row.tipo || row['Tipo'] || '').toLowerCase();
+  const label = String(getRowValue(row, ['tipo_documento', 'Tipo documento', 'tipo', 'Tipo', 'TD']) || '').toLowerCase();
+  if (label.includes('td04') || label.includes('credito')) return { tipo: 'ricevuta', direzione: 'passiva', tipo_documento: 'nota_credito' };
+  if (label.includes('td05') || label.includes('debito')) return { tipo: 'ricevuta', direzione: 'passiva', tipo_documento: 'nota_debito' };
+  if (label.includes('td16') || label.includes('auto')) return { tipo: 'ricevuta', direzione: 'passiva', tipo_documento: 'autofattura' };
+  if (label.includes('td17') || label.includes('td18') || label.includes('td19') || label.includes('integraz')) return { tipo: 'ricevuta', direzione: 'passiva', tipo_documento: 'integrazione_estero' };
   if (label.includes('credito')) return { tipo: 'ricevuta', direzione: 'passiva', tipo_documento: 'nota_credito' };
   if (label.includes('debito')) return { tipo: 'ricevuta', direzione: 'passiva', tipo_documento: 'nota_debito' };
   if (label.includes('auto')) return { tipo: 'ricevuta', direzione: 'passiva', tipo_documento: 'autofattura' };
   if (label.includes('integraz')) return { tipo: 'ricevuta', direzione: 'passiva', tipo_documento: 'integrazione_estero' };
-  const direction = String(row.direzione || row['Attiva/Passiva'] || '').toLowerCase();
+  const direction = String(getRowValue(row, ['direzione', 'Attiva/Passiva', 'attiva_passiva']) || '').toLowerCase();
   if (direction.includes('att')) return { tipo: 'emessa', direzione: 'attiva', tipo_documento: 'fattura' };
   return { tipo: 'ricevuta', direzione: 'passiva', tipo_documento: 'fattura' };
+}
+
+function getRowValue(row, keys = []) {
+  for (const key of keys) {
+    if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') return row[key];
+  }
+  return null;
+}
+
+function parseDecimal(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  let str = String(value).trim();
+  if (!str) return null;
+  str = str.replace(/[€\s]/g, '');
+  if (str.includes(',') && str.includes('.')) {
+    str = str.replace(/\./g, '').replace(',', '.');
+  } else if (str.includes(',')) {
+    str = str.replace(',', '.');
+  }
+  const parsed = Number(str);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function sanitizeVatNumber(value) {
+  if (!value) return null;
+  return String(value).trim().replace(/\s+/g, '').toUpperCase() || null;
+}
+
+function sanitizeFiscalCode(value) {
+  if (!value) return null;
+  return String(value).trim().replace(/\s+/g, '').toUpperCase() || null;
+}
+
+function stripXmlNamespaces(xml) {
+  return String(xml || '').replace(/<(\/?)(?:\w+:)/g, '<$1');
+}
+
+function firstBlock(source, tagName) {
+  if (!source) return '';
+  const match = source.match(new RegExp(`<${tagName}[^>]*>([\\s\\S]*?)<\\/${tagName}>`, 'i'));
+  return match ? match[1] : '';
+}
+
+function firstNonEmpty(values = []) {
+  return values.find(value => value && String(value).trim()) || null;
+}
+
+function joinVatNumber(country, code) {
+  const cleanCountry = sanitizeVatNumber(country);
+  const cleanCode = sanitizeVatNumber(code);
+  if (!cleanCode) return null;
+  return cleanCountry ? `${cleanCountry}${cleanCode}` : cleanCode;
+}
+
+function mapFatturaPaDocumentType(value) {
+  const code = String(value || '').trim().toUpperCase();
+  if (code === 'TD04') return 'nota_credito';
+  if (code === 'TD05') return 'nota_debito';
+  if (code === 'TD16') return 'autofattura';
+  if (['TD17', 'TD18', 'TD19'].includes(code)) return 'integrazione_estero';
+  return 'fattura';
+}
+
+function stripVatCountryPrefix(value) {
+  const normalized = sanitizeVatNumber(value);
+  if (!normalized) return null;
+  return /^[A-Z]{2}\d+$/.test(normalized) ? normalized.slice(2) : normalized;
 }
 
 module.exports = router;

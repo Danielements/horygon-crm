@@ -3,6 +3,9 @@ const router = express.Router();
 const db = require('../db/database');
 const { authMiddleware, requirePermesso } = require('../middleware/auth');
 const { listSettings, saveSettings } = require('../services/google');
+const { writeAudit } = require('../services/audit');
+const { writeSystemLog } = require('../services/system-log');
+const { ensureSdiSettingsSeed, runSdiDiagnostics } = require('../services/sdi');
 
 router.use(authMiddleware);
 
@@ -36,11 +39,45 @@ router.get('/stats/overview', (req, res) => {
 });
 
 router.get('/settings', requirePermesso('utenti', 'admin'), (req, res) => {
+  ensureSdiSettingsSeed();
   res.json(listSettings());
 });
 
 router.put('/settings', requirePermesso('utenti', 'admin'), (req, res) => {
   res.json(saveSettings(req.body?.items || []));
+});
+
+router.get('/sdi/diagnostics', requirePermesso('utenti', 'admin'), async (req, res) => {
+  const result = await runSdiDiagnostics({ includeNetwork: false });
+  res.json(result);
+});
+
+router.post('/sdi/test', requirePermesso('utenti', 'admin'), async (req, res) => {
+  const result = await runSdiDiagnostics({ includeNetwork: true });
+  writeAudit({
+    utente_id: req.user.id,
+    azione: 'sdi.test.run',
+    entita_tipo: 'sdi',
+    dettagli: {
+      overallStatus: result.overallStatus,
+      mode: result.mode,
+      checks: result.checks.map((check) => ({ label: check.label, status: check.status, message: check.message }))
+    }
+  });
+  writeSystemLog({
+    livello: result.overallStatus === 'error' ? 'error' : result.overallStatus === 'warning' ? 'warning' : 'info',
+    origine: 'sdi.test',
+    route: '/api/system/sdi/test',
+    metodo: 'POST',
+    utente_id: req.user.id,
+    messaggio: `Test SDI completato con stato ${result.overallStatus}`,
+    dettagli: {
+      mode: result.mode,
+      includeNetwork: result.includeNetwork,
+      checks: result.checks
+    }
+  });
+  res.json(result);
 });
 
 router.get('/public-config', (req, res) => {

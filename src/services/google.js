@@ -79,6 +79,21 @@ seedSetting.run('automation.email_users_activity_updates', '1', 'boolean');
 seedSetting.run('automation.email_users_order_status', '1', 'boolean');
 seedSetting.run('automation.email_clients_order_status', '0', 'boolean');
 seedSetting.run('automation.email_clients_activity_updates', '0', 'boolean');
+seedSetting.run('sdi.mode', 'test', 'string');
+seedSetting.run('sdi.test.endpoint', 'https://testservizi.fatturapa.it/', 'string');
+seedSetting.run('sdi.production.endpoint', 'https://servizi.fatturapa.it/', 'string');
+seedSetting.run('sdi.production.client_cert_path', 'C:\\Users\\lelef\\Documents\\HORYGON\\CRM\\sdi-certs\\production\\client.crt', 'string');
+seedSetting.run('sdi.production.client_key_path', 'C:\\Users\\lelef\\Documents\\HORYGON\\CRM\\sdi-certs\\production\\client.key', 'string');
+seedSetting.run('sdi.production.server_cert_path', 'C:\\Users\\lelef\\Documents\\HORYGON\\CRM\\sdi-certs\\production\\server.crt', 'string');
+seedSetting.run('sdi.production.server_key_path', '', 'string');
+seedSetting.run('sdi.production.ca_path', 'C:\\Users\\lelef\\Documents\\HORYGON\\CRM\\sdi-certs\\production\\ca.crt', 'string');
+seedSetting.run('sdi.production.remote_server_cert_path', 'C:\\Users\\lelef\\Documents\\HORYGON\\CRM\\sdi-certs\\production\\sdi-prod-server.crt', 'string');
+seedSetting.run('sdi.production.remote_client_public_cert_path', 'C:\\Users\\lelef\\Documents\\HORYGON\\CRM\\sdi-certs\\production\\sdi-prod-client-public.crt', 'string');
+seedSetting.run('sdi.test.ca_path', 'C:\\Users\\lelef\\Documents\\HORYGON\\CRM\\sdi-certs\\test\\ca-test.crt', 'string');
+seedSetting.run('sdi.test.remote_server_cert_path', 'C:\\Users\\lelef\\Documents\\HORYGON\\CRM\\sdi-certs\\test\\sdi-test-server.crt', 'string');
+seedSetting.run('sdi.test.remote_client_public_cert_path', 'C:\\Users\\lelef\\Documents\\HORYGON\\CRM\\sdi-certs\\test\\sdi-test-client-public.crt', 'string');
+seedSetting.run('sdi.csr.client_path', 'C:\\Users\\lelef\\Documents\\HORYGON\\CRM\\sdi-certs\\csr\\client.csr', 'string');
+seedSetting.run('sdi.csr.server_path', 'C:\\Users\\lelef\\Documents\\HORYGON\\CRM\\sdi-certs\\csr\\server.csr', 'string');
 
 function getClient(utente_id) {
   const tokens = db.prepare('SELECT * FROM google_tokens WHERE utente_id = ?').get(utente_id);

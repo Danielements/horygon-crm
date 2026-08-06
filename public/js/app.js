@@ -4389,6 +4389,7 @@ async function loadSettingsPage() {
       <div><strong>${r.key}</strong><div style="font-size:12px;color:var(--text-muted)">${r.type}</div></div>
       <input type="text" data-setting-key="${r.key}" data-setting-type="${r.type}" value="${String(r.value || '').replace(/"/g, '&quot;')}">
     </div>`).join('');
+  loadSdiDiagnostics();
 }
 
 async function saveSettingsPage() {
@@ -4399,6 +4400,63 @@ async function saveSettingsPage() {
   }));
   await api('PUT', '/system/settings', { items });
   toast('Impostazioni salvate', 'success');
+  loadSdiDiagnostics();
+}
+
+function renderSdiDiagnostics(result) {
+  const summary = document.getElementById('sdi-test-summary');
+  const target = document.getElementById('sdi-test-results');
+  if (!summary || !target) return;
+  const checks = result?.checks || [];
+  const ok = checks.filter(check => check.status === 'ok').length;
+  const warning = checks.filter(check => check.status === 'warning').length;
+  const error = checks.filter(check => check.status === 'error').length;
+  summary.innerHTML = `
+    <div class="summary-card"><strong>${escapeHtml(String(result?.mode || '-'))}</strong><span>Modalita</span></div>
+    <div class="summary-card"><strong>${ok}</strong><span>Check OK</span></div>
+    <div class="summary-card"><strong>${warning}</strong><span>Warning</span></div>
+    <div class="summary-card"><strong>${error}</strong><span>Errori</span></div>
+  `;
+  target.innerHTML = checks.length ? checks.map(check => `
+    <div class="dash-card" style="padding:12px 14px;margin-bottom:10px;border-left:4px solid ${check.status === 'error' ? '#d44' : check.status === 'warning' ? '#d99a00' : '#1f8f5f'}">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+        <strong>${escapeHtml(check.label || 'Check')}</strong>
+        <span class="status-chip ${check.status === 'error' ? 'status-chip-danger' : check.status === 'warning' ? 'status-chip-warning' : 'status-chip-success'}">${escapeHtml(check.status || 'info')}</span>
+      </div>
+      <div style="margin-top:6px">${escapeHtml(check.message || '')}</div>
+      ${check.details ? `<pre style="margin-top:8px;white-space:pre-wrap;font-size:12px;color:var(--text-muted);background:rgba(0,0,0,.04);padding:10px;border-radius:10px">${escapeHtml(JSON.stringify(check.details, null, 2))}</pre>` : ''}
+    </div>
+  `).join('') : '<p style="color:var(--text-muted)">Nessun risultato disponibile</p>';
+}
+
+async function loadSdiDiagnostics() {
+  try {
+    const result = await api('GET', '/system/sdi/diagnostics');
+    renderSdiDiagnostics(result);
+  } catch (e) {
+    const target = document.getElementById('sdi-test-results');
+    if (target) target.innerHTML = `<p style="color:#d44">${escapeHtml(e.message || 'Errore caricamento diagnostica SDI')}</p>`;
+  }
+}
+
+async function runSdiTest() {
+  const button = document.getElementById('sdi-test-button');
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Test in corso...';
+  }
+  try {
+    const result = await api('POST', '/system/sdi/test', {});
+    renderSdiDiagnostics(result);
+    toast(`Test SDI completato: ${result?.overallStatus || 'ok'}`, result?.overallStatus === 'error' ? 'error' : result?.overallStatus === 'warning' ? 'info' : 'success');
+  } catch (e) {
+    toast(e.message || 'Errore test SDI', 'error');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Test SDI';
+    }
+  }
 }
 
 function formatAuditDetails(value) {

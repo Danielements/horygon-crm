@@ -15,3 +15,13 @@ uploads/*
 *.jpeg
 *.png
 desktop.ini
+tmp/
+sdi-certs/**
+!sdi-certs/
+!sdi-certs/README.md
+!sdi-certs/csr/
+!sdi-certs/csr/.gitkeep
+!sdi-certs/production/
+!sdi-certs/production/.gitkeep
+!sdi-certs/test/
+!sdi-certs/test/.gitkeep
