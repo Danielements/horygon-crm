@@ -132,8 +132,8 @@ function postSoapToSdi(endpoint, soapMessage, mode = 'test') {
 }
 
 function loadTlsMaterial(mode = 'test') {
-  const certPath = normalizePath(getSetting('sdi.production.client_cert_path', path.join(SDI_CERTS_DIR, 'prod', 'client.cer')));
-  const keyPath = normalizePath(getSetting('sdi.production.client_key_path', path.join(SDI_CERTS_DIR, 'prod', 'client.key')));
+  const certPath = normalizeExistingSdiPath('sdi.production.client_cert_path', getSetting('sdi.production.client_cert_path', path.join(SDI_CERTS_DIR, 'prod', 'client.cer')));
+  const keyPath = normalizeExistingSdiPath('sdi.production.client_key_path', getSetting('sdi.production.client_key_path', path.join(SDI_CERTS_DIR, 'prod', 'client.key')));
   if (!fs.existsSync(certPath)) throw new Error(`Certificato client SDI non trovato: ${certPath}`);
   if (!fs.existsSync(keyPath)) throw new Error(`Chiave client SDI non trovata: ${keyPath}`);
   return {
@@ -148,7 +148,7 @@ function loadCaBundle(mode = 'test') {
   const explicit = mode === 'production'
     ? getSetting('sdi.production.ca_path', path.join(SDI_CERTS_DIR, 'prod', 'ca.cer'))
     : getSetting('sdi.test.ca_path', path.join(SDI_CERTS_DIR, 'test', 'caentrate.cer'));
-  if (explicit) files.push(normalizePath(explicit));
+  if (explicit) files.push(normalizeExistingSdiPath(mode === 'production' ? 'sdi.production.ca_path' : 'sdi.test.ca_path', explicit));
   const folder = path.join(SDI_CERTS_DIR, mode === 'production' ? 'prod' : 'test');
   if (fs.existsSync(folder)) {
     fs.readdirSync(folder)
@@ -298,6 +298,33 @@ function resolveUploadPath(relativePath) {
 function normalizePath(filePath) {
   if (!filePath) return '';
   return path.isAbsolute(filePath) ? filePath : path.resolve(ROOT, filePath);
+}
+
+function normalizeExistingSdiPath(key, filePath) {
+  const mapped = normalizeLegacySettingPath(key, String(filePath || ''));
+  const absolute = normalizePath(mapped);
+  if (fs.existsSync(absolute)) return absolute;
+  const cerFallback = absolute.replace(/\.crt$/i, '.cer');
+  if (cerFallback !== absolute && fs.existsSync(cerFallback)) return cerFallback;
+  return absolute;
+}
+
+function normalizeLegacySettingPath(key, value) {
+  if (process.platform === 'win32') return value;
+  if (!/^[A-Za-z]:\\/.test(value)) return value;
+  const mapping = {
+    'sdi.production.client_cert_path': path.join(SDI_CERTS_DIR, 'prod', 'client.cer'),
+    'sdi.production.client_key_path': path.join(SDI_CERTS_DIR, 'prod', 'client.key'),
+    'sdi.production.server_cert_path': path.join(SDI_CERTS_DIR, 'prod', 'server.cer'),
+    'sdi.production.server_key_path': path.join(SDI_CERTS_DIR, 'prod', 'server.key'),
+    'sdi.production.ca_path': path.join(SDI_CERTS_DIR, 'prod', 'ca.cer'),
+    'sdi.production.remote_server_cert_path': path.join(SDI_CERTS_DIR, 'prod', 'servizi.fatturapa.it.cer'),
+    'sdi.production.remote_client_public_cert_path': path.join(SDI_CERTS_DIR, 'prod', 'Sistema_Interscambio_Fattura_PA.cer'),
+    'sdi.test.ca_path': path.join(SDI_CERTS_DIR, 'test', 'caentrate.cer'),
+    'sdi.test.remote_server_cert_path': path.join(SDI_CERTS_DIR, 'test', 'testservizi.fatturapa.it.cer'),
+    'sdi.test.remote_client_public_cert_path': path.join(SDI_CERTS_DIR, 'test', 'SistemaInterscambioFatturaPATest.cer')
+  };
+  return mapping[key] || value;
 }
 
 function loadCertificatePem(filePath) {
