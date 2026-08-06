@@ -5,6 +5,53 @@ const { authMiddleware, requirePermesso } = require('../middleware/auth');
 const { writeAudit } = require('../services/audit');
 const { writeSystemLog } = require('../services/system-log');
 const { generateOutboundXmlForInvoice } = require('../services/sdi-fatturapa');
+const { receiveSdiNotificationXml } = require('../services/sdi-inbound');
+
+const xmlTextParser = express.text({
+  type: ['application/xml', 'text/xml', 'application/soap+xml', 'text/plain'],
+  limit: '5mb'
+});
+
+router.post('/ws/inbound', xmlTextParser, (req, res) => {
+  try {
+    const xml = String(req.body || '').trim();
+    if (!xml) return res.status(400).json({ error: 'Body XML mancante' });
+    const result = receiveSdiNotificationXml(xml, {
+      originalFilename: req.headers['x-original-filename'] ? String(req.headers['x-original-filename']) : null
+    });
+    writeSystemLog({
+      livello: 'info',
+      origine: 'sdi.ws.inbound',
+      route: '/api/sdi/ws/inbound',
+      metodo: 'POST',
+      messaggio: `Notifica SDI ricevuta: ${result.parsed.tipoNotifica}`,
+      dettagli: {
+        flowId: result.flowId,
+        fatturaId: result.fatturaId,
+        stato: result.statoNormalizzato,
+        identificativoSdi: result.parsed.identificativoSdi,
+        nomeFileFattura: result.parsed.nomeFileFattura
+      }
+    });
+    res.json({
+      ok: true,
+      flowId: result.flowId,
+      fatturaId: result.fatturaId,
+      tipoNotifica: result.parsed.tipoNotifica,
+      statoNormalizzato: result.statoNormalizzato
+    });
+  } catch (error) {
+    writeSystemLog({
+      livello: 'error',
+      origine: 'sdi.ws.inbound',
+      route: '/api/sdi/ws/inbound',
+      metodo: 'POST',
+      messaggio: error.message,
+      stack: error.stack || null
+    });
+    res.status(400).json({ error: error.message });
+  }
+});
 
 router.use(authMiddleware);
 
@@ -20,6 +67,22 @@ router.get('/flows', requirePermesso('fatture', 'read'), (req, res) => {
     LEFT JOIN fatture f ON f.id = fl.fattura_id
     LEFT JOIN anagrafiche a ON a.id = f.anagrafica_id
     ORDER BY fl.creato_il DESC
+    LIMIT 100
+  `).all();
+  res.json(rows);
+});
+
+router.get('/notifications', requirePermesso('fatture', 'read'), (req, res) => {
+  const rows = db.prepare(`
+    SELECT
+      n.*,
+      f.numero,
+      f.data,
+      a.ragione_sociale
+    FROM fatture_sdi_notifiche n
+    LEFT JOIN fatture f ON f.id = n.fattura_id
+    LEFT JOIN anagrafiche a ON a.id = f.anagrafica_id
+    ORDER BY n.creato_il DESC
     LIMIT 100
   `).all();
   res.json(rows);

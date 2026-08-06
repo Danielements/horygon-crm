@@ -1,8 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const db = require('../src/db/database');
 const { buildOrdinaryInvoiceXml, buildSimplifiedInvoiceXml, buildProgressivoInvio } = require('../src/services/sdi-fatturapa-builder');
 const { validateInvoiceXml } = require('../src/services/sdi-xml-validator');
 const { parseSdiNotificationXml } = require('../src/services/sdi-notification-parser');
+const { receiveSdiNotificationXml } = require('../src/services/sdi-inbound');
 const { getSchemaRegistryEntry, listSchemaRegistry, syncSchemaRegistry } = require('../src/services/sdi-schema-registry');
 
 function makeOrdinaryPayload(format) {
@@ -173,4 +177,56 @@ test('notification parser recognizes scarto and extracts metadata', () => {
   assert.equal(parsed.identificativoSdi, '123456');
   assert.equal(parsed.nomeFileFattura, 'IT03365990591_00001.xml');
   assert.equal(parsed.codiceErrore, '00404');
+});
+
+test('inbound notification links to existing flow and updates state', () => {
+  const uniqueInvoice = `TST-SDI-${Date.now()}`;
+  const uniqueFlowFile = `IT03365990591_TEST_${Date.now()}.xml`;
+  const invoiceInsert = db.prepare(`
+    INSERT INTO fatture (
+      numero, numero_documento, tipo, direzione, tipo_documento, data, imponibile, iva, totale, stato, stato_pagamento, valuta
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(uniqueInvoice, uniqueInvoice, 'emessa', 'attiva', 'fattura', '2026-08-06', 100, 22, 122, 'ricevuta', 'da_pagare', 'EUR');
+  const fatturaId = Number(invoiceInsert.lastInsertRowid);
+  const flowInsert = db.prepare(`
+    INSERT INTO fatture_sdi_flussi (
+      fattura_id, direzione, modalita, tipo_messaggio, nome_file, stato, xml_path, hash_file, payload_meta, ultimo_evento_il
+    ) VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))
+  `).run(
+    fatturaId,
+    'outbound',
+    'test',
+    'fattura',
+    uniqueFlowFile,
+    'xml_generato_test',
+    '/uploads/sdi-outbound/test.xml',
+    'hash-test',
+    '{}'
+  );
+  const flowId = Number(flowInsert.lastInsertRowid);
+
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<ns2:NotificaScarto xmlns:ns2="http://ivaservizi.agenziaentrate.gov.it/docs/xsd/fatture/v1.2">
+  <IdentificativoSdI>987654</IdentificativoSdI>
+  <NomeFile>${uniqueFlowFile}</NomeFile>
+  <ListaErrori>
+    <Errore>
+      <Codice>00404</Codice>
+      <Descrizione>File duplicato</Descrizione>
+    </Errore>
+  </ListaErrori>
+</ns2:NotificaScarto>`;
+
+  const result = receiveSdiNotificationXml(xml, { originalFilename: 'notifica-scarto.xml' });
+  assert.equal(result.flowId, flowId);
+  assert.equal(result.fatturaId, fatturaId);
+  assert.equal(result.statoNormalizzato, 'scarto');
+  assert.equal(fs.existsSync(path.join(process.cwd(), result.storage.relativePath.replace(/^\//, '').replace(/\//g, path.sep))), true);
+
+  const updatedFlow = db.prepare('SELECT stato, esito_codice, identificativo_sdi FROM fatture_sdi_flussi WHERE id = ?').get(flowId);
+  const updatedInvoice = db.prepare('SELECT stato_sdi FROM fatture WHERE id = ?').get(fatturaId);
+  assert.equal(updatedFlow.stato, 'scarto');
+  assert.equal(updatedFlow.esito_codice, '00404');
+  assert.equal(updatedFlow.identificativo_sdi, '987654');
+  assert.equal(updatedInvoice.stato_sdi, 'scarto');
 });
