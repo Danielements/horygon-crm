@@ -326,21 +326,15 @@ function sanitizeFilePart(value) {
 }
 
 function respondInboundSuccess(req, res, result) {
-  const envelope = unwrapInboundEnvelope(String(req.body || ''));
-  if (envelope.isSoap || /soap/i.test(String(req.headers['content-type'] || ''))) {
-    res.type('application/soap+xml').status(200).send(buildSoapAck('OK', result.kind === 'invoice' ? 'Fattura acquisita' : 'Messaggio acquisito'));
-    return;
-  }
-  res.json({ ok: true, ...result });
+  res.type('application/soap+xml').status(200).send(
+    buildSoapAck('OK', result.kind === 'invoice' ? 'Fattura acquisita' : 'Messaggio acquisito')
+  );
 }
 
 function respondInboundError(req, res, error) {
-  const envelope = unwrapInboundEnvelope(String(req.body || ''));
-  if (envelope.isSoap || /soap/i.test(String(req.headers['content-type'] || ''))) {
-    res.type('application/soap+xml').status(500).send(buildSoapAck('KO', error.message || 'Errore endpoint SDI'));
-    return;
-  }
-  res.status(400).json({ error: error.message });
+  res.type('application/soap+xml').status(500).send(
+    buildSoapAck('KO', error.message || 'Errore endpoint SDI')
+  );
 }
 
 function buildSoapAck(esito, messaggio) {
