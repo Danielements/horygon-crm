@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const db = require('../src/db/database');
 
 const TODAY = new Date().toISOString().slice(0, 10);
+const B2C_FISCAL_CODE = String(process.env.SDI_TEST_B2C_FISCAL_CODE || '01043931003').trim().toUpperCase();
 
 const RECIPIENTS = [
   {
@@ -16,9 +17,9 @@ const RECIPIENTS = [
     tipo: 'cliente',
     ragione_sociale: 'CLIENTE TEST SDI B2C 0000000 SENZA PEC',
     piva: '',
-    cf: '01043931003',
+    cf: B2C_FISCAL_CODE,
     codice_destinatario: '0000000',
-    note: 'TEST B2C/no-channel: CodiceDestinatario 0000000 senza PECDestinatario per verificare RicevutaImpossibilitaRecapito.'
+    note: 'TEST B2C/no-channel: CodiceDestinatario 0000000 senza PECDestinatario per verificare RicevutaImpossibilitaRecapito. Per evitare 00306 usare SDI_TEST_B2C_FISCAL_CODE con un CF reale presente in Anagrafe Tributaria.'
   },
   {
     tipo: 'pa',

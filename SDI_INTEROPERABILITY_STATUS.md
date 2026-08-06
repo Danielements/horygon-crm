@@ -426,6 +426,8 @@ Nota `RicevutaImpossibilitaRecapito`:
 - Il CRM classifica `NotificaMancataConsegna` come `B2G_MANCATA_CONSEGNA` e `RicevutaImpossibilitaRecapito` come `B2X_IMPOSSIBILITA_RECAPITO`, entrambe con stato `UNDELIVERABLE`.
 - I callback one-way rispondono `HTTP 200` con `Content-Length: 0` e body di zero byte.
 - Un tentativo B2C con codice fiscale fittizio `RSSMRA80A01H501U` e' arrivato correttamente al CRM ma SdI lo ha scartato con `00306 CodiceFiscale non valido`; la seed usa quindi `01043931003` come codice fiscale numerico test senza valorizzare `IdFiscaleIVA`.
+- Per la prova definitiva B2C `0000000`, eseguire la seed con `SDI_TEST_B2C_FISCAL_CODE=<codice_fiscale_reale>`; non versionare CF personali nel repository.
+- La validazione locale distingue `xsdValid`, `formalTaxIdValid`, `taxRegistryVerified=false` e `taxRegistryVerificationStatus=NOT_CHECKED`; non verifica l'esistenza in Anagrafe Tributaria.
 
 ## Comandi operativi VPS
 

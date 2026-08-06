@@ -18,14 +18,22 @@ async function validateInvoiceXml({ xml, format }) {
   const parsed = parser.parse(xml);
   const rootInfo = detectRoot(parsed);
   const appErrors = validateApplicationRules({ parsed, rootInfo, format, schema });
+  const formalTaxId = validateFormalTaxIds(xml);
+  const warnings = buildValidationWarnings({ formalTaxId });
   const xsd = await validateXsd(xml, schema);
   return {
-    ok: xsd.ok && appErrors.length === 0,
+    ok: xsd.ok && appErrors.length === 0 && formalTaxId.ok,
+    xsdValid: xsd.ok,
+    formalTaxIdValid: formalTaxId.ok,
+    taxRegistryVerified: false,
+    taxRegistryVerificationStatus: 'NOT_CHECKED',
+    warnings,
     format,
     schema,
     rootInfo,
     xmlSha256: sha256(xml),
     xsd,
+    formalTaxId,
     application: {
       ok: appErrors.length === 0,
       errors: appErrors
@@ -90,6 +98,55 @@ function validateApplicationRules({ parsed, rootInfo, format, schema }) {
     errors.push('FSM10 consente solo TD07, TD08 o TD09');
   }
   return errors;
+}
+
+function validateFormalTaxIds(xml) {
+  const customerBlock = extractFirstBlock(xml, 'CessionarioCommittente');
+  const vatCode = extractFirstText(customerBlock, 'IdCodice');
+  const fiscalCode = extractFirstText(customerBlock, 'CodiceFiscale');
+  const errors = [];
+  if (vatCode && !isFormalVatCode(vatCode)) {
+    errors.push(`IdFiscaleIVA cliente formalmente non valido: ${vatCode}`);
+  }
+  if (fiscalCode && !isFormalFiscalCode(fiscalCode)) {
+    errors.push(`CodiceFiscale cliente formalmente non valido: ${fiscalCode}`);
+  }
+  return {
+    ok: errors.length === 0,
+    customerVatCode: vatCode || null,
+    customerFiscalCode: fiscalCode || null,
+    errors
+  };
+}
+
+function buildValidationWarnings({ formalTaxId }) {
+  const warnings = [];
+  if (formalTaxId?.customerFiscalCode) {
+    warnings.push('Il codice fiscale e formalmente valido ma non e stata verificata la sua esistenza in Anagrafe Tributaria. I codici fiscali sintetici vengono scartati dallo SdI con errore 00306.');
+  }
+  return warnings;
+}
+
+function extractFirstBlock(xml, localName) {
+  const text = String(xml || '');
+  const pattern = new RegExp(`<(?:[A-Za-z_][\\w.-]*:)?${localName}\\b[^>]*>[\\s\\S]*?<\\/(?:[A-Za-z_][\\w.-]*:)?${localName}>`, 'i');
+  return text.match(pattern)?.[0] || '';
+}
+
+function extractFirstText(xml, localName) {
+  const text = String(xml || '');
+  const pattern = new RegExp(`<(?:[A-Za-z_][\\w.-]*:)?${localName}\\b[^>]*>([\\s\\S]*?)<\\/(?:[A-Za-z_][\\w.-]*:)?${localName}>`, 'i');
+  const value = text.match(pattern)?.[1] || '';
+  return value.replace(/<[^>]+>/g, '').trim();
+}
+
+function isFormalVatCode(value) {
+  return /^[A-Z0-9]{1,28}$/i.test(String(value || '').trim());
+}
+
+function isFormalFiscalCode(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+  return /^\d{11}$/.test(normalized) || /^[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]$/.test(normalized);
 }
 
 function createParser() {

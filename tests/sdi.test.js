@@ -185,6 +185,11 @@ test('FPR12 B2C sample validates with 0000000 and no PEC', async () => {
   assert.match(xml, /<CodiceFiscale>01043931003<\/CodiceFiscale>/);
   const result = await validateInvoiceXml({ xml, format: 'FPR12' });
   assert.equal(result.ok, true, JSON.stringify(result, null, 2));
+  assert.equal(result.xsdValid, true);
+  assert.equal(result.formalTaxIdValid, true);
+  assert.equal(result.taxRegistryVerified, false);
+  assert.equal(result.taxRegistryVerificationStatus, 'NOT_CHECKED');
+  assert.match(result.warnings.join('\n'), /codici fiscali sintetici vengono scartati/i);
 });
 
 test('FPA12 sample validates against local XSD and app rules', async () => {
