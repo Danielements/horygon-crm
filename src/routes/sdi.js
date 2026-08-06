@@ -301,11 +301,15 @@ function buildInboundWsdl(req) {
 
 function unwrapInboundEnvelope(xml) {
   const raw = String(xml || '').trim();
-  if (!/^<[\w:-]*Envelope\b/i.test(raw) && !/http:\/\/www\.w3\.org\/2003\/05\/soap-envelope/i.test(raw)) {
+  const withoutXmlDeclaration = raw.replace(/^<\?xml[^>]*>\s*/i, '');
+  const isSoapEnvelope = /^<[\w:-]*Envelope\b/i.test(withoutXmlDeclaration)
+    || /http:\/\/schemas\.xmlsoap\.org\/soap\/envelope\//i.test(raw)
+    || /http:\/\/www\.w3\.org\/2003\/05\/soap-envelope/i.test(raw);
+  if (!isSoapEnvelope) {
     return { payloadXml: raw, isSoap: false };
   }
-  const bodyMatch = raw.match(/<[\w:-]*Body\b[^>]*>([\s\S]*?)<\/[\w:-]*Body>/i);
-  const bodyContent = bodyMatch ? bodyMatch[1].trim() : raw;
+  const bodyMatch = withoutXmlDeclaration.match(/<[\w:-]*Body\b[^>]*>([\s\S]*?)<\/[\w:-]*Body>/i);
+  const bodyContent = bodyMatch ? bodyMatch[1].trim() : withoutXmlDeclaration;
   const cdataMatch = bodyContent.match(/<!\[CDATA\[([\s\S]*?)\]\]>/i);
   if (cdataMatch) return { payloadXml: cdataMatch[1].trim(), isSoap: true };
   const xmlStart = bodyContent.search(/<\??(?:xml|[A-Za-z_])/i);
