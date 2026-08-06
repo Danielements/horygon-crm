@@ -68,37 +68,67 @@ router.post('/ws/inbound', xmlTextParser, (req, res) => {
         || (req.headers['x-original-filename'] ? String(req.headers['x-original-filename']) : null)
         || 'fattura-ricevuta';
       const storage = persistInboundXml(payloadXml, inboundFileName);
-      const imported = importInvoiceXml(payloadXml, {
-        xmlPath: storage.relativePath,
-        source: 'sdi-ws'
-      });
-      result = {
-        kind: 'invoice',
-        operationName: wrappedPayload.operationName,
-        importedId: imported.duplicate ? imported.existingId : imported.id,
-        duplicate: imported.duplicate,
-        storage,
-        parsed: imported.parsed,
-        rootElement,
-        metadataXml: wrappedPayload.metadataXml || null
-      };
-      writeSystemLog({
-        livello: 'info',
-        origine: 'sdi.ws.inbound',
-        route: '/api/sdi/ws/inbound',
-        metodo: 'POST',
-        messaggio: imported.duplicate
-          ? `Fattura passiva SdI gia presente: ${imported.existingId}`
-          : `Fattura passiva SdI importata: ${imported.id}`,
-        dettagli: {
-          rootElement,
-          fatturaId: result.importedId,
-          duplicate: imported.duplicate,
+      let metadataStorage = null;
+      if (wrappedPayload.metadataXml) {
+        metadataStorage = persistInboundXml(wrappedPayload.metadataXml, wrappedPayload.metadataFileName || `${inboundFileName}-metadati`);
+      }
+      try {
+        const imported = importInvoiceXml(payloadXml, {
           xmlPath: storage.relativePath,
-          numero: imported.parsed?.numero || null,
-          fornitore: imported.parsed?.fornitore_nome || null
-        }
-      });
+          source: 'sdi-ws'
+        });
+        result = {
+          kind: 'invoice',
+          operationName: wrappedPayload.operationName,
+          importedId: imported.duplicate ? imported.existingId : imported.id,
+          duplicate: imported.duplicate,
+          storage,
+          metadataStorage,
+          parsed: imported.parsed,
+          rootElement,
+          metadataXml: wrappedPayload.metadataXml || null
+        };
+        writeSystemLog({
+          livello: 'info',
+          origine: 'sdi.ws.inbound',
+          route: '/api/sdi/ws/inbound',
+          metodo: 'POST',
+          messaggio: imported.duplicate
+            ? `Fattura passiva SdI gia presente: ${imported.existingId}`
+            : `Fattura passiva SdI importata: ${imported.id}`,
+          dettagli: {
+            rootElement,
+            fatturaId: result.importedId,
+            duplicate: imported.duplicate,
+            xmlPath: storage.relativePath,
+            metadataPath: metadataStorage?.relativePath || null,
+            numero: imported.parsed?.numero || null,
+            fornitore: imported.parsed?.fornitore_nome || null
+          }
+        });
+      } catch (importError) {
+        result = {
+          kind: 'invoice-stored',
+          operationName: wrappedPayload.operationName,
+          accepted: true,
+          storage,
+          metadataStorage,
+          rootElement
+        };
+        writeSystemLog({
+          livello: 'error',
+          origine: 'sdi.ws.inbound',
+          route: '/api/sdi/ws/inbound',
+          metodo: 'POST',
+          messaggio: `Fattura SdI salvata ma non importata: ${importError.message}`,
+          stack: importError.stack || null,
+          dettagli: {
+            rootElement,
+            xmlPath: storage.relativePath,
+            metadataPath: metadataStorage?.relativePath || null
+          }
+        });
+      }
     } else {
       try {
         const notification = receiveSdiNotificationXml(payloadXml, {
@@ -301,7 +331,7 @@ function buildInboundWsdl(req) {
 
 function unwrapInboundEnvelope(xml) {
   const raw = String(xml || '').trim();
-  const withoutXmlDeclaration = raw.replace(/^<\?xml[^>]*>\s*/i, '');
+  const withoutXmlDeclaration = raw.replace(/^\uFEFF?/, '').replace(/^<\?xml[^>]*>\s*/i, '');
   const isSoapEnvelope = /^<[\w:-]*Envelope\b/i.test(withoutXmlDeclaration)
     || /http:\/\/schemas\.xmlsoap\.org\/soap\/envelope\//i.test(raw)
     || /http:\/\/www\.w3\.org\/2003\/05\/soap-envelope/i.test(raw);
@@ -312,6 +342,8 @@ function unwrapInboundEnvelope(xml) {
   const bodyContent = bodyMatch ? bodyMatch[1].trim() : withoutXmlDeclaration;
   const cdataMatch = bodyContent.match(/<!\[CDATA\[([\s\S]*?)\]\]>/i);
   if (cdataMatch) return { payloadXml: cdataMatch[1].trim(), isSoap: true };
+  const parsedBodyPayload = extractSoapBodyWithParser(withoutXmlDeclaration);
+  if (parsedBodyPayload) return { payloadXml: parsedBodyPayload, isSoap: true };
   const xmlStart = bodyContent.search(/<\??(?:xml|[A-Za-z_])/i);
   if (xmlStart >= 0) return { payloadXml: bodyContent.slice(xmlStart).trim(), isSoap: true };
   return { payloadXml: bodyContent, isSoap: true };
@@ -330,6 +362,10 @@ function extractWrappedInboundPayload(bodyXml) {
     const parsed = parser.parse(raw);
     const rootKey = Object.keys(parsed || {}).find((key) => key !== '?xml') || '';
     const rootNode = rootKey ? parsed[rootKey] : null;
+    if (rootKey === 'Envelope') {
+      const envelope = unwrapInboundEnvelope(raw);
+      if (envelope.isSoap && envelope.payloadXml !== raw) return extractWrappedInboundPayload(envelope.payloadXml);
+    }
     if (rootKey === 'fileSdIConMetadati' && rootNode && typeof rootNode === 'object') {
       const fileContent = decodeBase64Xml(rootNode.File);
       const metadataXml = decodeBase64Xml(rootNode.Metadati);
@@ -359,6 +395,64 @@ function detectRootElement(xml) {
 
 function isInvoiceRoot(rootElement) {
   return ['FatturaElettronica', 'FatturaElettronicaSemplificata'].includes(String(rootElement || '').trim());
+}
+
+function extractSoapBodyWithParser(xml) {
+  const parser = new XMLParser({
+    ignoreAttributes: false,
+    attributeNamePrefix: '@_',
+    removeNSPrefix: true,
+    parseTagValue: false,
+    preserveOrder: true,
+    trimValues: false
+  });
+  try {
+    const parsed = parser.parse(xml);
+    const envelopeNode = findOrderedNode(parsed, 'Envelope');
+    const bodyNode = findOrderedNode(envelopeNode?.Envelope, 'Body');
+    const bodyChildren = bodyNode?.Body;
+    if (!Array.isArray(bodyChildren)) return null;
+    const payloadNode = bodyChildren.find((node) => {
+      const key = node && typeof node === 'object' ? Object.keys(node).find((k) => !k.startsWith(':@')) : null;
+      return key && key !== '#text';
+    });
+    if (!payloadNode) return null;
+    return buildXmlFromOrderedNode(payloadNode).trim();
+  } catch {
+    return null;
+  }
+}
+
+function findOrderedNode(nodes, localName) {
+  if (!Array.isArray(nodes)) return null;
+  for (const node of nodes) {
+    if (!node || typeof node !== 'object') continue;
+    const key = Object.keys(node).find((k) => stripPrefix(k) === localName);
+    if (key) return { [localName]: node[key], attributes: node[':@'] || {} };
+  }
+  return null;
+}
+
+function buildXmlFromOrderedNode(node) {
+  const key = Object.keys(node).find((k) => !k.startsWith(':@'));
+  if (!key) return '';
+  const attrs = node[':@'] || {};
+  const attrText = Object.entries(attrs)
+    .map(([name, value]) => ` ${name.replace(/^@_/, '')}="${xmlEscape(value)}"`)
+    .join('');
+  const children = node[key];
+  if (!Array.isArray(children)) return `<${key}${attrText}>${xmlEscape(children || '')}</${key}>`;
+  const inner = children.map((child) => {
+    if (child && typeof child === 'object' && Object.prototype.hasOwnProperty.call(child, '#text')) {
+      return xmlEscape(child['#text']);
+    }
+    return buildXmlFromOrderedNode(child);
+  }).join('');
+  return `<${key}${attrText}>${inner}</${key}>`;
+}
+
+function stripPrefix(name) {
+  return String(name || '').includes(':') ? String(name).split(':').pop() : String(name || '');
 }
 
 function persistInboundXml(xml, originalFilename) {
