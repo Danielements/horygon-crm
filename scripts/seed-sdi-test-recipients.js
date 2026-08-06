@@ -66,29 +66,42 @@ const ADDRESS = {
   pec: ''
 };
 
-ensureColumns();
-
-let created = 0;
-let updated = 0;
-
-try {
-  db.exec('BEGIN');
-  for (const recipient of RECIPIENTS) {
-    const result = upsertRecipient(recipient);
-    if (result.created) created += 1;
-    else updated += 1;
-  }
-  db.exec('COMMIT');
-} catch (error) {
-  try { db.exec('ROLLBACK'); } catch {}
-  throw error;
+if (require.main === module) {
+  const result = run({ transaction: true });
+  console.log(`Anagrafiche TEST SDI create: ${result.created}`);
+  console.log(`Anagrafiche TEST SDI aggiornate: ${result.updated}`);
+  result.recipients.forEach((recipient) => {
+    console.log(`${recipient.codice_destinatario} - ${recipient.ragione_sociale}`);
+  });
 }
 
-console.log(`Anagrafiche TEST SDI create: ${created}`);
-console.log(`Anagrafiche TEST SDI aggiornate: ${updated}`);
-RECIPIENTS.forEach((recipient) => {
-  console.log(`${recipient.codice_destinatario} - ${recipient.ragione_sociale}`);
-});
+function run(options = {}) {
+  ensureColumns();
+  let created = 0;
+  let updated = 0;
+  const recipients = [];
+  const body = () => {
+    for (const recipient of RECIPIENTS) {
+      const result = upsertRecipient(recipient);
+      if (result.created) created += 1;
+      else updated += 1;
+      recipients.push({ ...recipient, id: result.id });
+    }
+  };
+  if (options.transaction) {
+    try {
+      db.exec('BEGIN');
+      body();
+      db.exec('COMMIT');
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch {}
+      throw error;
+    }
+  } else {
+    body();
+  }
+  return { created, updated, recipients };
+}
 
 function upsertRecipient(recipient) {
   const existing = db.prepare(`
@@ -191,3 +204,8 @@ function ensureColumns() {
     try { db.exec(sql); } catch {}
   });
 }
+
+module.exports = {
+  RECIPIENTS,
+  run
+};
