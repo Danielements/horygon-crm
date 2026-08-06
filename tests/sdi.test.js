@@ -8,6 +8,7 @@ const { validateInvoiceXml } = require('../src/services/sdi-xml-validator');
 const { parseSdiNotificationXml } = require('../src/services/sdi-notification-parser');
 const { receiveSdiNotificationXml } = require('../src/services/sdi-inbound');
 const { getSchemaRegistryEntry, listSchemaRegistry, syncSchemaRegistry } = require('../src/services/sdi-schema-registry');
+const { buildRiceviFileSoapEnvelope, parseRiceviFileResponse } = require('../src/services/sdi-transmission');
 
 function makeOrdinaryPayload(format) {
   return {
@@ -229,4 +230,26 @@ test('inbound notification links to existing flow and updates state', () => {
   assert.equal(updatedFlow.esito_codice, '00404');
   assert.equal(updatedFlow.identificativo_sdi, '987654');
   assert.equal(updatedInvoice.stato_sdi, 'scarto');
+});
+
+test('transmission SOAP envelope carries invoice filename and payload', () => {
+  const envelope = buildRiceviFileSoapEnvelope('IT03365990591_00001.xml', '<FatturaElettronica>ok</FatturaElettronica>');
+  assert.match(envelope, /http:\/\/www\.fatturapa\.it\/sdi\/ws\/trasmissione\/v1\.0\/types|http:\/\/www\.fatturapa\.gov\.it\/sdi\/ws\/trasmissione\/v1\.0\/types/);
+  assert.match(envelope, /<NomeFile>IT03365990591_00001\.xml<\/NomeFile>/);
+  assert.match(envelope, /PEZhdHR1cmFFbGV0dHJvbmljYT5vazwvRmF0dHVyYUVsZXR0cm9uaWNhPg==/);
+});
+
+test('transmission parser extracts SdI identifier from RiceviFile response', () => {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body>
+    <ns1:rispostaSdIRiceviFile xmlns:ns1="http://www.fatturapa.gov.it/sdi/ws/trasmissione/v1.0/types">
+      <IdentificativoSdI>32480000</IdentificativoSdI>
+      <DataOraRicezione>2026-08-06T15:10:00</DataOraRicezione>
+    </ns1:rispostaSdIRiceviFile>
+  </soap:Body>
+</soap:Envelope>`;
+  const parsed = parseRiceviFileResponse(xml);
+  assert.equal(parsed.identificativoSdi, '32480000');
+  assert.equal(parsed.dataOraRicezione, '2026-08-06T15:10:00');
 });

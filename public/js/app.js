@@ -3447,7 +3447,7 @@ function renderFattureRows(targetId, rows) {
     <td><div style="display:flex;gap:6px;flex-wrap:wrap">
       <button class="btn btn-outline btn-sm" onclick="previewFattura(${f.id})" title="Anteprima fattura">&#128065;</button>
       ${f.xml_path ? `<button class="btn btn-outline btn-sm" onclick="openFatturaXml(${f.id})" title="Apri XML">XML</button>` : ''}
-      ${f.tipo === 'emessa' ? `<button class="btn btn-outline btn-sm" onclick="testSendFatturaSdi(${f.id})">Test SDI</button>` : ''}
+      ${f.tipo === 'emessa' ? `<button class="btn btn-outline btn-sm" onclick="testSendFatturaSdi(${f.id})">Test SDI</button><button class="btn btn-accent btn-sm" onclick="testTransmitFatturaSdi(${f.id})">Invia TEST</button>` : ''}
     </div></td></tr>`).join('');
 }
 
@@ -3481,6 +3481,21 @@ async function testSendFatturaSdi(id) {
     }
   } catch (e) {
     toast(e.message || 'Errore generazione XML SDI', 'error');
+  }
+}
+
+async function testTransmitFatturaSdi(id) {
+  if (!confirm('Inviare davvero questa fattura a SdI in ambiente TEST?')) return;
+  try {
+    const result = await api('POST', `/sdi/fatture/${id}/test-transmit`, {});
+    const sdiId = result?.transmission?.identificativoSdi;
+    toast(sdiId ? `Fattura inviata a SdI TEST: ${sdiId}` : 'Fattura inviata a SdI TEST', 'success');
+    const active = document.querySelector('.section.active')?.id?.replace('section-', '') || 'fatture-attive';
+    if (['fatture-attive', 'fatture-passive', 'fatture-fuori-campo'].includes(active)) {
+      loadFattureBySection(active);
+    }
+  } catch (e) {
+    toast(e.message || 'Errore invio a SdI TEST', 'error');
   }
 }
 

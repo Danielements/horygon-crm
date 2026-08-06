@@ -7,6 +7,7 @@ const { authMiddleware, requirePermesso } = require('../middleware/auth');
 const { writeAudit } = require('../services/audit');
 const { writeSystemLog } = require('../services/system-log');
 const { generateOutboundXmlForInvoice } = require('../services/sdi-fatturapa');
+const { transmitInvoiceToSdiTest } = require('../services/sdi-transmission');
 const { receiveSdiNotificationXml } = require('../services/sdi-inbound');
 const { importInvoiceXml } = require('../services/fattura-import');
 const { XMLParser } = require('fast-xml-parser');
@@ -263,6 +264,56 @@ router.post('/fatture/:id/test-send', requirePermesso('fatture', 'edit'), async 
       livello: 'error',
       origine: 'sdi.test-send',
       route: `/api/sdi/fatture/${req.params.id}/test-send`,
+      metodo: 'POST',
+      utente_id: req.user.id,
+      messaggio: error.message,
+      stack: error.stack || null
+    });
+    res.status(400).json({ error: error.message });
+  }
+});
+
+router.post('/fatture/:id/test-transmit', requirePermesso('fatture', 'edit'), async (req, res) => {
+  try {
+    const result = await transmitInvoiceToSdiTest(req.params.id);
+    writeAudit({
+      utente_id: req.user.id,
+      azione: 'sdi.fattura.test_transmit',
+      entita_tipo: 'fattura',
+      entita_id: Number(req.params.id),
+      dettagli: {
+        flowId: result.flowId,
+        filename: result.filename,
+        xmlPath: result.xmlPath,
+        endpoint: result.transmission.endpoint,
+        statusCode: result.transmission.statusCode,
+        identificativoSdi: result.transmission.identificativoSdi
+      }
+    });
+    writeSystemLog({
+      livello: result.transmission.success ? 'info' : 'error',
+      origine: 'sdi.test-transmit',
+      route: `/api/sdi/fatture/${req.params.id}/test-transmit`,
+      metodo: 'POST',
+      utente_id: req.user.id,
+      messaggio: result.transmission.success
+        ? `Fattura trasmessa a SDI TEST: ${result.transmission.identificativoSdi || result.filename}`
+        : `Invio SDI TEST fallito: ${result.transmission.statusCode}`,
+      dettagli: {
+        flowId: result.flowId,
+        filename: result.filename,
+        xmlPath: result.xmlPath,
+        hash: result.hash,
+        transmission: result.transmission
+      }
+    });
+    const status = result.transmission.success ? 200 : 502;
+    res.status(status).json({ ok: result.transmission.success, ...result });
+  } catch (error) {
+    writeSystemLog({
+      livello: 'error',
+      origine: 'sdi.test-transmit',
+      route: `/api/sdi/fatture/${req.params.id}/test-transmit`,
       metodo: 'POST',
       utente_id: req.user.id,
       messaggio: error.message,
