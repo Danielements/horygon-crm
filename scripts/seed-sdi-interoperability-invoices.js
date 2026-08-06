@@ -7,8 +7,8 @@ const RECIPIENTS = [
   {
     tipo: 'cliente',
     ragione_sociale: 'CLIENTE TEST SDI XS00001 IMPOSSIBILITA RECAPITO',
-    piva: 'IT01043931991',
-    cf: '01043931991',
+    piva: 'IT01043931003',
+    cf: '01043931003',
     codice_destinatario: 'XS00001',
     note: 'TEST WST04 B2B/B2C: codice destinatario fittizio per impossibilita di recapito.'
   },

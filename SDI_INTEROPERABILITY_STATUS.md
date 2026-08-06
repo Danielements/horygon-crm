@@ -413,6 +413,12 @@ Limite ancora aperto:
 
 - la firma FPA12 per i test PA outbound non e' ancora automatizzata. Gli invii PA non firmati possono ancora produrre `00102 File non integro`.
 
+Nota dati fiscali per `XS00001`:
+
+- Il codice destinatario `XS00001` simula un canale inesistente, ma SdI continua a validare i dati fiscali del cessionario.
+- Un tentativo con P.IVA fittizia `01043931991` ha prodotto `RicevutaScarto 00305`.
+- La seed usa quindi P.IVA test gia accettata `IT01043931003`; il CRM omette il `CodiceFiscale` duplicato rispetto alla P.IVA.
+
 ## Comandi operativi VPS
 
 Aggiornare branch e rebuild:
