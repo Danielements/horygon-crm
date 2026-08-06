@@ -60,6 +60,7 @@ function inferTestName(numero, codiceDestinatario, payloadMeta = {}) {
   const n = String(numero || '').trim().toUpperCase();
   const code = String(codiceDestinatario || payloadMeta.codice_destinatario || '').trim().toUpperCase();
   if (n.startsWith('TEST-MC-001')) return 'Mancata consegna / impossibilita recapito';
+  if (n.startsWith('TEST-MC-B2C-0000000')) return 'Mancata consegna / impossibilita recapito';
   if (n.startsWith('TEST-DT-001')) return 'Decorrenza termini';
   if (n.startsWith('TEST-AT-001')) return 'Attestazione avvenuta trasmissione';
   if (n.startsWith('TEST-EC-KO-001')) return 'Scarto esito PA';
