@@ -276,10 +276,10 @@ function saveOutboundXml(invoice, customer, xml, payload, validation, options = 
 }
 
 function buildFilename(invoice, customer, payload) {
-  const vatCode = xmlSafeFilePart(payload.company.vat || payload.company.fiscalCode || 'azienda');
-  const customerCode = xmlSafeFilePart(customer.piva || customer.cf || customer.ragione_sociale || 'cliente');
-  const number = xmlSafeFilePart(invoice.numero_documento || invoice.numero || `fattura-${invoice.id}`);
-  return `${vatCode}_${customerCode}_${number}_${payload.fileProgressivo}.xml`;
+  const transmitterCountry = xmlSafeFilePart(payload.company.country || 'IT').slice(0, 2).toUpperCase();
+  const transmitterCode = xmlSafeFilePart(payload.company.vat || payload.company.fiscalCode || '00000000000').slice(0, 28);
+  const progressivo = xmlSafeFilePart(payload.fileProgressivo || buildProgressivoInvio(invoice.id)).slice(0, 10);
+  return `${transmitterCountry}${transmitterCode}_${progressivo}.xml`;
 }
 
 function buildPaymentPayload(invoice, total) {
@@ -327,9 +327,9 @@ function ensureDir(dir) {
 function xmlSafeFilePart(value) {
   return String(value || '')
     .trim()
-    .replace(/[^A-Za-z0-9._-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '') || 'file';
+    .replace(/[^A-Za-z0-9_.]+/g, '')
+    .replace(/\.+/g, '.')
+    .replace(/^\.+|\.+$/g, '') || 'file';
 }
 
 function toAmount(value) {
@@ -353,6 +353,7 @@ function toPosix(value) {
 }
 
 module.exports = {
+  buildFilename,
   buildInvoicePayload,
   generateOutboundXmlForInvoice
 };

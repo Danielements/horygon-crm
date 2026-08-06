@@ -8,6 +8,7 @@ const { validateInvoiceXml } = require('../src/services/sdi-xml-validator');
 const { parseSdiNotificationXml } = require('../src/services/sdi-notification-parser');
 const { receiveSdiNotificationXml } = require('../src/services/sdi-inbound');
 const { getSchemaRegistryEntry, listSchemaRegistry, syncSchemaRegistry } = require('../src/services/sdi-schema-registry');
+const { buildFilename } = require('../src/services/sdi-fatturapa');
 const { buildRiceviFileMtomMessage, buildRiceviFileSoapEnvelope, extractXmlFromHttpResponse, parseRiceviFileResponse } = require('../src/services/sdi-transmission');
 const {
   RECEPTION_TYPES_NS,
@@ -247,6 +248,20 @@ test('transmission SOAP envelope carries invoice filename and payload', () => {
   assert.match(envelope, /http:\/\/www\.fatturapa\.it\/sdi\/ws\/trasmissione\/v1\.0\/types|http:\/\/www\.fatturapa\.gov\.it\/sdi\/ws\/trasmissione\/v1\.0\/types/);
   assert.match(envelope, /<NomeFile>IT03365990591_00001\.xml<\/NomeFile>/);
   assert.match(envelope, /PEZhdHR1cmFFbGV0dHJvbmljYT5vazwvRmF0dHVyYUVsZXR0cm9uaWNhPg==/);
+});
+
+test('outbound filename follows SdIRiceviFile nomeFile_Type constraints', () => {
+  const filename = buildFilename(
+    { id: 4, numero_documento: 'TEST-SDI-001' },
+    { piva: 'IT01043931003' },
+    {
+      fileProgressivo: '2608061647',
+      company: { country: 'IT', vat: '03365990591', fiscalCode: '03365990591' }
+    }
+  );
+  assert.equal(filename, 'IT03365990591_2608061647.xml');
+  assert.match(filename, /^[A-Za-z0-9_.]{9,50}$/);
+  assert.equal(filename.length <= 50, true);
 });
 
 test('transmission MTOM message carries xop include and binary attachment', () => {
