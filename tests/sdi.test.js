@@ -8,7 +8,7 @@ const { validateInvoiceXml } = require('../src/services/sdi-xml-validator');
 const { parseSdiNotificationXml } = require('../src/services/sdi-notification-parser');
 const { receiveSdiNotificationXml } = require('../src/services/sdi-inbound');
 const { getSchemaRegistryEntry, listSchemaRegistry, syncSchemaRegistry } = require('../src/services/sdi-schema-registry');
-const { buildFilename } = require('../src/services/sdi-fatturapa');
+const { buildFilename, buildFilenameProgressivo } = require('../src/services/sdi-fatturapa');
 const { buildRiceviFileMtomMessage, buildRiceviFileSoapEnvelope, extractXmlFromHttpResponse, parseRiceviFileResponse } = require('../src/services/sdi-transmission');
 const {
   MESSAGGI_NS,
@@ -288,9 +288,15 @@ test('outbound filename follows SdIRiceviFile nomeFile_Type constraints', () => 
       company: { country: 'IT', vat: '03365990591', fiscalCode: '03365990591' }
     }
   );
-  assert.equal(filename, 'IT03365990591_2608061647.xml');
+  assert.equal(filename, 'IT03365990591_61647.xml');
   assert.match(filename, /^[A-Za-z0-9_.]{9,50}$/);
+  assert.match(filename, /^IT03365990591_[A-Z0-9]{5}\.xml$/);
   assert.equal(filename.length <= 50, true);
+});
+
+test('outbound filename progressivo is limited to five alphanumeric characters', () => {
+  assert.equal(buildFilenameProgressivo('SHUSSCN008'), 'CN008');
+  assert.equal(buildFilenameProgressivo('9'), '00009');
 });
 
 test('transmission MTOM message carries xop include and binary attachment', () => {

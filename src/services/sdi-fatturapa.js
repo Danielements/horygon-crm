@@ -278,8 +278,12 @@ function saveOutboundXml(invoice, customer, xml, payload, validation, options = 
 function buildFilename(invoice, customer, payload) {
   const transmitterCountry = xmlSafeFilePart(payload.company.country || 'IT').slice(0, 2).toUpperCase();
   const transmitterCode = xmlSafeFilePart(payload.company.vat || payload.company.fiscalCode || '00000000000').slice(0, 28);
-  const progressivo = xmlSafeFilePart(payload.fileProgressivo || buildProgressivoInvio(invoice.id)).slice(0, 10);
+  const progressivo = buildFilenameProgressivo(payload.fileProgressivo || buildProgressivoInvio(invoice.id));
   return `${transmitterCountry}${transmitterCode}_${progressivo}.xml`;
+}
+
+function buildFilenameProgressivo(value) {
+  return xmlSafeFilePart(value).slice(-5).padStart(5, '0').toUpperCase();
 }
 
 function buildPaymentPayload(invoice, total) {
@@ -354,6 +358,7 @@ function toPosix(value) {
 
 module.exports = {
   buildFilename,
+  buildFilenameProgressivo,
   buildInvoicePayload,
   generateOutboundXmlForInvoice
 };
