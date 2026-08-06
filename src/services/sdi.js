@@ -5,23 +5,28 @@ const crypto = require('crypto');
 const db = require('../db/database');
 
 const ROOT = path.resolve(__dirname, '../../');
+const SDI_CERTS_DIR = process.env.SDI_CERTS_DIR || '/run/sdi-certs';
+
+function sdiPath(...parts) {
+  return path.join(SDI_CERTS_DIR, ...parts);
+}
 
 const DEFAULT_SETTINGS = {
   'sdi.mode': 'test',
   'sdi.test.endpoint': 'https://testservizi.fatturapa.it/',
   'sdi.production.endpoint': 'https://servizi.fatturapa.it/',
-  'sdi.production.client_cert_path': path.join(ROOT, 'sdi-certs', 'production', 'client.crt'),
-  'sdi.production.client_key_path': path.join(ROOT, 'sdi-certs', 'production', 'client.key'),
-  'sdi.production.server_cert_path': path.join(ROOT, 'sdi-certs', 'production', 'server.crt'),
-  'sdi.production.server_key_path': '',
-  'sdi.production.ca_path': path.join(ROOT, 'sdi-certs', 'production', 'ca.crt'),
-  'sdi.production.remote_server_cert_path': path.join(ROOT, 'sdi-certs', 'production', 'sdi-prod-server.crt'),
-  'sdi.production.remote_client_public_cert_path': path.join(ROOT, 'sdi-certs', 'production', 'sdi-prod-client-public.crt'),
-  'sdi.test.ca_path': path.join(ROOT, 'sdi-certs', 'test', 'ca-test.crt'),
-  'sdi.test.remote_server_cert_path': path.join(ROOT, 'sdi-certs', 'test', 'sdi-test-server.crt'),
-  'sdi.test.remote_client_public_cert_path': path.join(ROOT, 'sdi-certs', 'test', 'sdi-test-client-public.crt'),
-  'sdi.csr.client_path': path.join(ROOT, 'sdi-certs', 'csr', 'client.csr'),
-  'sdi.csr.server_path': path.join(ROOT, 'sdi-certs', 'csr', 'server.csr')
+  'sdi.production.client_cert_path': sdiPath('prod', 'client.cer'),
+  'sdi.production.client_key_path': sdiPath('prod', 'client.key'),
+  'sdi.production.server_cert_path': sdiPath('prod', 'server.cer'),
+  'sdi.production.server_key_path': sdiPath('prod', 'server.key'),
+  'sdi.production.ca_path': sdiPath('prod', 'ca.cer'),
+  'sdi.production.remote_server_cert_path': sdiPath('prod', 'servizi.fatturapa.it.cer'),
+  'sdi.production.remote_client_public_cert_path': sdiPath('prod', 'Sistema_Interscambio_Fattura_PA.cer'),
+  'sdi.test.ca_path': sdiPath('test', 'CAEntratetest.cer'),
+  'sdi.test.remote_server_cert_path': sdiPath('test', 'testservizi.fatturapa.it.cer'),
+  'sdi.test.remote_client_public_cert_path': sdiPath('test', 'SistemaInterscambioFatturaPATest.cer'),
+  'sdi.csr.client_path': sdiPath('csr', 'client.csr'),
+  'sdi.csr.server_path': sdiPath('csr', 'server.csr')
 };
 
 function ensureSdiSettingsSeed() {
@@ -34,7 +39,9 @@ function ensureSdiSettingsSeed() {
 
 function getSetting(key) {
   const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key);
-  if (row && row.value !== undefined && row.value !== null && String(row.value) !== '') return String(row.value);
+  if (row && row.value !== undefined && row.value !== null && String(row.value) !== '') {
+    return normalizeLegacySettingPath(key, String(row.value));
+  }
   return DEFAULT_SETTINGS[key] ?? '';
 }
 
@@ -46,6 +53,26 @@ function getAllSdiSettings() {
 function normalizePath(filePath) {
   if (!filePath) return '';
   return path.isAbsolute(filePath) ? filePath : path.resolve(ROOT, filePath);
+}
+
+function normalizeLegacySettingPath(key, value) {
+  if (process.platform === 'win32') return value;
+  if (!/^[A-Za-z]:\\/.test(value)) return value;
+  const mapping = {
+    'sdi.production.client_cert_path': sdiPath('prod', 'client.cer'),
+    'sdi.production.client_key_path': sdiPath('prod', 'client.key'),
+    'sdi.production.server_cert_path': sdiPath('prod', 'server.cer'),
+    'sdi.production.server_key_path': sdiPath('prod', 'server.key'),
+    'sdi.production.ca_path': sdiPath('prod', 'ca.cer'),
+    'sdi.production.remote_server_cert_path': sdiPath('prod', 'servizi.fatturapa.it.cer'),
+    'sdi.production.remote_client_public_cert_path': sdiPath('prod', 'Sistema_Interscambio_Fattura_PA.cer'),
+    'sdi.test.ca_path': sdiPath('test', 'CAEntratetest.cer'),
+    'sdi.test.remote_server_cert_path': sdiPath('test', 'testservizi.fatturapa.it.cer'),
+    'sdi.test.remote_client_public_cert_path': sdiPath('test', 'SistemaInterscambioFatturaPATest.cer'),
+    'sdi.csr.client_path': sdiPath('csr', 'client.csr'),
+    'sdi.csr.server_path': sdiPath('csr', 'server.csr')
+  };
+  return mapping[key] || value;
 }
 
 function pemFromDer(buffer, label) {

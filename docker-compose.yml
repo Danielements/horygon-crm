@@ -8,9 +8,11 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./horygon.db:/app/horygon.db
+      - /root/sdi-certs:/run/sdi-certs:ro
     environment:
       - PORT=3001
       - DB_PATH=/app/horygon.db
+      - SDI_CERTS_DIR=/run/sdi-certs
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
       - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
