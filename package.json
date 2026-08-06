@@ -5,7 +5,8 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "dev": "nodemon src/index.js",
+    "test": "node --test tests/sdi.test.js"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
@@ -16,8 +17,10 @@
     "express": "^5.0.1",
     "express-rate-limit": "^7.0.0",
     "express-session": "^1.18.0",
+    "fast-xml-parser": "^5.10.1",
     "googleapis": "^144.0.0",
     "jsonwebtoken": "^9.0.2",
+    "libxml2-wasm": "^0.7.1",
     "multer": "^1.4.5-lts.1",
     "node-cron": "^3.0.3",
     "pdfkit": "^0.15.0",

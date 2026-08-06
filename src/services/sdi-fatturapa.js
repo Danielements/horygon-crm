@@ -3,11 +3,21 @@ const path = require('path');
 const crypto = require('crypto');
 const db = require('../db/database');
 const { getSetting } = require('./google');
+const { getSchemaRegistryEntry, syncSchemaRegistry } = require('./sdi-schema-registry');
+const { validateInvoiceXml } = require('./sdi-xml-validator');
+const {
+  buildOrdinaryInvoiceXml,
+  buildSimplifiedInvoiceXml,
+  buildProgressivoInvio,
+  mapDocumentType,
+  summarizeVat
+} = require('./sdi-fatturapa-builder');
 
 const ROOT = path.resolve(__dirname, '../../');
 const OUTBOUND_DIR = path.join(ROOT, 'uploads', 'sdi-outbound');
 
-function generateOutboundXmlForInvoice(fatturaId, options = {}) {
+async function generateOutboundXmlForInvoice(fatturaId, options = {}) {
+  syncSchemaRegistry();
   const invoice = loadInvoice(fatturaId);
   if (!invoice) throw new Error('Fattura non trovata');
   if (invoice.tipo !== 'emessa') throw new Error('Il test SDI e disponibile solo per fatture emesse');
@@ -15,8 +25,18 @@ function generateOutboundXmlForInvoice(fatturaId, options = {}) {
   const company = loadCompanyProfile();
   const customer = loadRecipientProfile(invoice.anagrafica_id);
   const payload = buildInvoicePayload(invoice, company, customer, options);
-  const xml = buildFatturaPaXml(payload);
-  return saveOutboundXml(invoice, customer, xml, payload, options);
+  const xml = payload.formatoTrasmissione === 'FSM10'
+    ? buildSimplifiedInvoiceXml(payload)
+    : buildOrdinaryInvoiceXml(payload);
+  const validation = await validateInvoiceXml({ xml, format: payload.formatoTrasmissione });
+  if (!validation.ok) {
+    const messages = [
+      ...(validation.xsd.errors || []).map((item) => item.message),
+      ...(validation.application.errors || [])
+    ].filter(Boolean);
+    throw new Error(`XML FatturaPA non valido: ${messages.join(' | ')}`);
+  }
+  return saveOutboundXml(invoice, customer, xml, payload, validation, options);
 }
 
 function loadInvoice(fatturaId) {
@@ -65,13 +85,20 @@ function loadCompanyProfile() {
     denomination: String(getSetting('sdi.company.denomination', '') || '').trim(),
     regimeFiscale: String(getSetting('sdi.company.regime_fiscale', 'RF01') || 'RF01').trim(),
     address: String(getSetting('sdi.company.address', '') || '').trim(),
+    streetNumber: String(getSetting('sdi.company.street_number', '') || '').trim(),
     cap: String(getSetting('sdi.company.cap', '') || '').trim(),
     city: String(getSetting('sdi.company.city', '') || '').trim(),
     province: String(getSetting('sdi.company.province', '') || '').trim().toUpperCase(),
     pec: String(getSetting('sdi.company.pec', '') || '').trim(),
+    email: String(getSetting('sdi.company.email', '') || '').trim(),
+    phone: String(getSetting('sdi.company.phone', '') || '').trim(),
+    fax: String(getSetting('sdi.company.fax', '') || '').trim(),
     reaOffice: String(getSetting('sdi.company.rea_office', '') || '').trim().toUpperCase(),
     reaNumber: String(getSetting('sdi.company.rea_number', '') || '').trim(),
-    shareCapital: toAmount(getSetting('sdi.company.share_capital', '0')) || 0
+    shareCapital: toAmount(getSetting('sdi.company.share_capital', '0')),
+    soleShareholder: String(getSetting('sdi.company.sole_shareholder', '') || '').trim(),
+    liquidationState: String(getSetting('sdi.company.liquidation_state', 'LN') || 'LN').trim(),
+    referenceAdministration: String(getSetting('sdi.company.reference_administration', '') || '').trim()
   };
   const missing = [];
   if (!company.country) missing.push('sdi.company.country');
@@ -123,14 +150,18 @@ function buildInvoicePayload(invoice, company, customer, options = {}) {
     const quantita = toAmount(line.quantita) || 1;
     const prezzoUnitario = toAmount(line.prezzo_unitario) || 0;
     const totaleRiga = toAmount(line.totale_riga) || toAmount(line.imponibile) || round2(quantita * prezzoUnitario);
+    const aliquotaIva = toAmount(line.aliquota_iva) || 0;
     return {
       numeroLinea: index + 1,
       descrizione: line.descrizione || `Riga ${index + 1}`,
       quantita,
+      unitaMisura: String(line.unita_misura || 'NR').trim(),
       prezzoUnitario,
       totaleRiga,
-      aliquotaIva: toAmount(line.aliquota_iva) || 0,
-      naturaIva: String(line.natura_iva || '').trim() || null
+      aliquotaIva,
+      importoIva: toAmount(line.importo_iva) ?? round2(totaleRiga * aliquotaIva / 100),
+      naturaIva: String(line.natura_iva || '').trim() || null,
+      riferimentoNormativo: null
     };
   });
   if (!lines.length) throw new Error('La fattura non contiene righe da esportare');
@@ -141,165 +172,68 @@ function buildInvoicePayload(invoice, company, customer, options = {}) {
         naturaIva: String(row.natura_iva || '').trim() || null,
         imponibile: toAmount(row.imponibile) || 0,
         imposta: toAmount(row.imposta) || 0,
-        riferimentoNormativo: String(row.riferimento_normativo || '').trim() || null
+        riferimentoNormativo: String(row.riferimento_normativo || '').trim() || null,
+        esigibilitaIva: (toAmount(row.aliquota_iva) || 0) > 0 ? 'I' : undefined
       }))
     : summarizeVat(lines);
 
+  const format = options.forceFormat || (customer.isPa ? 'FPA12' : 'FPR12');
+  const schema = getSchemaRegistryEntry(format);
   const totaleDocumento = toAmount(invoice.totale) || round2(lines.reduce((sum, line) => sum + line.totaleRiga, 0) + riepilogo.reduce((sum, row) => sum + row.imposta, 0));
-  const destinationCode = customer.destinationCode || (customer.pec ? '0000000' : '');
-  const country = normalizeCountry(customer.paese || 'IT');
-  const fiscalCode = normalizeIdentifier(customer.cf);
-  const vat = splitVat(customer.piva);
-  const transmissionCountry = customer.isPa ? company.country : (vat.country || country || company.country);
-  const fileProgressivo = buildProgressivoInvio(invoice.id);
 
   return {
     mode: String(options.mode || getSetting('sdi.mode', 'test') || 'test').trim(),
     invoiceId: invoice.id,
     numero,
     data,
-    totaleDocumento,
     tipoDocumento: mapDocumentType(invoice.tipo_documento),
-    formatoTrasmissione: customer.isPa ? 'FPA12' : 'FPR12',
-    fileProgressivo,
-    transmissionCountry,
-    destinationCode,
+    formatoTrasmissione: format,
+    namespace: schema.namespace,
+    fileProgressivo: buildProgressivoInvio(invoice.id),
+    destinationCode: customer.destinationCode || (customer.pec ? '0000000' : ''),
     pecDestinatario: customer.pec ? String(customer.pec).trim() : '',
     company,
+    transmitter: {
+      email: String(getSetting('sdi.transmitter.email', company.pec || company.email || '') || '').trim(),
+      phone: String(getSetting('sdi.transmitter.phone', company.phone || '') || '').trim()
+    },
     customer: {
       denomination: String(customer.ragione_sociale || '').trim(),
       address: String(customer.indirizzo || '').trim(),
+      streetNumber: '',
       cap: String(customer.cap || '').trim(),
       city: String(customer.citta || '').trim(),
       province: String(customer.provincia || '').trim().toUpperCase(),
-      country,
-      fiscalCode,
-      vat
+      country: normalizeCountry(customer.paese || 'IT'),
+      fiscalCode: normalizeIdentifier(customer.cf),
+      vat: splitVat(customer.piva)
     },
+    importoTotaleDocumento: totaleDocumento,
+    divisa: String(invoice.valuta || 'EUR').trim() || 'EUR',
+    causali: [],
     lines,
-    riepilogo
+    riepilogo,
+    payment: buildPaymentPayload(invoice, totaleDocumento)
   };
 }
 
-function buildFatturaPaXml(payload) {
-  const customerHasVat = Boolean(payload.customer.vat.code);
-  const customerHasFiscalCode = Boolean(payload.customer.fiscalCode);
-  const bodyLines = payload.lines.map((line) => `
-        <DettaglioLinee>
-          <NumeroLinea>${line.numeroLinea}</NumeroLinea>
-          <Descrizione>${xmlEscape(line.descrizione)}</Descrizione>
-          <Quantita>${formatDecimal(line.quantita)}</Quantita>
-          <PrezzoUnitario>${formatDecimal(line.prezzoUnitario)}</PrezzoUnitario>
-          <PrezzoTotale>${formatDecimal(line.totaleRiga)}</PrezzoTotale>
-          <AliquotaIVA>${formatDecimal(line.aliquotaIva)}</AliquotaIVA>
-          ${line.naturaIva ? `<Natura>${xmlEscape(line.naturaIva)}</Natura>` : ''}
-        </DettaglioLinee>`).join('\n');
-  const bodySummary = payload.riepilogo.map((row) => `
-        <DatiRiepilogo>
-          <AliquotaIVA>${formatDecimal(row.aliquotaIva)}</AliquotaIVA>
-          ${row.naturaIva ? `<Natura>${xmlEscape(row.naturaIva)}</Natura>` : ''}
-          <ImponibileImporto>${formatDecimal(row.imponibile)}</ImponibileImporto>
-          <Imposta>${formatDecimal(row.imposta)}</Imposta>
-          ${row.riferimentoNormativo ? `<RiferimentoNormativo>${xmlEscape(row.riferimentoNormativo)}</RiferimentoNormativo>` : ''}
-        </DatiRiepilogo>`).join('\n');
-
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<p:FatturaElettronica versione="${payload.formatoTrasmissione}" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" xmlns:p="http://ivaservizi.agenziaentrate.gov.it/docs/xsd/fatture/v1.2">
-  <FatturaElettronicaHeader>
-    <DatiTrasmissione>
-      <IdTrasmittente>
-        <IdPaese>${xmlEscape(payload.company.country)}</IdPaese>
-        <IdCodice>${xmlEscape(payload.company.vat)}</IdCodice>
-      </IdTrasmittente>
-      <ProgressivoInvio>${xmlEscape(payload.fileProgressivo)}</ProgressivoInvio>
-      <FormatoTrasmissione>${payload.formatoTrasmissione}</FormatoTrasmissione>
-      <CodiceDestinatario>${xmlEscape(payload.destinationCode || '0000000')}</CodiceDestinatario>
-      ${payload.pecDestinatario ? `<PECDestinatario>${xmlEscape(payload.pecDestinatario)}</PECDestinatario>` : ''}
-    </DatiTrasmissione>
-    <CedentePrestatore>
-      <DatiAnagrafici>
-        <IdFiscaleIVA>
-          <IdPaese>${xmlEscape(payload.company.country)}</IdPaese>
-          <IdCodice>${xmlEscape(payload.company.vat)}</IdCodice>
-        </IdFiscaleIVA>
-        <CodiceFiscale>${xmlEscape(payload.company.fiscalCode)}</CodiceFiscale>
-        <Anagrafica>
-          <Denominazione>${xmlEscape(payload.company.denomination)}</Denominazione>
-        </Anagrafica>
-        <RegimeFiscale>${xmlEscape(payload.company.regimeFiscale)}</RegimeFiscale>
-      </DatiAnagrafici>
-      <Sede>
-        <Indirizzo>${xmlEscape(payload.company.address)}</Indirizzo>
-        <CAP>${xmlEscape(payload.company.cap)}</CAP>
-        <Comune>${xmlEscape(payload.company.city)}</Comune>
-        <Provincia>${xmlEscape(payload.company.province)}</Provincia>
-        <Nazione>${xmlEscape(payload.company.country)}</Nazione>
-      </Sede>
-      ${payload.company.reaOffice && payload.company.reaNumber ? `
-      <IscrizioneREA>
-        <Ufficio>${xmlEscape(payload.company.reaOffice)}</Ufficio>
-        <NumeroREA>${xmlEscape(payload.company.reaNumber)}</NumeroREA>
-        <CapitaleSociale>${formatDecimal(payload.company.shareCapital)}</CapitaleSociale>
-        <SocioUnico>SM</SocioUnico>
-        <StatoLiquidazione>LN</StatoLiquidazione>
-      </IscrizioneREA>` : ''}
-      ${payload.company.pec ? `
-      <Contatti>
-        <Email>${xmlEscape(payload.company.pec)}</Email>
-      </Contatti>` : ''}
-    </CedentePrestatore>
-    <CessionarioCommittente>
-      <DatiAnagrafici>
-        ${customerHasVat ? `
-        <IdFiscaleIVA>
-          <IdPaese>${xmlEscape(payload.customer.vat.country || payload.customer.country || 'IT')}</IdPaese>
-          <IdCodice>${xmlEscape(payload.customer.vat.code)}</IdCodice>
-        </IdFiscaleIVA>` : ''}
-        ${customerHasFiscalCode ? `<CodiceFiscale>${xmlEscape(payload.customer.fiscalCode)}</CodiceFiscale>` : ''}
-        <Anagrafica>
-          <Denominazione>${xmlEscape(payload.customer.denomination)}</Denominazione>
-        </Anagrafica>
-      </DatiAnagrafici>
-      <Sede>
-        <Indirizzo>${xmlEscape(payload.customer.address)}</Indirizzo>
-        <CAP>${xmlEscape(payload.customer.cap)}</CAP>
-        <Comune>${xmlEscape(payload.customer.city)}</Comune>
-        <Provincia>${xmlEscape(payload.customer.province)}</Provincia>
-        <Nazione>${xmlEscape(payload.customer.country || 'IT')}</Nazione>
-      </Sede>
-    </CessionarioCommittente>
-  </FatturaElettronicaHeader>
-  <FatturaElettronicaBody>
-    <DatiGenerali>
-      <DatiGeneraliDocumento>
-        <TipoDocumento>${xmlEscape(payload.tipoDocumento)}</TipoDocumento>
-        <Divisa>EUR</Divisa>
-        <Data>${payload.data}</Data>
-        <Numero>${xmlEscape(payload.numero)}</Numero>
-        <ImportoTotaleDocumento>${formatDecimal(payload.totaleDocumento)}</ImportoTotaleDocumento>
-      </DatiGeneraliDocumento>
-    </DatiGenerali>
-    <DatiBeniServizi>
-${bodyLines}
-${bodySummary}
-    </DatiBeniServizi>
-  </FatturaElettronicaBody>
-</p:FatturaElettronica>
-`;
-}
-
-function saveOutboundXml(invoice, customer, xml, payload, options = {}) {
-  ensureDir(OUTBOUND_DIR);
+function saveOutboundXml(invoice, customer, xml, payload, validation, options = {}) {
+  const schema = getSchemaRegistryEntry(payload.formatoTrasmissione);
+  const dayDir = path.join(OUTBOUND_DIR, new Date().toISOString().slice(0, 10).replace(/-/g, '/'));
+  ensureDir(dayDir);
   const filename = buildFilename(invoice, customer, payload);
-  const absolutePath = path.join(OUTBOUND_DIR, filename);
-  fs.writeFileSync(absolutePath, xml, 'utf8');
-  const fileHash = crypto.createHash('sha1').update(xml).digest('hex');
-  const relativePath = toPosix(path.relative(ROOT, absolutePath));
+  const xmlSha256 = crypto.createHash('sha256').update(xml).digest('hex');
+  const immutableFilename = `${xmlSha256}_${filename}`;
+  const absolutePath = path.join(dayDir, immutableFilename);
+  if (!fs.existsSync(absolutePath)) fs.writeFileSync(absolutePath, xml, 'utf8');
+  const relativePath = `/${toPosix(path.relative(ROOT, absolutePath))}`;
   const mode = String(options.mode || getSetting('sdi.mode', 'test') || 'test').trim();
+
   const flow = db.prepare(`
     INSERT INTO fatture_sdi_flussi (
-      fattura_id, direzione, modalita, tipo_messaggio, nome_file, stato, xml_path, hash_file, payload_meta, ultimo_evento_il
-    ) VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))
+      fattura_id, direzione, modalita, tipo_messaggio, nome_file, stato, xml_path, hash_file, payload_meta, ultimo_evento_il,
+      sdi_formato, sdi_schema_name, sdi_schema_version, sdi_schema_sha256, sdi_xml_sha256, sdi_xml_immutabile_path
+    ) VALUES (?,?,?,?,?,?,?,?,?,datetime('now'),?,?,?,?,?,?)
   `).run(
     invoice.id,
     'outbound',
@@ -307,49 +241,38 @@ function saveOutboundXml(invoice, customer, xml, payload, options = {}) {
     'fattura',
     filename,
     'xml_generato_test',
-    `/${relativePath}`,
-    fileHash,
+    relativePath,
+    xmlSha256,
     JSON.stringify({
       formato_trasmissione: payload.formatoTrasmissione,
       progressivo_invio: payload.fileProgressivo,
       codice_destinatario: payload.destinationCode,
-      cliente: payload.customer.denomination
-    })
+      cliente: payload.customer.denomination,
+      validation
+    }),
+    payload.formatoTrasmissione,
+    schema.schemaName,
+    schema.schemaVersion,
+    schema.sha256,
+    xmlSha256,
+    relativePath
   );
+
   db.prepare(`
     UPDATE fatture
     SET xml_path = ?, stato_sdi = ?
     WHERE id = ?
-  `).run(`/${relativePath}`, 'xml_generato_test', invoice.id);
+  `).run(relativePath, 'xml_generato_test', invoice.id);
 
   return {
     flowId: flow.lastInsertRowid,
     filename,
-    xmlPath: `/${relativePath}`,
+    xmlPath: relativePath,
     absolutePath,
-    hash: fileHash,
+    hash: xmlSha256,
+    validation,
     preview: xml
   };
-}
-
-function summarizeVat(lines) {
-  const grouped = new Map();
-  lines.forEach((line) => {
-    const key = `${Number(line.aliquotaIva || 0).toFixed(2)}|${line.naturaIva || ''}`;
-    if (!grouped.has(key)) {
-      grouped.set(key, {
-        aliquotaIva: Number(line.aliquotaIva || 0),
-        naturaIva: line.naturaIva || null,
-        imponibile: 0,
-        imposta: 0,
-        riferimentoNormativo: null
-      });
-    }
-    const row = grouped.get(key);
-    row.imponibile = round2(row.imponibile + Number(line.totaleRiga || 0));
-    row.imposta = round2(row.imposta + Number(line.totaleRiga || 0) * Number(line.aliquotaIva || 0) / 100);
-  });
-  return [...grouped.values()];
 }
 
 function buildFilename(invoice, customer, payload) {
@@ -359,9 +282,15 @@ function buildFilename(invoice, customer, payload) {
   return `${vatCode}_${customerCode}_${number}_${payload.fileProgressivo}.xml`;
 }
 
-function buildProgressivoInvio(invoiceId) {
-  const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(2, 12);
-  return `${stamp}${String(invoiceId).padStart(4, '0')}`.slice(0, 10);
+function buildPaymentPayload(invoice, total) {
+  return {
+    condizioniPagamento: 'TP02',
+    details: [{
+      modalitaPagamento: 'MP05',
+      dataScadenzaPagamento: normalizeDate(invoice.scadenza || invoice.data) || undefined,
+      importoPagamento: total
+    }]
+  };
 }
 
 function splitVat(value) {
@@ -391,26 +320,8 @@ function normalizeDate(value) {
   return '';
 }
 
-function mapDocumentType(value) {
-  const normalized = String(value || 'fattura').trim().toLowerCase();
-  if (normalized === 'nota_credito') return 'TD04';
-  if (normalized === 'nota_debito') return 'TD05';
-  if (normalized === 'autofattura') return 'TD16';
-  if (normalized === 'integrazione_estero') return 'TD17';
-  return 'TD01';
-}
-
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-}
-
-function xmlEscape(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
 }
 
 function xmlSafeFilePart(value) {
@@ -419,10 +330,6 @@ function xmlSafeFilePart(value) {
     .replace(/[^A-Za-z0-9._-]+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '') || 'file';
-}
-
-function formatDecimal(value) {
-  return Number(value || 0).toFixed(2);
 }
 
 function toAmount(value) {
@@ -446,5 +353,6 @@ function toPosix(value) {
 }
 
 module.exports = {
+  buildInvoicePayload,
   generateOutboundXmlForInvoice
 };

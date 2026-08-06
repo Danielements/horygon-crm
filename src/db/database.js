@@ -365,6 +365,25 @@ function ensureColumn(table, definition) {
 ].forEach(col => ensureColumn('fatture_righe', col));
 
 [
+  "sdi_formato TEXT",
+  "sdi_schema_name TEXT",
+  "sdi_schema_version TEXT",
+  "sdi_schema_sha256 TEXT",
+  "sdi_xml_sha256 TEXT",
+  "sdi_xml_immutabile_path TEXT"
+].forEach(col => ensureColumn('fatture_sdi_flussi', col));
+
+[
+  "original_filename TEXT",
+  "identificativo_sdi TEXT",
+  "hash_sha256 TEXT",
+  "ricevuto_il TEXT",
+  "fattura_id INTEGER",
+  "stato_normalizzato TEXT",
+  "nome_file_fattura TEXT"
+].forEach(col => ensureColumn('fatture_sdi_notifiche', col));
+
+[
   "imponibile REAL DEFAULT 0",
   "iva REAL DEFAULT 0",
   "valuta TEXT DEFAULT 'EUR'"
@@ -435,12 +454,34 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     flusso_id INTEGER NOT NULL,
     tipo_notifica TEXT NOT NULL,
+    original_filename TEXT,
+    identificativo_sdi TEXT,
+    hash_sha256 TEXT,
+    ricevuto_il TEXT,
+    fattura_id INTEGER,
+    stato_normalizzato TEXT,
+    nome_file_fattura TEXT,
     codice TEXT,
     descrizione TEXT,
     xml_path TEXT,
     payload_meta TEXT,
     creato_il TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (flusso_id) REFERENCES fatture_sdi_flussi(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS sdi_schema_registry (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    format TEXT NOT NULL UNIQUE,
+    schema_name TEXT NOT NULL,
+    schema_version TEXT NOT NULL,
+    local_path TEXT NOT NULL,
+    namespace TEXT,
+    root_element TEXT NOT NULL,
+    valid_from TEXT,
+    valid_to TEXT,
+    sha256 TEXT NOT NULL,
+    enabled INTEGER DEFAULT 1,
+    updated_at TEXT DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS proforme_invoice (

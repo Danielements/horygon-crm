@@ -25,9 +25,9 @@ router.get('/flows', requirePermesso('fatture', 'read'), (req, res) => {
   res.json(rows);
 });
 
-router.post('/fatture/:id/test-send', requirePermesso('fatture', 'edit'), (req, res) => {
+router.post('/fatture/:id/test-send', requirePermesso('fatture', 'edit'), async (req, res) => {
   try {
-    const result = generateOutboundXmlForInvoice(req.params.id, { mode: 'test' });
+    const result = await generateOutboundXmlForInvoice(req.params.id, { mode: 'test' });
     writeAudit({
       utente_id: req.user.id,
       azione: 'sdi.fattura.test_send',
