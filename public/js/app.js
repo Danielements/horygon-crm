@@ -1025,6 +1025,7 @@ function renderOrdiniMobileCards(rows = []) {
         <button class="btn btn-outline btn-sm" onclick="editOrdine(${o.id})">Apri</button>
         <button class="btn btn-outline btn-sm" onclick="openApiPdf('/ordini/${o.id}/pdf')">PDF</button>
         <button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('ordine',${o.id})">Invia</button>
+        ${o.tipo === 'vendita' && o.stato === 'confermato' ? `<button class="btn btn-outline btn-sm" onclick="creaFatturaDaOrdine(${o.id})">Crea fattura</button>` : ''}
         <button class="btn btn-outline btn-sm" onclick="creaDdtDaOrdine(${o.id})">Crea DDT</button>
         <button class="btn btn-danger btn-sm" onclick="deleteOrdine(${o.id})">Elimina</button>
         ${renderDocumentLogButton('ordine', o.id, 'mobile')}
@@ -2930,7 +2931,7 @@ async function loadOrdini() {
     <td>${o.ragione_sociale || '-'}</td><td>${o.data_ordine || '-'}</td>
     <td>${o.totale ? formatCurrencyIt(o.totale) : '-'}</td>
     <td>${renderStateBadge(o.stato)}</td>
-      <td><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start"><button class="btn btn-outline btn-sm" onclick="editOrdine(${o.id})">Apri</button><button class="btn btn-outline btn-sm" onclick="openApiPdf('/ordini/${o.id}/pdf')">PDF</button><button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('ordine',${o.id})">Invia</button><button class="btn btn-outline btn-sm" onclick="creaDdtDaOrdine(${o.id})">Crea DDT</button><button class="btn btn-danger btn-sm" onclick="deleteOrdine(${o.id})">Elimina</button>${renderDocumentLogButton('ordine', o.id, 'desk')}<select class="btn btn-outline btn-sm" onchange="cambiaStatoOrdine(${o.id},this.value)">
+      <td><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start"><button class="btn btn-outline btn-sm" onclick="editOrdine(${o.id})">Apri</button><button class="btn btn-outline btn-sm" onclick="openApiPdf('/ordini/${o.id}/pdf')">PDF</button><button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('ordine',${o.id})">Invia</button>${o.tipo === 'vendita' && o.stato === 'confermato' ? `<button class="btn btn-outline btn-sm" onclick="creaFatturaDaOrdine(${o.id})">Crea fattura</button>` : ''}<button class="btn btn-outline btn-sm" onclick="creaDdtDaOrdine(${o.id})">Crea DDT</button><button class="btn btn-danger btn-sm" onclick="deleteOrdine(${o.id})">Elimina</button>${renderDocumentLogButton('ordine', o.id, 'desk')}<select class="btn btn-outline btn-sm" onchange="cambiaStatoOrdine(${o.id},this.value)">
       ${['ricevuto','confermato','in_lavorazione','spedito','consegnato','annullato'].map(s => `<option value="${s}"${o.stato === s ? ' selected' : ''}>${s}</option>`).join('')}
     </select>${renderDocumentSendMeta(o)}</div></td></tr>`).join('');
   renderSummaryCards('ordini-summary', [
@@ -2962,6 +2963,16 @@ async function creaDdtDaOrdine(id) {
     const result = await api('POST', `/ordini/${id}/convert-to-ddt`, {});
     toast(`DDT creato: ${result?.numero_ddt || result?.ddt_id}`, 'success');
     loadDdt();
+    loadOrdini();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function creaFatturaDaOrdine(id) {
+  try {
+    const result = await api('POST', `/ordini/${id}/convert-to-fattura`, {});
+    toast(`Fattura creata: ${result?.numero || result?.fattura_id}`, 'success');
+    navigateTo('fatture-attive');
+    loadFattureBySection('fatture-attive');
     loadOrdini();
   } catch (e) { toast(e.message, 'error'); }
 }

@@ -15,6 +15,64 @@ const s = (v) => (v === undefined || v === '' || v === null) ? null : v;
 const n = (v) => { const p = parseFloat(v); return isNaN(p) ? null : p; };
 const i = (v) => { const p = parseInt(v); return isNaN(p) ? null : p; };
 
+function buildInvoiceNumberFromOrder(orderCode) {
+  const year = new Date().getFullYear();
+  const base = `FAT-${year}-${String(orderCode || 'ORD').replace(/[^A-Za-z0-9-]/g, '').slice(-20) || 'ORD'}`;
+  let candidate = base;
+  let suffix = 2;
+  while (db.prepare('SELECT id FROM fatture WHERE numero = ? LIMIT 1').get(candidate)) {
+    candidate = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
+}
+
+function buildInvoiceRowsFromOrderRows(rows = []) {
+  return rows.map((row) => {
+    const quantita = Number(row.quantita || 0) || 0;
+    const prezzoUnitario = Number(row.prezzo_unitario || 0) || 0;
+    const sconto = Number(row.sconto || 0) || 0;
+    const imponibile = Math.max(0, quantita * prezzoUnitario - sconto);
+    const aliquotaIva = Number(row.aliquota_iva || 0) || 0;
+    const importoIva = +(imponibile * (aliquotaIva / 100)).toFixed(2);
+    return {
+      prodotto_id: row.prodotto_id,
+      descrizione: row.descrizione || row.nome || row.codice_interno || `Prodotto ${row.prodotto_id}`,
+      quantita,
+      prezzo_unitario: prezzoUnitario,
+      sconto,
+      imponibile: +imponibile.toFixed(2),
+      aliquota_iva: aliquotaIva,
+      natura_iva: row.natura_iva || null,
+      importo_iva: importoIva,
+      totale_riga: +(imponibile + importoIva).toFixed(2)
+    };
+  });
+}
+
+function buildInvoiceVatSummary(rows = []) {
+  const buckets = new Map();
+  rows.forEach((row) => {
+    const key = `${Number(row.aliquota_iva || 0)}|${row.natura_iva || ''}`;
+    if (!buckets.has(key)) {
+      buckets.set(key, {
+        aliquota_iva: Number(row.aliquota_iva || 0) || 0,
+        natura_iva: row.natura_iva || null,
+        imponibile: 0,
+        imposta: 0
+      });
+    }
+    const bucket = buckets.get(key);
+    bucket.imponibile += Number(row.imponibile || 0) || 0;
+    bucket.imposta += Number(row.importo_iva || 0) || 0;
+  });
+  return Array.from(buckets.values()).map((row) => ({
+    ...row,
+    imponibile: +row.imponibile.toFixed(2),
+    imposta: +row.imposta.toFixed(2)
+  }));
+}
+
 function getGiacenza(prodottoId) {
   const row = db.prepare(`
     SELECT COALESCE(SUM(CASE
@@ -294,6 +352,117 @@ router.patch('/:id/stato', requirePermesso('ordini', 'edit'), async (req, res, n
     res.json({ ok: true });
   } catch (e) {
     if (e.code === 'SQLITE_CONSTRAINT') return next();
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.post('/:id/convert-to-fattura', requirePermesso('fatture', 'edit'), (req, res) => {
+  const ordineId = Number(req.params.id);
+  const ordine = db.prepare(`
+    SELECT o.*, a.piva, a.cf, a.ragione_sociale
+    FROM ordini o
+    LEFT JOIN anagrafiche a ON a.id = o.anagrafica_id
+    WHERE o.id = ?
+  `).get(ordineId);
+  if (!ordine) return res.status(404).json({ error: 'Ordine non trovato' });
+  if (ordine.tipo !== 'vendita') {
+    return res.status(400).json({ error: 'La fattura puo essere generata solo da ordini vendita' });
+  }
+  if (String(ordine.stato || '').toLowerCase() !== 'confermato') {
+    return res.status(400).json({ error: 'La fattura puo essere generata solo da ordini confermati' });
+  }
+  const existingInvoice = db.prepare('SELECT id, numero FROM fatture WHERE ordine_id = ? LIMIT 1').get(ordineId);
+  if (existingInvoice) {
+    return res.status(400).json({ error: `Ordine gia collegato alla fattura ${existingInvoice.numero || existingInvoice.id}` });
+  }
+  const orderRows = db.prepare(`
+    SELECT r.*, p.nome, p.codice_interno, p.aliquota_iva, p.natura_iva
+    FROM ordini_righe r
+    LEFT JOIN prodotti p ON p.id = r.prodotto_id
+    WHERE r.ordine_id = ?
+    ORDER BY r.id
+  `).all(ordineId);
+  if (!orderRows.length) {
+    return res.status(400).json({ error: 'Ordine senza righe fatturabili' });
+  }
+
+  const fatturaRows = buildInvoiceRowsFromOrderRows(orderRows);
+  const riepilogoIva = buildInvoiceVatSummary(fatturaRows);
+  const imponibile = +fatturaRows.reduce((sum, row) => sum + (Number(row.imponibile || 0) || 0), 0).toFixed(2);
+  const iva = +fatturaRows.reduce((sum, row) => sum + (Number(row.importo_iva || 0) || 0), 0).toFixed(2);
+  const totale = +(imponibile + iva).toFixed(2);
+  const numeroFattura = buildInvoiceNumberFromOrder(ordine.codice_ordine || ordine.id);
+  const dataFattura = s(ordine.data_ordine) || new Date().toISOString().slice(0, 10);
+
+  try {
+    db.exec('BEGIN');
+    const result = db.prepare(`
+      INSERT INTO fatture (
+        numero, numero_documento, tipo, direzione, tipo_documento, anagrafica_id, ordine_id, data, scadenza, data_ricezione,
+        imponibile, iva, totale, sdi_id, stato, stato_pagamento, valuta, partita_iva, codice_fiscale, note, origine_importazione
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      numeroFattura,
+      numeroFattura,
+      'emessa',
+      'attiva',
+      'fattura',
+      i(ordine.anagrafica_id),
+      ordineId,
+      dataFattura,
+      null,
+      null,
+      imponibile,
+      iva,
+      totale,
+      null,
+      'ricevuta',
+      'da_pagare',
+      'EUR',
+      s(ordine.piva),
+      s(ordine.cf),
+      s(ordine.note),
+      'ordine'
+    );
+    const fatturaId = Number(result.lastInsertRowid);
+    const insertRow = db.prepare(`
+      INSERT INTO fatture_righe (
+        fattura_id, prodotto_id, descrizione, quantita, prezzo_unitario, sconto, imponibile, aliquota_iva, natura_iva, importo_iva, totale_riga
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+    `);
+    fatturaRows.forEach((row) => {
+      insertRow.run(
+        fatturaId,
+        i(row.prodotto_id),
+        s(row.descrizione),
+        n(row.quantita),
+        n(row.prezzo_unitario),
+        n(row.sconto) || 0,
+        n(row.imponibile),
+        n(row.aliquota_iva),
+        s(row.natura_iva),
+        n(row.importo_iva),
+        n(row.totale_riga)
+      );
+    });
+    const insertVat = db.prepare(`
+      INSERT INTO fatture_iva_riepilogo (fattura_id, aliquota_iva, natura_iva, imponibile, imposta, riferimento_normativo)
+      VALUES (?,?,?,?,?,?)
+    `);
+    riepilogoIva.forEach((row) => {
+      insertVat.run(
+        fatturaId,
+        n(row.aliquota_iva),
+        s(row.natura_iva),
+        n(row.imponibile),
+        n(row.imposta),
+        null
+      );
+    });
+    db.exec('COMMIT');
+    res.json({ ok: true, fattura_id: fatturaId, numero: numeroFattura });
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch {}
     res.status(400).json({ error: e.message });
   }
 });
