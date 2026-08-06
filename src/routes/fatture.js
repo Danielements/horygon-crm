@@ -20,6 +20,10 @@ const upload = multer({ storage });
 
 router.use(authMiddleware);
 
+function sqlNullable(value) {
+  return value === undefined ? null : value;
+}
+
 // Lista fatture
 router.get('/', requirePermesso('fatture', 'read'), (req, res) => {
   const { tipo, stato, direzione } = req.query;
@@ -58,10 +62,10 @@ router.post('/', requirePermesso('fatture', 'edit'), (req, res) => {
       numero, numero_documento, tipo, direzione, tipo_documento, anagrafica_id, ordine_id, data, scadenza, data_ricezione,
       imponibile, iva, totale, sdi_id, stato, stato_pagamento, valuta, partita_iva, codice_fiscale, note, hash_documento, origine_importazione
     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-      numero, numero, tipo, direzione || (tipo === 'emessa' ? 'attiva' : 'passiva'), tipo_documento || 'fattura',
-      anagrafica_id, ordine_id, data, scadenza, data_ricezione || null,
-      imponibile, iva, totale, sdi_id, stato || 'ricevuta', stato_pagamento || 'da_pagare', valuta || 'EUR',
-      partita_iva || null, codice_fiscale || null, note, hashDocumento, 'manuale'
+      sqlNullable(numero), sqlNullable(numero), sqlNullable(tipo), direzione || (tipo === 'emessa' ? 'attiva' : 'passiva'), tipo_documento || 'fattura',
+      sqlNullable(anagrafica_id), sqlNullable(ordine_id), sqlNullable(data), sqlNullable(scadenza), data_ricezione || null,
+      sqlNullable(imponibile), sqlNullable(iva), sqlNullable(totale), sqlNullable(sdi_id), stato || 'ricevuta', stato_pagamento || 'da_pagare', valuta || 'EUR',
+      partita_iva || null, codice_fiscale || null, sqlNullable(note), hashDocumento, 'manuale'
     );
     const id = r.lastInsertRowid;
     if (righe?.length) {
@@ -71,15 +75,15 @@ router.post('/', requirePermesso('fatture', 'edit'), (req, res) => {
       righe.forEach(riga => ins.run(
         id,
         riga.prodotto_id||null,
-        riga.descrizione,
-        riga.quantita,
-        riga.prezzo_unitario,
+        sqlNullable(riga.descrizione),
+        sqlNullable(riga.quantita),
+        sqlNullable(riga.prezzo_unitario),
         riga.sconto || 0,
         riga.imponibile ?? null,
         riga.aliquota_iva ?? null,
         riga.natura_iva || null,
         riga.importo_iva ?? null,
-        riga.totale_riga
+        sqlNullable(riga.totale_riga)
       ));
     }
     saveVatSummary(id, riepilogo_iva);
@@ -104,10 +108,10 @@ router.put('/:id', requirePermesso('fatture', 'edit'), (req, res) => {
       imponibile=?, iva=?, totale=?, sdi_id=?, stato=?, stato_pagamento=?, valuta=?, partita_iva=?, codice_fiscale=?, note=?, hash_documento=?
       WHERE id=?
     `).run(
-      numero, numero, tipo, direzione || (tipo === 'emessa' ? 'attiva' : 'passiva'), tipo_documento || 'fattura',
-      anagrafica_id, ordine_id, data, scadenza, data_ricezione || null,
-      imponibile, iva, totale, sdi_id, stato || 'ricevuta', stato_pagamento || 'da_pagare', valuta || 'EUR',
-      partita_iva || null, codice_fiscale || null, note, hashDocumento, req.params.id
+      sqlNullable(numero), sqlNullable(numero), sqlNullable(tipo), direzione || (tipo === 'emessa' ? 'attiva' : 'passiva'), tipo_documento || 'fattura',
+      sqlNullable(anagrafica_id), sqlNullable(ordine_id), sqlNullable(data), sqlNullable(scadenza), data_ricezione || null,
+      sqlNullable(imponibile), sqlNullable(iva), sqlNullable(totale), sqlNullable(sdi_id), stato || 'ricevuta', stato_pagamento || 'da_pagare', valuta || 'EUR',
+      partita_iva || null, codice_fiscale || null, sqlNullable(note), hashDocumento, req.params.id
     );
     db.prepare('DELETE FROM fatture_righe WHERE fattura_id = ?').run(req.params.id);
     db.prepare('DELETE FROM fatture_iva_riepilogo WHERE fattura_id = ?').run(req.params.id);
@@ -118,15 +122,15 @@ router.put('/:id', requirePermesso('fatture', 'edit'), (req, res) => {
       righe.forEach(riga => ins.run(
         req.params.id,
         riga.prodotto_id||null,
-        riga.descrizione,
-        riga.quantita,
-        riga.prezzo_unitario,
+        sqlNullable(riga.descrizione),
+        sqlNullable(riga.quantita),
+        sqlNullable(riga.prezzo_unitario),
         riga.sconto || 0,
         riga.imponibile ?? null,
         riga.aliquota_iva ?? null,
         riga.natura_iva || null,
         riga.importo_iva ?? null,
-        riga.totale_riga
+        sqlNullable(riga.totale_riga)
       ));
     }
     saveVatSummary(req.params.id, riepilogo_iva);
