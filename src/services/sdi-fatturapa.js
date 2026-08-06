@@ -126,6 +126,7 @@ function loadRecipientProfile(anagraficaId) {
   `).get(anagraficaId);
   if (!customer) throw new Error('Cliente anagrafico non trovato');
   const destinationCode = String(customer.codice_univoco_sdi || customer.codice_destinatario || '').trim().toUpperCase();
+  const customerVat = splitVat(customer.piva);
   return {
     ...customer,
     destinationCode,
@@ -205,8 +206,8 @@ function buildInvoicePayload(invoice, company, customer, options = {}) {
       city: String(customer.citta || '').trim(),
       province: String(customer.provincia || '').trim().toUpperCase(),
       country: normalizeCountry(customer.paese || 'IT'),
-      fiscalCode: normalizeIdentifier(customer.cf),
-      vat: splitVat(customer.piva)
+      fiscalCode: normalizeCustomerFiscalCode(customer.cf, customerVat),
+      vat: customerVat
     },
     importoTotaleDocumento: totaleDocumento,
     divisa: String(invoice.valuta || 'EUR').trim() || 'EUR',
@@ -313,6 +314,15 @@ function normalizeIdentifier(value) {
   return String(value || '').trim().replace(/\s+/g, '').toUpperCase();
 }
 
+function normalizeCustomerFiscalCode(value, vat = {}) {
+  const fiscalCode = normalizeIdentifier(value);
+  if (!fiscalCode) return '';
+  const vatCode = normalizeIdentifier(vat.code || '').replace(/^[A-Z]{2}/, '');
+  const fiscalWithoutCountry = fiscalCode.replace(/^[A-Z]{2}(?=\d)/, '');
+  if (vatCode && fiscalWithoutCountry === vatCode) return '';
+  return fiscalCode;
+}
+
 function normalizeCountry(value) {
   return String(value || '').trim().toUpperCase();
 }
@@ -360,5 +370,6 @@ module.exports = {
   buildFilename,
   buildFilenameProgressivo,
   buildInvoicePayload,
-  generateOutboundXmlForInvoice
+  generateOutboundXmlForInvoice,
+  normalizeCustomerFiscalCode
 };

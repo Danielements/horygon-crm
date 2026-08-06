@@ -8,7 +8,7 @@ const { validateInvoiceXml } = require('../src/services/sdi-xml-validator');
 const { parseSdiNotificationXml } = require('../src/services/sdi-notification-parser');
 const { receiveSdiNotificationXml } = require('../src/services/sdi-inbound');
 const { getSchemaRegistryEntry, listSchemaRegistry, syncSchemaRegistry } = require('../src/services/sdi-schema-registry');
-const { buildFilename, buildFilenameProgressivo } = require('../src/services/sdi-fatturapa');
+const { buildFilename, buildFilenameProgressivo, normalizeCustomerFiscalCode } = require('../src/services/sdi-fatturapa');
 const { buildRiceviFileMtomMessage, buildRiceviFileSoapEnvelope, extractXmlFromHttpResponse, parseRiceviFileResponse } = require('../src/services/sdi-transmission');
 const {
   MESSAGGI_NS,
@@ -297,6 +297,12 @@ test('outbound filename follows SdIRiceviFile nomeFile_Type constraints', () => 
 test('outbound filename progressivo is limited to five alphanumeric characters', () => {
   assert.equal(buildFilenameProgressivo('SHUSSCN008'), 'CN008');
   assert.equal(buildFilenameProgressivo('9'), '00009');
+});
+
+test('customer fiscal code is omitted when it duplicates VAT code', () => {
+  assert.equal(normalizeCustomerFiscalCode('01043931003', { country: 'IT', code: '01043931003' }), '');
+  assert.equal(normalizeCustomerFiscalCode('IT01043931003', { country: 'IT', code: '01043931003' }), '');
+  assert.equal(normalizeCustomerFiscalCode('RSSMRA80A01H501U', { country: 'IT', code: '01043931003' }), 'RSSMRA80A01H501U');
 });
 
 test('transmission MTOM message carries xop include and binary attachment', () => {
