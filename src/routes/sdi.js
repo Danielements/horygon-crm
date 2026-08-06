@@ -253,47 +253,46 @@ function getPublicBaseUrl(req) {
 function buildInboundWsdl(req) {
   const location = `${getPublicBaseUrl(req)}/api/sdi/ws/inbound`;
   return `<?xml version="1.0" encoding="UTF-8"?>
-<definitions name="HorygonSdiInbound"
-  targetNamespace="https://crm.horygon.it/ws/sdi"
-  xmlns:tns="https://crm.horygon.it/ws/sdi"
+<definitions name="RicezioneFatture"
+  targetNamespace="http://www.fatturapa.gov.it/sdi/ws/ricezione/v1.0/types"
+  xmlns:tns="http://www.fatturapa.gov.it/sdi/ws/ricezione/v1.0/types"
   xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
   xmlns:xsd="http://www.w3.org/2001/XMLSchema"
   xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/">
   <types>
-    <xsd:schema targetNamespace="https://crm.horygon.it/ws/sdi">
-      <xsd:element name="RicezioneSdIRequest" type="xsd:string"/>
-      <xsd:element name="RicezioneSdIResponse">
+    <xsd:schema targetNamespace="http://www.fatturapa.gov.it/sdi/ws/ricezione/v1.0/types">
+      <xsd:element name="fileSdIConMetadati" type="xsd:string"/>
+      <xsd:element name="rispostaRiceviFatture">
         <xsd:complexType>
           <xsd:sequence>
-            <xsd:element name="esito" type="xsd:string"/>
-            <xsd:element name="messaggio" type="xsd:string" minOccurs="0"/>
+            <xsd:element name="Esito" type="xsd:string"/>
           </xsd:sequence>
         </xsd:complexType>
       </xsd:element>
     </xsd:schema>
   </types>
-  <message name="RicezioneSdIRequest">
-    <part name="parameters" element="tns:RicezioneSdIRequest"/>
+  <message name="RiceviFattureRequest">
+    <part name="parameters" element="tns:fileSdIConMetadati"/>
   </message>
-  <message name="RicezioneSdIResponse">
-    <part name="parameters" element="tns:RicezioneSdIResponse"/>
+  <message name="RiceviFattureResponse">
+    <part name="parameters" element="tns:rispostaRiceviFatture"/>
   </message>
-  <portType name="HorygonSdiInboundPortType">
-    <operation name="RicezioneSdI">
-      <input message="tns:RicezioneSdIRequest"/>
-      <output message="tns:RicezioneSdIResponse"/>
+  <portType name="RicezioneFatturePortType">
+    <operation name="RiceviFatture">
+      <input message="tns:RiceviFattureRequest"/>
+      <output message="tns:RiceviFattureResponse"/>
     </operation>
   </portType>
-  <binding name="HorygonSdiInboundBinding" type="tns:HorygonSdiInboundPortType">
+  <binding name="RicezioneFattureBinding" type="tns:RicezioneFatturePortType">
     <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
-    <operation name="RicezioneSdI">
-      <soap:operation soapAction="RicezioneSdI"/>
+    <operation name="RiceviFatture">
+      <soap:operation soapAction="http://www.fatturapa.it/RicezioneFatture/RiceviFattureSdI"/>
       <input><soap:body use="literal"/></input>
       <output><soap:body use="literal"/></output>
     </operation>
   </binding>
-  <service name="HorygonSdiInboundService">
-    <port name="HorygonSdiInboundPort" binding="tns:HorygonSdiInboundBinding">
+  <service name="RicezioneFattureService">
+    <port name="RicezioneFatturePort" binding="tns:RicezioneFattureBinding">
       <soap:address location="${xmlEscape(location)}"/>
     </port>
   </service>
@@ -415,17 +414,13 @@ function buildSoapAck(esito, messaggio, soapVersion = '1.1', operationName = nul
   const envelopeNs = soapVersion === '1.2'
     ? 'http://www.w3.org/2003/05/soap-envelope'
     : 'http://schemas.xmlsoap.org/soap/envelope/';
-  const responseTag = operationName === 'fileSdIConMetadati' ? 'fileSdIConMetadatiResponse' : 'RicezioneSdIResponse';
-  const responseNs = operationName === 'fileSdIConMetadati'
-    ? 'http://www.fatturapa.gov.it/sdi/ws/ricezione/v1.0/types'
-    : 'https://crm.horygon.it/ws/sdi';
+  const xmlnsExtra = 'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"';
   return `<?xml version="1.0" encoding="UTF-8"?>
-<soap:Envelope xmlns:soap="${envelopeNs}">
+<soap:Envelope xmlns:soap="${envelopeNs}" ${xmlnsExtra}>
   <soap:Body>
-    <${responseTag} xmlns="${responseNs}">
-      <esito>${xmlEscape(esito)}</esito>
-      <messaggio>${xmlEscape(messaggio || '')}</messaggio>
-    </${responseTag}>
+    <rispostaRiceviFatture xmlns="http://www.fatturapa.gov.it/sdi/ws/ricezione/v1.0/types">
+      <Esito>ER01</Esito>
+    </rispostaRiceviFatture>
   </soap:Body>
 </soap:Envelope>`;
 }
