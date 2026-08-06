@@ -390,6 +390,22 @@ Regola operativa per reset:
 - Preparare uno script dedicato e reversibile per pulizia ambiente test, con dry-run obbligatorio e backup database prima dell'esecuzione.
 - Non usare cancellazioni manuali estese su tabelle SdI/fatture senza backup.
 
+## Checkpoint fine giornata 2026-08-06
+
+Stato da cui ripartire:
+
+- I test obbligatori del canale WS sono OK; non ripeterli salvo regressioni.
+- `TEST-NE-001` e' stata inviata dal CRM con file `IT03365990591_3900I.xml`, `IdentificativoSdI 32478056`, ma SdI ha risposto con `NotificaScarto 00102`: `File non integro (firma non valida) : Il file non risulta firmato`.
+- `TEST-DT-001` e' stata inviata dal CRM con file `IT03365990591_ZP00F.xml`, `IdentificativoSdI 32478057`, ma SdI ha risposto con `NotificaScarto 00102`: `File non integro (firma non valida) : Il file non risulta firmato`.
+- Questo conferma che i test PA outbound (`Notifica esito a Operatore Economico`, decorrenze generate da invio PA, attestazione) richiedono firma FPA12 oppure uno scenario del simulatore che non richieda invio PA firmato dal nostro CRM.
+- Il comando `send-sdi-invalid-customer-outcome.js NUOVO_ID EC99` non va usato letteralmente: `NUOVO_ID` e' un placeholder e deve essere sostituito con l'id numerico reale della nuova fattura PA ricevuta nel CRM.
+
+Ripartenza consigliata:
+
+- Per `Scarto esito PA`, generare domani dal simulatore SdI una nuova fattura PA verso `ESOJKL` o `VRRMFL`, attendere import nel CRM, leggere l'id reale dalla tabella `fatture`, poi eseguire `send-sdi-invalid-customer-outcome.js <id_reale> EC99`.
+- Per gli altri test residui PA outbound, implementare prima la firma XAdES/CAdES delle FPA12 oppure verificare nel portale/kit un percorso simulatore alternativo.
+- Non inviare di nuovo `TEST-NE-001`, `TEST-DT-001` o `TEST-AT-001` dal CRM senza firma: produrrebbero ancora `00102`.
+
 Attenzione PA outbound:
 
 - Gli invii PA dal CRM senza firma vengono scartati con codice `00102`: `File non integro (firma non valida) : Il file non risulta firmato`.
