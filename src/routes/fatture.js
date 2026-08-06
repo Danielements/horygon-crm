@@ -7,6 +7,7 @@ const { authMiddleware, requirePermesso } = require('../middleware/auth');
 const db = require('../db/database');
 const XLSX = require('xlsx');
 const crypto = require('crypto');
+const { importInvoiceXml } = require('../services/fattura-import');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -149,33 +150,12 @@ router.post('/:id/pdf', requirePermesso('fatture', 'edit'), upload.single('file'
 router.post('/import/xml', requirePermesso('fatture', 'edit'), upload.single('file'), (req, res) => {
   try {
     const xml = fs.readFileSync(req.file.path, 'utf8');
-    const parsed = parseFatturaPA(xml);
-    parsed.hash_file = fileHash(req.file.path);
-    parsed.xml_path = `/uploads/fatture/${req.file.filename}`;
-    // Cerca anagrafica fornitore per P.IVA
-    if (parsed.fornitore_piva) {
-      const vatCandidates = [parsed.fornitore_piva, stripVatCountryPrefix(parsed.fornitore_piva)].filter(Boolean);
-      const anag = db.prepare(`SELECT id FROM anagrafiche WHERE piva IN (${vatCandidates.map(() => '?').join(',')}) LIMIT 1`).get(...vatCandidates);
-      if (anag) parsed.anagrafica_id = anag.id;
-    }
-    const hashDocumento = buildDocumentHash({ numero: parsed.numero, data: parsed.data, partita_iva: parsed.fornitore_piva, totale: parsed.totale });
-    const duplicate = db.prepare('SELECT id FROM fatture WHERE hash_file = ? OR hash_documento = ? LIMIT 1').get(parsed.hash_file, hashDocumento);
-    if (duplicate) return res.status(400).json({ error: 'Fattura duplicata o gia importata' });
-    // Salva fattura
-    const r = db.prepare(`INSERT INTO fatture (
-      numero,numero_documento,tipo,direzione,tipo_documento,anagrafica_id,data,data_ricezione,imponibile,iva,totale,sdi_id,xml_path,stato,partita_iva,codice_fiscale,cliente_fornitore_label,tipo_esteso,documento_meta,hash_file,hash_documento,origine_importazione
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-      parsed.numero, parsed.numero, 'ricevuta', 'passiva', parsed.tipo_documento || 'fattura',
-      parsed.anagrafica_id||null, parsed.data, new Date().toISOString().slice(0,10),
-      parsed.imponibile, parsed.iva, parsed.totale, parsed.sdi_id, parsed.xml_path, 'ricevuta',
-      parsed.fornitore_piva || null, parsed.fornitore_codice_fiscale || null, parsed.fornitore_nome || null, parsed.tipo_esteso || null, JSON.stringify(parsed.documento_meta || {}), parsed.hash_file, hashDocumento, 'xml'
-    );
-    if (r.lastInsertRowid && parsed.righe?.length) {
-      const ins = db.prepare('INSERT INTO fatture_righe (fattura_id,descrizione,quantita,prezzo_unitario,imponibile,aliquota_iva,natura_iva,importo_iva,totale_riga) VALUES (?,?,?,?,?,?,?,?,?)');
-      parsed.righe.forEach(riga => ins.run(r.lastInsertRowid, riga.descrizione, riga.quantita, riga.prezzo_unitario, riga.imponibile || null, riga.aliquota_iva || null, riga.natura_iva || null, riga.importo_iva || null, riga.totale_riga));
-    }
-    saveVatSummary(r.lastInsertRowid, parsed.riepilogo_iva);
-    res.json({ id: r.lastInsertRowid, parsed });
+    const result = importInvoiceXml(xml, {
+      xmlPath: `/uploads/fatture/${req.file.filename}`,
+      source: 'xml'
+    });
+    if (result.duplicate) return res.status(400).json({ error: 'Fattura duplicata o gia importata' });
+    res.json({ id: result.id, parsed: result.parsed });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
