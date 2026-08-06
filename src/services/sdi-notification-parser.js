@@ -5,15 +5,27 @@ const NOTIFICATION_MAP = {
   NotificaScarto: 'scarto',
   RicevutaScarto: 'scarto',
   RicevutaConsegna: 'consegnata',
-  NotificaMancataConsegna: 'mancata_consegna',
-  RicevutaImpossibilitaRecapito: 'mancata_consegna',
+  NotificaMancataConsegna: 'UNDELIVERABLE',
+  RicevutaImpossibilitaRecapito: 'UNDELIVERABLE',
   NotificaEsito: 'esito',
   NotificaDecorrenzaTermini: 'decorrenza_termini',
   AttestazioneTrasmissioneFattura: 'attestazione_trasmissione',
   MetadatiInvioFile: 'metadati_invio'
 };
 
+const DELIVERY_FAILURE_ROOTS = {
+  NotificaMancataConsegna: {
+    subtype: 'B2G_MANCATA_CONSEGNA',
+    normalizedStatus: 'UNDELIVERABLE'
+  },
+  RicevutaImpossibilitaRecapito: {
+    subtype: 'B2X_IMPOSSIBILITA_RECAPITO',
+    normalizedStatus: 'UNDELIVERABLE'
+  }
+};
+
 function parseSdiNotificationXml(xml, options = {}) {
+  const rootInfo = detectXmlRootInfo(xml);
   const parser = new XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: '@_',
@@ -22,23 +34,57 @@ function parseSdiNotificationXml(xml, options = {}) {
     trimValues: true
   });
   const parsed = parser.parse(xml);
-  const rootName = Object.keys(parsed || {}).find((key) => key !== '?xml') || '';
+  const rootName = rootInfo.localName || Object.keys(parsed || {}).find((key) => key !== '?xml') || '';
   const root = rootName ? parsed[rootName] : {};
   const errors = collectErrorEntries(root);
+  const deliveryFailure = DELIVERY_FAILURE_ROOTS[rootName] || null;
+  const normalizedStatus = deliveryFailure?.normalizedStatus || NOTIFICATION_MAP[rootName] || 'sconosciuto';
   return {
     rootElement: rootName,
-    namespace: root?.['@_xmlns'] || root?.['@_xmlns:ns2'] || root?.['@_xmlns:p'] || '',
+    namespace: rootInfo.namespace || root?.['@_xmlns'] || root?.['@_xmlns:ns2'] || root?.['@_xmlns:p'] || '',
     tipoNotifica: rootName,
-    statoNormalizzato: NOTIFICATION_MAP[rootName] || 'sconosciuto',
+    subtype: deliveryFailure?.subtype || null,
+    status: normalizedStatus,
+    statoNormalizzato: normalizedStatus,
     identificativoSdi: firstValue(root, ['IdentificativoSdI', 'IdentificativoSdi']),
+    outerNomeFile: options.originalFilename || null,
+    innerNomeFile: firstValue(root, ['NomeFile', 'NomeFileSdI', 'NomeFileFattura']),
     nomeFileFattura: firstValue(root, ['NomeFile', 'NomeFileSdI', 'NomeFileFattura']),
+    hash: firstValue(root, ['Hash']),
     dataOraRiferimento: firstValue(root, ['DataOraRicezione', 'DataOraConsegna', 'DataOraMessaggio', 'DataOra', 'Data']),
+    dataMessaADisposizione: firstValue(root, ['DataMessaADisposizione']),
+    descrizione: firstValue(root, ['Descrizione']),
+    messageId: firstValue(root, ['MessageId', 'MessageID']),
+    note: firstValue(root, ['Note']),
     codiceErrore: errors[0]?.codice || null,
     descrizioneErrore: errors[0]?.descrizione || null,
     errori: errors,
     originalFilename: options.originalFilename || null,
     xmlSha256: sha256(xml)
   };
+}
+
+function detectXmlRootInfo(xml) {
+  const text = String(xml || '').replace(/^\uFEFF/, '').trim();
+  const rootMatch = text.match(/^<\?xml[^>]*>\s*<([A-Za-z_][\w.-]*:)?([A-Za-z_][\w.-]*)([^>]*)>|^<([A-Za-z_][\w.-]*:)?([A-Za-z_][\w.-]*)([^>]*)>/);
+  if (!rootMatch) return { localName: '', prefix: '', namespace: '' };
+  const prefix = String(rootMatch[1] || rootMatch[4] || '').replace(/:$/, '');
+  const localName = rootMatch[2] || rootMatch[5] || '';
+  const attributes = rootMatch[3] || rootMatch[6] || '';
+  const namespace = findNamespace(attributes, prefix);
+  return { localName, prefix, namespace };
+}
+
+function findNamespace(attributes, prefix) {
+  const pattern = prefix
+    ? new RegExp(`\\sxmlns:${escapeRegex(prefix)}=["']([^"']+)["']`)
+    : /\sxmlns=["']([^"']+)["']/;
+  const match = String(attributes || '').match(pattern);
+  return match?.[1] || '';
+}
+
+function escapeRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function collectErrorEntries(node) {
@@ -93,5 +139,6 @@ function sha256(content) {
 }
 
 module.exports = {
+  DELIVERY_FAILURE_ROOTS,
   parseSdiNotificationXml
 };

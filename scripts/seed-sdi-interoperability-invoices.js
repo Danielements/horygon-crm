@@ -13,6 +13,14 @@ const RECIPIENTS = [
     note: 'TEST WST04 B2B/B2C: codice destinatario fittizio per impossibilita di recapito.'
   },
   {
+    tipo: 'cliente',
+    ragione_sociale: 'CLIENTE TEST SDI B2C 0000000 SENZA PEC',
+    piva: '',
+    cf: 'RSSMRA80A01H501U',
+    codice_destinatario: '0000000',
+    note: 'TEST B2C: CodiceDestinatario 0000000 senza PECDestinatario per verificare RicevutaImpossibilitaRecapito.'
+  },
+  {
     tipo: 'pa',
     ragione_sociale: 'PA TEST SDI ESOJKL DECORRENZA TERMINI',
     piva: 'IT90000000991',
@@ -39,6 +47,13 @@ const INVOICES = [
     imponibile: 131,
     expected: 'RicevutaImpossibilitaRecapito',
     note: 'Test mancata consegna/impossibilita recapito B2B/B2C. Non usare PECDestinatario.'
+  },
+  {
+    numero: 'TEST-MC-B2C-0000000',
+    recipientCode: '0000000',
+    imponibile: 131.5,
+    expected: 'RicevutaImpossibilitaRecapito',
+    note: 'Prova definitiva B2C: FPR12 con CodiceDestinatario 0000000 e senza PECDestinatario.'
   },
   {
     numero: 'TEST-DT-001',
@@ -77,15 +92,16 @@ function upsertRecipient(recipient) {
   const existing = db.prepare(`
     SELECT id
     FROM anagrafiche
-    WHERE codice_destinatario = ? OR ragione_sociale = ?
+    WHERE ragione_sociale = ?
+       OR (codice_destinatario = ? AND codice_destinatario <> '0000000')
     ORDER BY id
     LIMIT 1
-  `).get(recipient.codice_destinatario, recipient.ragione_sociale);
+  `).get(recipient.ragione_sociale, recipient.codice_destinatario);
   const values = [
     recipient.tipo,
     recipient.ragione_sociale,
-    recipient.piva,
-    recipient.cf,
+    recipient.piva || '',
+    recipient.cf || '',
     'Via Test SdI 1',
     '00100',
     'Roma',

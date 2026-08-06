@@ -9,7 +9,7 @@ const { writeSystemLog } = require('../services/system-log');
 const { generateOutboundXmlForInvoice } = require('../services/sdi-fatturapa');
 const { transmitInvoiceToSdiTest } = require('../services/sdi-transmission');
 const { sendEsitoCommittenteToSdiTest } = require('../services/sdi-esito-committente');
-const { buildRiceviFattureResponse, processInboundSdiRequest } = require('../services/sdi-soap-inbound');
+const { buildRiceviFattureResponse, processInboundSdiRequest, sendEmptySdiOneWayResponse } = require('../services/sdi-soap-inbound');
 const { receiveSdiNotificationXml } = require('../services/sdi-inbound');
 const { importInvoiceXml } = require('../services/fattura-import');
 const { XMLParser } = require('fast-xml-parser');
@@ -48,7 +48,7 @@ router.post('/ws/inbound', xmlTextParser, (req, res) => {
         .send(buildRiceviFattureResponse(result.soapVersion));
       return;
     }
-    res.status(200).end();
+    sendEmptySdiOneWayResponse(res);
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
     writeSystemLog({

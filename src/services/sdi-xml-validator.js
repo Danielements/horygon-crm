@@ -85,11 +85,7 @@ function validateApplicationRules({ parsed, rootInfo, format, schema }) {
   if (!isTipoDocumentoAllowed(format, tipoDocumento)) {
     errors.push(`TipoDocumento ${tipoDocumento || 'n/d'} non ammesso per formato ${format}`);
   }
-  const codiceDestinatario = findText(parsed, ['CodiceDestinatario']);
-  const pecDestinatario = findText(parsed, ['PECDestinatario']);
-  if (['FPR12', 'FSM10'].includes(format) && codiceDestinatario === '0000000' && !pecDestinatario) {
-    errors.push('Per FPR12/FSM10 con CodiceDestinatario 0000000 occorre PECDestinatario');
-  }
+  // 0000000 without PECDestinatario is valid for B2C/no-channel recipients and is required by SdI interoperability tests.
   if (format === 'FSM10' && !['TD07', 'TD08', 'TD09'].includes(String(tipoDocumento || '').toUpperCase())) {
     errors.push('FSM10 consente solo TD07, TD08 o TD09');
   }

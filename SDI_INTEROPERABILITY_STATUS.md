@@ -393,6 +393,7 @@ docker compose exec -T horygon-crm node scripts/send-sdi-invalid-customer-outcom
 Fatture dedicate create dallo script:
 
 - `TEST-MC-001`: B2B/B2C verso `XS00001`, atteso `RicevutaImpossibilitaRecapito`.
+- `TEST-MC-B2C-0000000`: B2C FPR12 verso `0000000` senza `PECDestinatario`, atteso `RicevutaImpossibilitaRecapito`.
 - `TEST-DT-001`: PA verso `ESOJKL`, atteso `NotificaDecorrenzaTermini`; dopo la ricezione non inviare `EC01` o `EC02`.
 - `TEST-AT-001`: PA verso `XS0000`, atteso `NotificaMancataConsegna` e `AttestazioneTrasmissioneFattura`; richiede fattura FPA12 firmata.
 
@@ -418,6 +419,12 @@ Nota dati fiscali per `XS00001`:
 - Il codice destinatario `XS00001` simula un canale inesistente, ma SdI continua a validare i dati fiscali del cessionario.
 - Un tentativo con P.IVA fittizia `01043931991` ha prodotto `RicevutaScarto 00305`.
 - La seed usa quindi P.IVA test gia accettata `IT01043931003`; il CRM omette il `CodiceFiscale` duplicato rispetto alla P.IVA.
+
+Nota `RicevutaImpossibilitaRecapito`:
+
+- L'operazione SOAP esterna resta `TrasmissioneFatture/NotificaMancataConsegna`, ma il file interno B2B/B2C puo avere root `RicevutaImpossibilitaRecapito`.
+- Il CRM classifica `NotificaMancataConsegna` come `B2G_MANCATA_CONSEGNA` e `RicevutaImpossibilitaRecapito` come `B2X_IMPOSSIBILITA_RECAPITO`, entrambe con stato `UNDELIVERABLE`.
+- I callback one-way rispondono `HTTP 200` con `Content-Length: 0` e body di zero byte.
 
 ## Comandi operativi VPS
 

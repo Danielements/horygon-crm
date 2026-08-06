@@ -88,6 +88,18 @@ function receiveSdiNotificationXml(xml, options = {}) {
 function findMatchingFlow(parsed) {
   const byFile = String(parsed.nomeFileFattura || '').trim();
   if (byFile) {
+    const candidates = buildFilenameCandidates(byFile);
+    if (candidates.length) {
+      const placeholders = candidates.map(() => '?').join(',');
+      const flow = db.prepare(`
+        SELECT *
+        FROM fatture_sdi_flussi
+        WHERE nome_file IN (${placeholders})
+        ORDER BY id DESC
+        LIMIT 1
+      `).get(...candidates);
+      if (flow) return flow;
+    }
     const flow = db.prepare(`
       SELECT *
       FROM fatture_sdi_flussi
@@ -108,7 +120,42 @@ function findMatchingFlow(parsed) {
     `).get(bySdi);
     if (flow) return flow;
   }
+  const progressivo = extractFilenameProgressivo(byFile);
+  if (progressivo) {
+    const flow = db.prepare(`
+      SELECT *
+      FROM fatture_sdi_flussi
+      WHERE nome_file LIKE ?
+         OR payload_meta LIKE ?
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(`%_${progressivo}.%`, `%${progressivo}%`);
+    if (flow) return flow;
+  }
   return null;
+}
+
+function buildFilenameCandidates(filename) {
+  const value = String(filename || '').trim();
+  if (!value) return [];
+  const candidates = new Set([value]);
+  if (/\.xml\.p7m$/i.test(value)) {
+    candidates.add(value.replace(/\.p7m$/i, ''));
+  } else if (/\.xml$/i.test(value)) {
+    candidates.add(`${value}.p7m`);
+    candidates.add(value.replace(/\.xml$/i, '.p7m'));
+  } else if (/\.p7m$/i.test(value)) {
+    candidates.add(value.replace(/\.p7m$/i, '.xml'));
+    candidates.add(value.replace(/\.p7m$/i, '.xml.p7m'));
+  }
+  return [...candidates];
+}
+
+function extractFilenameProgressivo(filename) {
+  const base = String(filename || '').trim().split(/[\\/]/).pop() || '';
+  const normalized = base.replace(/\.xml\.p7m$/i, '').replace(/\.xml$/i, '').replace(/\.p7m$/i, '');
+  const match = normalized.match(/_([A-Za-z0-9]{5})$/);
+  return match?.[1] || null;
 }
 
 function persistInboundXml(xml, parsed) {
@@ -149,5 +196,6 @@ function toPosix(value) {
 }
 
 module.exports = {
+  buildFilenameCandidates,
   receiveSdiNotificationXml
 };

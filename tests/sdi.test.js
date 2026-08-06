@@ -29,8 +29,10 @@ const {
   normalizeSoapAction,
   parseMultipartRelated,
   parseSoapEnvelope,
-  processInboundSdiRequest
+  processInboundSdiRequest,
+  sendEmptySdiOneWayResponse
 } = require('../src/services/sdi-soap-inbound');
+const { buildFilenameCandidates } = require('../src/services/sdi-inbound');
 
 function makeOrdinaryPayload(format) {
   return {
@@ -170,6 +172,21 @@ test('FPR12 sample validates against local XSD and app rules', async () => {
   assert.equal(result.ok, true, JSON.stringify(result, null, 2));
 });
 
+test('FPR12 B2C sample validates with 0000000 and no PEC', async () => {
+  const payload = makeOrdinaryPayload('FPR12');
+  payload.destinationCode = '0000000';
+  payload.pecDestinatario = '';
+  payload.customer.denomination = 'Cliente Consumatore Test';
+  payload.customer.vat = { country: '', code: '' };
+  payload.customer.fiscalCode = 'RSSMRA80A01H501U';
+  const xml = buildOrdinaryInvoiceXml(payload);
+  assert.match(xml, /<CodiceDestinatario>0000000<\/CodiceDestinatario>/);
+  assert.equal(xml.includes('<PECDestinatario>'), false);
+  assert.match(xml, /<CodiceFiscale>RSSMRA80A01H501U<\/CodiceFiscale>/);
+  const result = await validateInvoiceXml({ xml, format: 'FPR12' });
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
+});
+
 test('FPA12 sample validates against local XSD and app rules', async () => {
   const xml = buildOrdinaryInvoiceXml(makeOrdinaryPayload('FPA12'));
   const result = await validateInvoiceXml({ xml, format: 'FPA12' });
@@ -209,7 +226,47 @@ test('notification parser recognizes B2B scarto and mancata consegna variants', 
 
   const impossibilita = parseSdiNotificationXml('<RicevutaImpossibilitaRecapito><IdentificativoSdI>11</IdentificativoSdI><NomeFile>IT03365990591_00002.xml</NomeFile></RicevutaImpossibilitaRecapito>');
   assert.equal(impossibilita.tipoNotifica, 'RicevutaImpossibilitaRecapito');
-  assert.equal(impossibilita.statoNormalizzato, 'mancata_consegna');
+  assert.equal(impossibilita.statoNormalizzato, 'UNDELIVERABLE');
+  assert.equal(impossibilita.subtype, 'B2X_IMPOSSIBILITA_RECAPITO');
+});
+
+test('notification parser accepts namespaced B2X impossibilita recapito payload', () => {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<ns3:RicevutaImpossibilitaRecapito
+  xmlns:ns3="http://ivaservizi.agenziaentrate.gov.it/docs/xsd/fattura/messaggi/v1.0"
+  versione="1.0">
+  <IdentificativoSdI>123456789</IdentificativoSdI>
+  <NomeFile>IT03365990591_00010.xml</NomeFile>
+  <Hash>0123456789abcdef</Hash>
+  <DataOraRicezione>2026-08-06T22:00:00+02:00</DataOraRicezione>
+  <DataMessaADisposizione>2026-08-07</DataMessaADisposizione>
+  <Descrizione>Non e stato possibile recapitare la fattura al destinatario.</Descrizione>
+  <MessageId>123456</MessageId>
+</ns3:RicevutaImpossibilitaRecapito>`;
+  const parsed = parseSdiNotificationXml(xml, { originalFilename: 'IT03365990591_00010_MC_001.xml' });
+  assert.equal(parsed.rootElement, 'RicevutaImpossibilitaRecapito');
+  assert.equal(parsed.namespace, 'http://ivaservizi.agenziaentrate.gov.it/docs/xsd/fattura/messaggi/v1.0');
+  assert.equal(parsed.subtype, 'B2X_IMPOSSIBILITA_RECAPITO');
+  assert.equal(parsed.status, 'UNDELIVERABLE');
+  assert.equal(parsed.outerNomeFile, 'IT03365990591_00010_MC_001.xml');
+  assert.equal(parsed.innerNomeFile, 'IT03365990591_00010.xml');
+  assert.equal(parsed.hash, '0123456789abcdef');
+  assert.equal(parsed.dataMessaADisposizione, '2026-08-07');
+  assert.equal(parsed.messageId, '123456');
+});
+
+test('notification parser keeps B2G mancata consegna classification', () => {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<p:NotificaMancataConsegna xmlns:p="http://www.fatturapa.gov.it/sdi/messaggi/v1.0" versione="1.0">
+  <IdentificativoSdI>123456790</IdentificativoSdI>
+  <NomeFile>IT03365990591_00011.xml</NomeFile>
+  <Descrizione>Consegna non riuscita.</Descrizione>
+</p:NotificaMancataConsegna>`;
+  const parsed = parseSdiNotificationXml(xml);
+  assert.equal(parsed.rootElement, 'NotificaMancataConsegna');
+  assert.equal(parsed.namespace, 'http://www.fatturapa.gov.it/sdi/messaggi/v1.0');
+  assert.equal(parsed.subtype, 'B2G_MANCATA_CONSEGNA');
+  assert.equal(parsed.status, 'UNDELIVERABLE');
 });
 
 test('progressivo invio stays within SdI limits and differs across invoices', () => {
@@ -518,6 +575,18 @@ test('dispatcher exposes interoperability keys and validates duplicate localName
   ), /SOAPAction non coerente/);
 });
 
+test('filename matcher builds controlled signed and unsigned variants', () => {
+  assert.deepEqual(buildFilenameCandidates('IT03365990591_00010.xml'), [
+    'IT03365990591_00010.xml',
+    'IT03365990591_00010.xml.p7m',
+    'IT03365990591_00010.p7m'
+  ]);
+  assert.deepEqual(buildFilenameCandidates('IT03365990591_00010.xml.p7m'), [
+    'IT03365990591_00010.xml.p7m',
+    'IT03365990591_00010.xml'
+  ]);
+});
+
 test('payload extractor decodes base64 with new lines', () => {
   const encoded = Buffer.from('<NotificaScarto>ok</NotificaScarto>').toString('base64').replace(/(.{8})/g, '$1\n');
   const parsed = parseSoapEnvelope(`<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"><soapenv:Body><types:notificaScarto xmlns:types="${TRANSMISSION_TYPES_NS}"><IdentificativoSdI>32477506</IdentificativoSdI><NomeFile>IT03365990591_00007.xml</NomeFile><File>${encoded}</File></types:notificaScarto></soapenv:Body></soapenv:Envelope>`);
@@ -613,3 +682,75 @@ test('real regression fixture is not parsed as Envelope operation', () => {
   assert.equal(fs.existsSync(path.join(process.cwd(), result.storage.envelopePath.replace(/^\//, '').replace(/\//g, path.sep))), true);
   assert.equal(fs.existsSync(path.join(process.cwd(), result.storage.decodedPath.replace(/^\//, '').replace(/\//g, path.sep))), true);
 });
+
+test('B2X delivery failure callback uses NotificaMancataConsegna SOAP operation but RicevutaImpossibilitaRecapito payload', () => {
+  const decodedNotification = `<?xml version="1.0" encoding="UTF-8"?>
+<ns3:RicevutaImpossibilitaRecapito
+  xmlns:ns3="http://ivaservizi.agenziaentrate.gov.it/docs/xsd/fattura/messaggi/v1.0"
+  versione="1.0">
+  <IdentificativoSdI>123456789</IdentificativoSdI>
+  <NomeFile>IT03365990591_00010.xml</NomeFile>
+  <Hash>0123456789abcdef</Hash>
+  <DataOraRicezione>2026-08-06T22:00:00+02:00</DataOraRicezione>
+  <DataMessaADisposizione>2026-08-07</DataMessaADisposizione>
+  <Descrizione>Non e stato possibile recapitare la fattura al destinatario.</Descrizione>
+  <MessageId>123456</MessageId>
+</ns3:RicevutaImpossibilitaRecapito>`;
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
+  <soapenv:Body>
+    <types:notificaMancataConsegna xmlns:types="${TRANSMISSION_TYPES_NS}">
+      <IdentificativoSdI>123456789</IdentificativoSdI>
+      <NomeFile>IT03365990591_00010_MC_001.xml</NomeFile>
+      <File>${Buffer.from(decodedNotification).toString('base64')}</File>
+    </types:notificaMancataConsegna>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+  const req = {
+    body: Buffer.from(xml),
+    headers: {
+      'content-type': 'text/xml',
+      'user-agent': 'IBM WebServices/1.0',
+      soapaction: '"http://www.fatturapa.it/TrasmissioneFatture/NotificaMancataConsegna"'
+    },
+    ip: '127.0.0.1',
+    socket: { remoteAddress: '127.0.0.1' }
+  };
+  const result = processInboundSdiRequest(req);
+  assert.equal(result.isSoap, true);
+  assert.equal(result.operationName, 'notificaMancataConsegna');
+  assert.equal(result.operationKind, 'DELIVERY_FAILED');
+  assert.equal(result.decodedInnerRoot, 'RicevutaImpossibilitaRecapito');
+  assert.equal(result.kind, 'notification-unmatched');
+  assert.equal(result.responseKind, 'empty_200');
+});
+
+test('one-way SdI response is HTTP 200 with zero bytes and no content type', () => {
+  const response = makeFakeResponse();
+  sendEmptySdiOneWayResponse(response);
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.headers['Content-Length'], '0');
+  assert.equal(Object.prototype.hasOwnProperty.call(response.headers, 'Content-Type'), false);
+  assert.equal(response.body.length, 0);
+});
+
+function makeFakeResponse() {
+  return {
+    statusCode: null,
+    headers: { 'Content-Type': 'text/xml' },
+    body: Buffer.alloc(0),
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    setHeader(name, value) {
+      this.headers[name] = value;
+    },
+    removeHeader(name) {
+      delete this.headers[name];
+    },
+    end(chunk = '') {
+      this.body = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8');
+    }
+  };
+}

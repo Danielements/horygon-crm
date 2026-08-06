@@ -682,6 +682,13 @@ function buildRiceviFattureResponse(soapVersion = '1.1') {
   return `<soap:Envelope xmlns:soap="${envelopeNs}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:ns1="${RECEPTION_TYPES_NS}"><soap:Body><ns1:rispostaRiceviFatture><Esito>ER01</Esito></ns1:rispostaRiceviFatture></soap:Body></soap:Envelope>`;
 }
 
+function sendEmptySdiOneWayResponse(res) {
+  res.status(200);
+  if (typeof res.removeHeader === 'function') res.removeHeader('Content-Type');
+  res.setHeader('Content-Length', '0');
+  res.end();
+}
+
 function getRawRequestBuffer(req) {
   if (Buffer.isBuffer(req.body)) return req.body;
   return Buffer.from(String(req.body ?? ''), 'utf8');
@@ -846,5 +853,6 @@ module.exports = {
   normalizeSoapAction,
   parseMultipartRelated,
   parseSoapEnvelope,
-  processInboundSdiRequest
+  processInboundSdiRequest,
+  sendEmptySdiOneWayResponse
 };
