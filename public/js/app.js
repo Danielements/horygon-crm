@@ -3444,7 +3444,11 @@ function renderFattureRows(targetId, rows) {
     <td><select class="btn btn-outline btn-sm" onchange="cambiaStatoFattura(${f.id},this.value)">
       ${['ricevuta','pagata','scaduta','annullata'].map(s=>`<option value="${s}"${f.stato===s?' selected':''}>${s}</option>`).join('')}
     </select></td>
-    <td>${f.tipo === 'emessa' ? `<button class="btn btn-outline btn-sm" onclick="testSendFatturaSdi(${f.id})">Test SDI</button>` : '-'}</td></tr>`).join('');
+    <td><div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button class="btn btn-outline btn-sm" onclick="previewFattura(${f.id})" title="Anteprima fattura">&#128065;</button>
+      ${f.xml_path ? `<button class="btn btn-outline btn-sm" onclick="openFatturaXml(${f.id})" title="Apri XML">XML</button>` : ''}
+      ${f.tipo === 'emessa' ? `<button class="btn btn-outline btn-sm" onclick="testSendFatturaSdi(${f.id})">Test SDI</button>` : ''}
+    </div></td></tr>`).join('');
 }
 
 async function loadFattureBySection(section) {
@@ -3478,6 +3482,68 @@ async function testSendFatturaSdi(id) {
   } catch (e) {
     toast(e.message || 'Errore generazione XML SDI', 'error');
   }
+}
+
+async function previewFattura(id) {
+  try {
+    const f = await api('GET', `/fatture/${id}`);
+    const modal = document.getElementById('modal-fattura-preview');
+    const body = document.getElementById('fattura-preview-body');
+    if (!modal || !body) return;
+    const righe = f.righe || [];
+    const riepilogo = f.riepilogo_iva || [];
+    body.innerHTML = `
+      <div class="summary-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:14px">
+        <div class="summary-card"><div class="summary-card-label">Numero</div><div class="summary-card-value">${escapeHtml(f.numero || '-')}</div></div>
+        <div class="summary-card"><div class="summary-card-label">Data</div><div class="summary-card-value">${escapeHtml(formatDateIt(f.data) || '-')}</div></div>
+        <div class="summary-card"><div class="summary-card-label">Totale</div><div class="summary-card-value">EUR ${Number(f.totale || 0).toFixed(2)}</div></div>
+        <div class="summary-card"><div class="summary-card-label">Stato</div><div class="summary-card-value">${escapeHtml(f.stato || '-')}</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:14px">
+        <div><label>Fornitore/Cliente</label><div style="font-weight:700">${escapeHtml(f.ragione_sociale || f.cliente_fornitore_label || '-')}</div></div>
+        <div><label>P.IVA</label><div>${escapeHtml(f.partita_iva || '-')}</div></div>
+        <div><label>Codice fiscale</label><div>${escapeHtml(f.codice_fiscale || '-')}</div></div>
+        <div><label>Origine</label><div>${escapeHtml(f.origine_importazione || '-')}</div></div>
+      </div>
+      <h4 style="margin:10px 0">Righe</h4>
+      <div class="table-wrapper" style="max-height:260px;overflow:auto">
+        <table class="data-table">
+          <thead><tr><th>Descrizione</th><th>Qta</th><th>Prezzo</th><th>IVA</th><th>Totale</th></tr></thead>
+          <tbody>${righe.length ? righe.map(r => `
+            <tr>
+              <td>${escapeHtml(r.descrizione || '-')}</td>
+              <td>${Number(r.quantita || 0).toFixed(2)}</td>
+              <td>EUR ${Number(r.prezzo_unitario || 0).toFixed(2)}</td>
+              <td>${r.aliquota_iva ?? '-'}</td>
+              <td>EUR ${Number(r.totale_riga || 0).toFixed(2)}</td>
+            </tr>`).join('') : '<tr><td colspan="5">Nessuna riga disponibile</td></tr>'}</tbody>
+        </table>
+      </div>
+      <h4 style="margin:14px 0 10px">Riepilogo IVA</h4>
+      <div class="table-wrapper" style="max-height:200px;overflow:auto">
+        <table class="data-table">
+          <thead><tr><th>Aliquota</th><th>Natura</th><th>Imponibile</th><th>Imposta</th></tr></thead>
+          <tbody>${riepilogo.length ? riepilogo.map(r => `
+            <tr>
+              <td>${r.aliquota_iva ?? '-'}</td>
+              <td>${escapeHtml(r.natura_iva || '-')}</td>
+              <td>EUR ${Number(r.imponibile || 0).toFixed(2)}</td>
+              <td>EUR ${Number(r.imposta || 0).toFixed(2)}</td>
+            </tr>`).join('') : '<tr><td colspan="4">Nessun riepilogo disponibile</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div class="modal-actions" style="justify-content:flex-start;margin-top:14px">
+        ${f.xml_path ? `<button class="btn btn-outline" onclick="openFatturaXml(${f.id})">Apri XML originale</button>` : ''}
+      </div>
+    `;
+    openModal('modal-fattura-preview');
+  } catch (e) {
+    toast(e.message || 'Errore anteprima fattura', 'error');
+  }
+}
+
+function openFatturaXml(id) {
+  window.open(`/api/fatture/${id}/xml`, '_blank', 'noopener');
 }
 
 async function importXML(input) {

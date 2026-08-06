@@ -486,18 +486,37 @@ function sanitizeFilePart(value) {
 
 function respondInboundSuccess(req, res, result) {
   const soapVersion = detectSoapVersion(req);
+  const responseBody = buildSoapAck('OK', result.kind === 'invoice' ? 'Fattura acquisita' : 'Messaggio acquisito', soapVersion, result.operationName);
+  const contentType = soapVersion === '1.2' ? 'application/soap+xml; charset="utf-8"' : 'text/xml; charset="utf-8"';
+  writeSystemLog({
+    livello: 'info',
+    origine: 'sdi.ws.inbound',
+    route: '/api/sdi/ws/inbound',
+    metodo: 'POST',
+    messaggio: 'Risposta SDI inviata',
+    dettagli: {
+      contentType,
+      soapVersion,
+      operationName: result.operationName || null,
+      esito: 'ER01',
+      responseBytes: Buffer.byteLength(responseBody, 'utf8'),
+      responseBody
+    }
+  });
   res
-    .set('Content-Type', soapVersion === '1.2' ? 'application/soap+xml; charset=utf-8' : 'text/xml; charset=utf-8')
+    .set('Content-Type', contentType)
     .status(200)
-    .send(buildSoapAck('OK', result.kind === 'invoice' ? 'Fattura acquisita' : 'Messaggio acquisito', soapVersion, result.operationName));
+    .send(responseBody);
 }
 
 function respondInboundError(req, res, error) {
   const soapVersion = detectSoapVersion(req);
+  const responseBody = buildSoapAck('KO', error.message || 'Errore endpoint SDI', soapVersion);
+  const contentType = soapVersion === '1.2' ? 'application/soap+xml; charset="utf-8"' : 'text/xml; charset="utf-8"';
   res
-    .set('Content-Type', soapVersion === '1.2' ? 'application/soap+xml; charset=utf-8' : 'text/xml; charset=utf-8')
+    .set('Content-Type', contentType)
     .status(500)
-    .send(buildSoapAck('KO', error.message || 'Errore endpoint SDI', soapVersion));
+    .send(responseBody);
 }
 
 function detectSoapVersion(req) {
@@ -512,15 +531,8 @@ function buildSoapAck(esito, messaggio, soapVersion = '1.1', operationName = nul
   const envelopeNs = soapVersion === '1.2'
     ? 'http://www.w3.org/2003/05/soap-envelope'
     : 'http://schemas.xmlsoap.org/soap/envelope/';
-  const xmlnsExtra = 'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"';
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<soap:Envelope xmlns:soap="${envelopeNs}" ${xmlnsExtra}>
-  <soap:Body>
-    <rispostaRiceviFatture xmlns="http://www.fatturapa.gov.it/sdi/ws/ricezione/v1.0/types">
-      <Esito>ER01</Esito>
-    </rispostaRiceviFatture>
-  </soap:Body>
-</soap:Envelope>`;
+  const responseNs = 'http://www.fatturapa.gov.it/sdi/ws/ricezione/v1.0/types';
+  return `<soap:Envelope xmlns:soap="${envelopeNs}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:ns1="${responseNs}"><soap:Body><ns1:rispostaRiceviFatture><Esito>ER01</Esito></ns1:rispostaRiceviFatture></soap:Body></soap:Envelope>`;
 }
 
 function decodeBase64Xml(value) {

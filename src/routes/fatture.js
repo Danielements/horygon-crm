@@ -46,6 +46,20 @@ router.get('/:id', requirePermesso('fatture', 'read'), (req, res) => {
   res.json(f);
 });
 
+router.get('/:id/xml', requirePermesso('fatture', 'read'), (req, res) => {
+  const f = db.prepare('SELECT id, xml_path FROM fatture WHERE id = ?').get(req.params.id);
+  if (!f) return res.status(404).json({ error: 'Non trovata' });
+  if (!f.xml_path) return res.status(404).json({ error: 'XML non disponibile' });
+  const root = path.resolve(__dirname, '../../');
+  const cleanRelativePath = String(f.xml_path).replace(/^[/\\]+/, '');
+  const absolutePath = path.resolve(root, cleanRelativePath);
+  const uploadsRoot = path.resolve(root, 'uploads');
+  if (!absolutePath.startsWith(uploadsRoot + path.sep) || !fs.existsSync(absolutePath)) {
+    return res.status(404).json({ error: 'XML non trovato' });
+  }
+  res.type('application/xml').send(fs.readFileSync(absolutePath, 'utf8'));
+});
+
 // Crea fattura manuale
 router.post('/', requirePermesso('fatture', 'edit'), (req, res) => {
   const { numero, tipo, direzione, tipo_documento, anagrafica_id, ordine_id, data, scadenza, data_ricezione, imponibile, iva, totale, sdi_id, stato, stato_pagamento, valuta, partita_iva, codice_fiscale, note, righe, riepilogo_iva } = req.body;
