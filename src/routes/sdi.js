@@ -326,20 +326,35 @@ function sanitizeFilePart(value) {
 }
 
 function respondInboundSuccess(req, res, result) {
-  res.type('application/soap+xml').status(200).send(
-    buildSoapAck('OK', result.kind === 'invoice' ? 'Fattura acquisita' : 'Messaggio acquisito')
-  );
+  const soapVersion = detectSoapVersion(req);
+  res
+    .set('Content-Type', soapVersion === '1.2' ? 'application/soap+xml; charset=utf-8' : 'text/xml; charset=utf-8')
+    .status(200)
+    .send(buildSoapAck('OK', result.kind === 'invoice' ? 'Fattura acquisita' : 'Messaggio acquisito', soapVersion));
 }
 
 function respondInboundError(req, res, error) {
-  res.type('application/soap+xml').status(500).send(
-    buildSoapAck('KO', error.message || 'Errore endpoint SDI')
-  );
+  const soapVersion = detectSoapVersion(req);
+  res
+    .set('Content-Type', soapVersion === '1.2' ? 'application/soap+xml; charset=utf-8' : 'text/xml; charset=utf-8')
+    .status(500)
+    .send(buildSoapAck('KO', error.message || 'Errore endpoint SDI', soapVersion));
 }
 
-function buildSoapAck(esito, messaggio) {
+function detectSoapVersion(req) {
+  const contentType = String(req.headers['content-type'] || '').toLowerCase();
+  const body = String(req.body || '');
+  if (contentType.includes('application/soap+xml')) return '1.2';
+  if (body.includes('http://www.w3.org/2003/05/soap-envelope')) return '1.2';
+  return '1.1';
+}
+
+function buildSoapAck(esito, messaggio, soapVersion = '1.1') {
+  const envelopeNs = soapVersion === '1.2'
+    ? 'http://www.w3.org/2003/05/soap-envelope'
+    : 'http://schemas.xmlsoap.org/soap/envelope/';
   return `<?xml version="1.0" encoding="UTF-8"?>
-<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+<soap:Envelope xmlns:soap="${envelopeNs}">
   <soap:Body>
     <RicezioneSdIResponse xmlns="https://crm.horygon.it/ws/sdi">
       <esito>${xmlEscape(esito)}</esito>
