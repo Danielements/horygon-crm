@@ -91,6 +91,17 @@ function loadCertificate(filePath) {
   return new crypto.X509Certificate(pemFromDer(raw, 'CERTIFICATE'));
 }
 
+function loadCertificatePem(filePath) {
+  const raw = fs.readFileSync(filePath);
+  const text = raw.toString('utf8');
+  if (text.includes('BEGIN CERTIFICATE')) return text;
+  const compact = text.replace(/\s+/g, '');
+  if (/^[A-Za-z0-9+/=]+$/.test(compact) && compact.length > 0) {
+    return pemFromDer(Buffer.from(compact, 'base64'), 'CERTIFICATE');
+  }
+  return pemFromDer(raw, 'CERTIFICATE');
+}
+
 function loadPrivateKey(filePath) {
   return crypto.createPrivateKey(fs.readFileSync(filePath));
 }
@@ -160,7 +171,7 @@ async function probeHttpsEndpoint(url, caPath) {
   options.method = 'GET';
   options.timeout = 5000;
   if (caPath && fs.existsSync(caPath)) {
-    options.ca = fs.readFileSync(caPath);
+    options.ca = loadCertificatePem(caPath);
   }
   return new Promise((resolve) => {
     const req = https.request(options, (res) => {
