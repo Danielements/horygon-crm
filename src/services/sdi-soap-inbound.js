@@ -47,6 +47,28 @@ const OPERATION_KIND = {
   RiceviFatture: 'INCOMING_INVOICE'
 };
 
+const SOAP_ACTIONS = {
+  RicezioneFatture: {
+    RiceviFatture: 'http://www.fatturapa.it/RicezioneFatture/RiceviFattureSdI',
+    NotificaDecorrenzaTermini: 'http://www.fatturapa.it/RicezioneFatture/NotificaDecorrenzaTermini'
+  },
+  TrasmissioneFatture: {
+    RicevutaConsegna: 'http://www.fatturapa.it/TrasmissioneFatture/RicevutaConsegna',
+    NotificaMancataConsegna: 'http://www.fatturapa.it/TrasmissioneFatture/NotificaMancataConsegna',
+    NotificaScarto: 'http://www.fatturapa.it/TrasmissioneFatture/NotificaScarto',
+    NotificaEsito: 'http://www.fatturapa.it/TrasmissioneFatture/NotificaEsito',
+    NotificaDecorrenzaTermini: 'http://www.fatturapa.it/TrasmissioneFatture/NotificaDecorrenzaTermini',
+    AttestazioneTrasmissioneFattura: 'http://www.fatturapa.it/TrasmissioneFatture/AttestazioneTrasmissioneFattura'
+  }
+};
+
+const DISPATCHER_KEYS = [
+  'trasmissione|NotificaMancataConsegna',
+  'trasmissione|NotificaDecorrenzaTermini',
+  'trasmissione|AttestazioneTrasmissioneFattura',
+  'ricezione|NotificaDecorrenzaTermini'
+];
+
 function processInboundSdiRequest(req) {
   const requestId = crypto.randomUUID();
   const rawBuffer = getRawRequestBuffer(req);
@@ -77,7 +99,7 @@ function processInboundSdiRequest(req) {
 
   if (!rawBuffer.length) throw typedError('EmptyRequestBodyError', 'Body XML mancante');
   const parsedSoap = parseSoapEnvelope(envelopeXml);
-  const operation = identifySdiOperation(parsedSoap.operationLocalName, parsedSoap.operationNamespace);
+  const operation = identifySdiOperation(parsedSoap.operationLocalName, parsedSoap.operationNamespace, soapAction);
 
   writeSystemLog({
     livello: 'info',
@@ -94,6 +116,7 @@ function processInboundSdiRequest(req) {
       operationNamespace: parsedSoap.operationNamespace,
       soapAction,
       contractName: operation.contractName,
+      dispatcherKey: operation.dispatcherKey,
       isMtom
     }
   });
@@ -150,6 +173,9 @@ function processInboundSdiRequest(req) {
     operationNamespace: parsedSoap.operationNamespace,
     operationKind: operation.kind,
     contractName: operation.contractName,
+    dispatcherKey: operation.dispatcherKey,
+    soapAction,
+    contentType,
     isMtom,
     identificativoSdI: payload.identificativoSdI,
     nomeFile: payload.nomeFile,
@@ -322,7 +348,11 @@ function processTransmissionNotification({ result, decodedXml, payload, storage 
 
   try {
     const notification = receiveSdiNotificationXml(decodedXml, {
-      originalFilename: payload.nomeFile || null
+      originalFilename: payload.nomeFile || null,
+      soapAction: result.soapAction || null,
+      contentType: result.contentType || null,
+      isMtom: result.isMtom || false,
+      httpStatus: 200
     });
     result.kind = 'notification';
     result.flowId = notification.flowId;
@@ -459,22 +489,83 @@ function buildElementTree(nodes, inheritedNamespaces = { '': '' }) {
   return result;
 }
 
-function identifySdiOperation(operationName, operationNamespace) {
+function identifySdiOperation(operationName, operationNamespace, soapAction = '') {
   const kind = OPERATION_KIND[operationName];
   if (!kind) throw typedError('UnknownSdiOperationError', `Operazione SdI non gestita: ${operationName}`);
+  const canonicalName = canonicalOperationName(operationName);
   if (kind === 'INCOMING_INVOICE') {
     if (operationNamespace !== RECEPTION_TYPES_NS) {
       throw typedError('InvalidSdiNamespaceError', `Namespace ricezione non valido: ${operationNamespace}`);
     }
-    return { kind, contractName: 'RicezioneFatture', responseKind: 'ricevi_fatture_er01', oneWay: false };
+    validateSoapAction('RicezioneFatture', canonicalName, soapAction);
+    return {
+      kind,
+      contractName: 'RicezioneFatture',
+      dispatcherKey: buildDispatcherKey('RicezioneFatture', canonicalName),
+      responseKind: 'ricevi_fatture_er01',
+      oneWay: false
+    };
   }
   if (operationNamespace === RECEPTION_TYPES_NS && kind === 'DEADLINE_EXPIRED') {
-    return { kind: 'RECEPTION_DEADLINE_EXPIRED', contractName: 'RicezioneFatture', responseKind: 'empty_200', oneWay: true };
+    validateSoapAction('RicezioneFatture', canonicalName, soapAction);
+    return {
+      kind: 'RECEPTION_DEADLINE_EXPIRED',
+      contractName: 'RicezioneFatture',
+      dispatcherKey: buildDispatcherKey('RicezioneFatture', canonicalName),
+      responseKind: 'empty_200',
+      oneWay: true
+    };
   }
   if (operationNamespace !== TRANSMISSION_TYPES_NS) {
     throw typedError('InvalidSdiNamespaceError', `Namespace trasmissione non valido: ${operationNamespace}`);
   }
-  return { kind, contractName: 'TrasmissioneFatture', responseKind: 'empty_200', oneWay: true };
+  validateSoapAction('TrasmissioneFatture', canonicalName, soapAction);
+  return {
+    kind,
+    contractName: 'TrasmissioneFatture',
+    dispatcherKey: buildDispatcherKey('TrasmissioneFatture', canonicalName),
+    responseKind: 'empty_200',
+    oneWay: true
+  };
+}
+
+function validateSoapAction(contractName, operationName, soapAction = '') {
+  const received = normalizeSoapAction(soapAction);
+  if (!received) return;
+  const expected = SOAP_ACTIONS[contractName]?.[operationName];
+  if (expected && received !== expected) {
+    throw typedError('InvalidSdiSoapActionError', `SOAPAction non coerente per ${contractName}/${operationName}: ${received}`);
+  }
+}
+
+function canonicalOperationName(operationName) {
+  const normalized = String(operationName || '').trim();
+  const map = {
+    ricevutaConsegna: 'RicevutaConsegna',
+    RicevutaConsegna: 'RicevutaConsegna',
+    notificaMancataConsegna: 'NotificaMancataConsegna',
+    NotificaMancataConsegna: 'NotificaMancataConsegna',
+    notificaScarto: 'NotificaScarto',
+    NotificaScarto: 'NotificaScarto',
+    notificaEsito: 'NotificaEsito',
+    NotificaEsito: 'NotificaEsito',
+    notificaDecorrenzaTermini: 'NotificaDecorrenzaTermini',
+    NotificaDecorrenzaTermini: 'NotificaDecorrenzaTermini',
+    attestazioneTrasmissioneFattura: 'AttestazioneTrasmissioneFattura',
+    AttestazioneTrasmissioneFattura: 'AttestazioneTrasmissioneFattura',
+    fileSdIConMetadati: 'RiceviFatture',
+    RiceviFatture: 'RiceviFatture'
+  };
+  return map[normalized] || normalized;
+}
+
+function buildDispatcherKey(contractName, operationName) {
+  const prefix = contractName === 'RicezioneFatture' ? 'ricezione' : 'trasmissione';
+  return `${prefix}|${operationName}`;
+}
+
+function listSdiDispatcherKeys() {
+  return [...DISPATCHER_KEYS];
 }
 
 function extractSdiPayload(operationElement) {
@@ -751,6 +842,7 @@ module.exports = {
   extractSdiPayload,
   getDirectChildText,
   identifySdiOperation,
+  listSdiDispatcherKeys,
   normalizeSoapAction,
   parseMultipartRelated,
   parseSoapEnvelope,

@@ -484,6 +484,31 @@ db.exec(`
     updated_at TEXT DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS sdi_interoperability_tests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    test_name TEXT NOT NULL,
+    fattura_id INTEGER,
+    flow_id INTEGER,
+    nome_file TEXT,
+    progressivo_invio TEXT,
+    codice_destinatario TEXT,
+    identificativo_sdi TEXT,
+    data_invio TEXT,
+    callback_atteso TEXT,
+    callback_ricevuto TEXT,
+    soap_action TEXT,
+    content_type TEXT,
+    is_mtom INTEGER DEFAULT 0,
+    http_status INTEGER,
+    stato_portale TEXT,
+    note TEXT,
+    payload_meta TEXT,
+    updated_at TEXT DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (fattura_id) REFERENCES fatture(id) ON DELETE SET NULL,
+    FOREIGN KEY (flow_id) REFERENCES fatture_sdi_flussi(id) ON DELETE SET NULL
+  );
+
   CREATE TABLE IF NOT EXISTS proforme_invoice (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     numero_proforma TEXT NOT NULL UNIQUE,

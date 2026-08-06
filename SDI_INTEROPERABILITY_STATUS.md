@@ -361,6 +361,58 @@ Attenzione PA outbound:
 - Per i test obbligatori B2B non serve firma.
 - Per completare i test PA outbound potrebbe servire implementare firma XAdES/CAdES o usare scenari del simulatore che non richiedono trasmissione PA firmata dal CRM.
 
+## Piano residuo implementato nel CRM
+
+Dispatcher da verificare prima dei nuovi invii:
+
+- `trasmissione|NotificaMancataConsegna`
+- `trasmissione|NotificaDecorrenzaTermini`
+- `trasmissione|AttestazioneTrasmissioneFattura`
+- `ricezione|NotificaDecorrenzaTermini`
+
+Il dispatcher usa contratto/namespace, SOAPAction e operation localName. Questo evita di confondere:
+
+- `RicezioneFatture/NotificaDecorrenzaTermini`
+- `TrasmissioneFatture/NotificaDecorrenzaTermini`
+
+Codici speciali dal `piano_test_interoperabilita_SDICoop.pdf` locale:
+
+- `XS0000`: B2G/PA per canale inesistente, mancata consegna e attestazione.
+- `XS00001`: B2B/B2C per canale inesistente, impossibilita di recapito.
+
+Nota: il PDF locale non riporta `WS0001`; se un piano storico lo riporta, usarlo solo per quel piano specifico.
+
+Script aggiunti:
+
+```bash
+docker compose exec -T horygon-crm node scripts/seed-sdi-interoperability-invoices.js
+docker compose exec -T horygon-crm node scripts/transmit-sdi-interoperability-invoice.js TEST-MC-001
+docker compose exec -T horygon-crm node scripts/send-sdi-invalid-customer-outcome.js <fatturaId-o-numero> EC99
+```
+
+Fatture dedicate create dallo script:
+
+- `TEST-MC-001`: B2B/B2C verso `XS00001`, atteso `RicevutaImpossibilitaRecapito`.
+- `TEST-DT-001`: PA verso `ESOJKL`, atteso `NotificaDecorrenzaTermini`; dopo la ricezione non inviare `EC01` o `EC02`.
+- `TEST-AT-001`: PA verso `XS0000`, atteso `NotificaMancataConsegna` e `AttestazioneTrasmissioneFattura`; richiede fattura FPA12 firmata.
+
+Per `Scarto esito PA`:
+
+- usare una fattura PA ricevuta nuova e non ancora esitata;
+- inviare `EC99` con `scripts/send-sdi-invalid-customer-outcome.js`;
+- il client `SdIRiceviNotifica` non considera `HTTP 200` come successo automatico;
+- vengono gestiti `ES01`, `ES00`, `ES02`;
+- in caso `ES00`, viene decodificato e salvato `ScartoEsito/File` e viene estratto `EN00` o `EN01`.
+
+Registro interoperabilita:
+
+- tabella `sdi_interoperability_tests`;
+- registra nome test, fattura, flusso, nome file, progressivo, codice destinatario, identificativo SdI, data invio, callback atteso/ricevuto, SOAPAction, content-type, MTOM, HTTP restituito, stato portale, metadati.
+
+Limite ancora aperto:
+
+- la firma FPA12 per i test PA outbound non e' ancora automatizzata. Gli invii PA non firmati possono ancora produrre `00102 File non integro`.
+
 ## Comandi operativi VPS
 
 Aggiornare branch e rebuild:

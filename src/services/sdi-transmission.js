@@ -6,6 +6,7 @@ const { XMLParser } = require('fast-xml-parser');
 const db = require('../db/database');
 const { getSetting } = require('./google');
 const { generateOutboundXmlForInvoice } = require('./sdi-fatturapa');
+const { registerOutboundTransmission } = require('./sdi-interoperability');
 
 const ROOT = path.resolve(__dirname, '../../');
 const SDI_CERTS_DIR = process.env.SDI_CERTS_DIR || '/run/sdi-certs';
@@ -19,9 +20,15 @@ async function transmitInvoiceToSdiTest(fatturaId) {
 
 async function transmitGeneratedFlow(flowId, options = {}) {
   const flow = db.prepare(`
-    SELECT fl.*, f.id AS fattura_id
+    SELECT
+      fl.*,
+      f.id AS fattura_id,
+      f.numero,
+      f.numero_documento,
+      a.codice_destinatario
     FROM fatture_sdi_flussi fl
     JOIN fatture f ON f.id = fl.fattura_id
+    LEFT JOIN anagrafiche a ON a.id = f.anagrafica_id
     WHERE fl.id = ?
   `).get(flowId);
   if (!flow) throw new Error('Flusso SDI non trovato');
@@ -65,6 +72,28 @@ async function transmitGeneratedFlow(flowId, options = {}) {
     SET stato_sdi = ?
     WHERE id = ?
   `).run(stato, flow.fattura_id);
+
+  try {
+    registerOutboundTransmission({
+      flow,
+      invoice: {
+        id: flow.fattura_id,
+        numero: flow.numero,
+        numero_documento: flow.numero_documento
+      },
+      customer: {
+        codice_destinatario: parseJsonObject(flow.payload_meta).codice_destinatario || flow.codice_destinatario || null
+      },
+      payloadMeta: parseJsonObject(flow.payload_meta),
+      transmission: {
+        filename: flow.nome_file,
+        identificativoSdi: parsed.identificativoSdi || null,
+        statusCode: response.statusCode,
+        statusMessage: response.statusMessage,
+        success
+      }
+    });
+  } catch {}
 
   return {
     flowId: flow.id,
@@ -296,6 +325,15 @@ function firstValue(source, keys) {
     if (source[key] !== undefined && source[key] !== null) return String(source[key]);
   }
   return null;
+}
+
+function parseJsonObject(value) {
+  try {
+    const parsed = JSON.parse(String(value || '{}'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 function persistTransmissionResponse(content, filename) {

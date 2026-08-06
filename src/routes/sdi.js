@@ -201,7 +201,8 @@ router.post('/fatture/:id/esito-committente-test', requirePermesso('fatture', 'e
     const result = await sendEsitoCommittenteToSdiTest(req.params.id, {
       esito: req.body?.esito || 'EC01',
       descrizione: req.body?.descrizione || '',
-      posizioneFattura: req.body?.posizioneFattura || 1
+      posizioneFattura: req.body?.posizioneFattura || 1,
+      allowInvalidOutcome: req.body?.allowInvalidOutcome === true
     });
     writeAudit({
       utente_id: req.user.id,

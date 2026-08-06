@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const db = require('../db/database');
 const { parseSdiNotificationXml } = require('./sdi-notification-parser');
+const { updateInteroperabilityCallback } = require('./sdi-interoperability');
 
 const ROOT = path.resolve(__dirname, '../../');
 const INBOUND_DIR = path.join(ROOT, 'uploads', 'sdi-inbound');
@@ -64,6 +65,15 @@ function receiveSdiNotificationXml(xml, options = {}) {
       WHERE id = ?
     `).run(statoNormalizzato, matchedFlow.fattura_id);
   }
+
+  updateInteroperabilityCallback({
+    flow: matchedFlow,
+    parsed,
+    soapAction: options.soapAction || null,
+    contentType: options.contentType || null,
+    isMtom: options.isMtom || false,
+    httpStatus: options.httpStatus || 200
+  });
 
   return {
     notificationId: result.lastInsertRowid,

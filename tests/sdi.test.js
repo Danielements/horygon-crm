@@ -25,6 +25,7 @@ const {
   decodeSdiFile,
   extractSdiPayload,
   identifySdiOperation,
+  listSdiDispatcherKeys,
   normalizeSoapAction,
   parseMultipartRelated,
   parseSoapEnvelope,
@@ -428,6 +429,27 @@ test('customer outcome response parser handles ES01 ES02 and ES00 scarto payload
   assert.equal(rejected.scarto.descrizione, 'Esito non ammissibile');
 });
 
+test('customer outcome can intentionally generate invalid EC99 only for interoperability test', () => {
+  assert.throws(() => buildNotificaEsitoCommittenteXml({
+    identificativoSdi: '32477506',
+    esito: 'EC99'
+  }), /Esito committente non valido/);
+  const xml = buildNotificaEsitoCommittenteXml({
+    identificativoSdi: '32477506',
+    esito: 'EC99',
+    allowInvalidOutcome: true
+  });
+  assert.match(xml, /<Esito>EC99<\/Esito>/);
+});
+
+test('customer outcome response parser extracts EN00 from ScartoEsito payload', () => {
+  const scartoXml = '<ScartoEsitoCommittente><IdentificativoSdI>32477506</IdentificativoSdI><Esito>EN00</Esito></ScartoEsitoCommittente>';
+  const rejected = parseSdIRiceviNotificaResponse(`<rispostaSdINotificaEsito><Esito>ES00</Esito><ScartoEsito><NomeFile>IT03365990591_00008_EC_001.xml</NomeFile><File>${Buffer.from(scartoXml).toString('base64')}</File></ScartoEsito></rispostaSdINotificaEsito>`);
+  assert.equal(rejected.rejected, true);
+  assert.equal(rejected.scarto.codice, 'EN00');
+  assert.match(rejected.scarto.xml, /ScartoEsitoCommittente/);
+});
+
 test('SOAP parser recognizes SOAP 1.1 prefixes and default namespace', () => {
   const variants = [
     ['soapenv', '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"><soapenv:Body><types:notificaScarto xmlns:types="http://www.fatturapa.gov.it/sdi/ws/trasmissione/v1.0/types"><IdentificativoSdI>123</IdentificativoSdI><NomeFile>IT03365990591_00007.xml</NomeFile><File>PHg+eTwveD4=</File></types:notificaScarto></soapenv:Body></soapenv:Envelope>'],
@@ -468,6 +490,32 @@ test('operation resolver maps transmission and reception operations', () => {
   const ricezioneDecorrenza = identifySdiOperation('notificaDecorrenzaTermini', RECEPTION_TYPES_NS);
   assert.equal(ricezioneDecorrenza.contractName, 'RicezioneFatture');
   assert.equal(ricezioneDecorrenza.responseKind, 'empty_200');
+});
+
+test('dispatcher exposes interoperability keys and validates duplicate localNames by contract', () => {
+  assert.deepEqual(listSdiDispatcherKeys(), [
+    'trasmissione|NotificaMancataConsegna',
+    'trasmissione|NotificaDecorrenzaTermini',
+    'trasmissione|AttestazioneTrasmissioneFattura',
+    'ricezione|NotificaDecorrenzaTermini'
+  ]);
+  const txDecorrenza = identifySdiOperation(
+    'NotificaDecorrenzaTermini',
+    TRANSMISSION_TYPES_NS,
+    'http://www.fatturapa.it/TrasmissioneFatture/NotificaDecorrenzaTermini'
+  );
+  assert.equal(txDecorrenza.dispatcherKey, 'trasmissione|NotificaDecorrenzaTermini');
+  const rxDecorrenza = identifySdiOperation(
+    'NotificaDecorrenzaTermini',
+    RECEPTION_TYPES_NS,
+    'http://www.fatturapa.it/RicezioneFatture/NotificaDecorrenzaTermini'
+  );
+  assert.equal(rxDecorrenza.dispatcherKey, 'ricezione|NotificaDecorrenzaTermini');
+  assert.throws(() => identifySdiOperation(
+    'NotificaDecorrenzaTermini',
+    RECEPTION_TYPES_NS,
+    'http://www.fatturapa.it/TrasmissioneFatture/NotificaDecorrenzaTermini'
+  ), /SOAPAction non coerente/);
 });
 
 test('payload extractor decodes base64 with new lines', () => {

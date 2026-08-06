@@ -48,7 +48,9 @@ async function sendEsitoCommittenteToSdi(fatturaId, options = {}) {
     throw new Error(`Esito committente previsto per fatture PA FPA12; formato ricevuto: ${formato}`);
   }
 
-  const esito = normalizeOutcome(options.esito || 'EC01');
+  const esito = options.allowInvalidOutcome
+    ? normalizeOutcomeForTest(options.esito || 'EC99')
+    : normalizeOutcome(options.esito || 'EC01');
   const progressivo = Number(options.progressivo || 1);
   const filename = buildEsitoCommittenteFilename(originalFilename, progressivo);
   const outcomeXml = buildNotificaEsitoCommittenteXml({
@@ -57,6 +59,7 @@ async function sendEsitoCommittenteToSdi(fatturaId, options = {}) {
     annoFattura: options.annoFattura || extractYear(invoice.data),
     posizioneFattura: options.posizioneFattura || 1,
     esito,
+    allowInvalidOutcome: options.allowInvalidOutcome || false,
     descrizione: options.descrizione || (esito === 'EC02' ? 'Fattura rifiutata in test' : ''),
     messageIdCommittente: options.messageIdCommittente || buildMessageId(invoice.id)
   });
@@ -90,6 +93,9 @@ async function sendEsitoCommittenteToSdi(fatturaId, options = {}) {
   const responseStorage = persistTransmissionResponse(response.bodyBuffer, filename);
   const responseXml = extractXmlFromHttpResponse(response);
   const parsed = parseSdIRiceviNotificaResponse(responseXml || response.body);
+  const scartoStorage = parsed.scarto?.xml
+    ? persistOutcomeXml(parsed.scarto.xml, parsed.scarto.nomeFile || `${filename.replace(/\.xml$/i, '')}_scarto.xml`)
+    : null;
   const httpOk = response.statusCode >= 200 && response.statusCode < 300;
   const success = httpOk && parsed.accepted && !parsed.fault;
   const stato = mapResponseState(parsed, httpOk);
@@ -125,12 +131,13 @@ async function sendEsitoCommittenteToSdi(fatturaId, options = {}) {
     statusCode: response.statusCode,
     statusMessage: response.statusMessage,
     responsePath: responseStorage.relativePath,
+    scartoPath: scartoStorage?.relativePath || null,
     esitoRisposta: parsed.esito || null,
     accepted: parsed.accepted,
     rejected: parsed.rejected,
     retryable: parsed.retryable,
     fault: parsed.fault || null,
-    scarto: parsed.scarto || null,
+    scarto: parsed.scarto ? { ...parsed.scarto, xmlPath: scartoStorage?.relativePath || null } : null,
     responseHeaders: response.headers,
     responsePreview: response.body.slice(0, 1200),
     success
@@ -163,7 +170,9 @@ function getRiceviNotificaEndpoint(mode = 'test') {
 function buildNotificaEsitoCommittenteXml(payload) {
   const identificativoSdi = String(payload.identificativoSdi || '').trim();
   if (!/^\d{1,12}$/.test(identificativoSdi)) throw new Error('IdentificativoSdI non valido');
-  const esito = normalizeOutcome(payload.esito || 'EC01');
+  const esito = payload.allowInvalidOutcome
+    ? normalizeOutcomeForTest(payload.esito || 'EC99')
+    : normalizeOutcome(payload.esito || 'EC01');
   const numeroFattura = String(payload.numeroFattura || '').trim();
   const annoFattura = String(payload.annoFattura || '').trim();
   const posizioneFattura = String(payload.posizioneFattura || '').trim();
@@ -233,7 +242,7 @@ function parseSdIRiceviNotificaResponse(xml) {
       || findObjectByKey(parsed, 'rispostaSdINotificaEsito')
       || {};
     const esito = firstValue(response, ['Esito', 'esito']);
-    const scarto = parseScartoEsito(response?.ScartoEsito);
+  const scarto = parseScartoEsito(response?.ScartoEsito);
     return {
       esito,
       accepted: esito === 'ES01',
@@ -260,7 +269,7 @@ function parseScartoEsito(value) {
   return {
     nomeFile,
     xml: xml || null,
-    codice: errori[0]?.codice || null,
+    codice: errori[0]?.codice || extractScartoEsitoCode(xml) || null,
     descrizione: errori[0]?.descrizione || null,
     errori
   };
@@ -388,6 +397,28 @@ function normalizeOutcome(value) {
   const outcome = String(value || '').trim().toUpperCase();
   if (!['EC01', 'EC02'].includes(outcome)) throw new Error(`Esito committente non valido: ${value}`);
   return outcome;
+}
+
+function normalizeOutcomeForTest(value) {
+  const outcome = String(value || '').trim().toUpperCase();
+  if (!/^EC[A-Z0-9]{2}$/.test(outcome)) throw new Error(`Esito committente test non valido: ${value}`);
+  return outcome;
+}
+
+function extractScartoEsitoCode(xml) {
+  if (!xml) return null;
+  const parser = new XMLParser({
+    ignoreAttributes: false,
+    removeNSPrefix: true,
+    parseTagValue: false,
+    trimValues: true
+  });
+  try {
+    const parsed = parser.parse(xml);
+    return firstValue(parsed, ['Esito', 'Codice', 'CodiceErrore']);
+  } catch {
+    return null;
+  }
 }
 
 function extractYear(value) {
