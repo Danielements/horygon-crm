@@ -11,11 +11,11 @@ Gia superati sul portale SdI:
 - Ricezione Fattura.
 - Ricevuta Consegna.
 - Notifica Scarto.
+- Notifica Mancata Consegna B2G / Ricevuta Impossibilita Recapito B2B/B2C.
 - Notifica di esito da PA.
 
 Ancora da completare:
 
-- Notifica Mancata Consegna B2G / Ricevuta Impossibilita Recapito B2B/B2C.
 - Notifica di scarto esito a PA.
 - Notifica Decorrenza Termini a PA.
 - Notifica esito a Operatore Economico.
@@ -67,6 +67,26 @@ Ulteriori test FatturaPA:
 - `Notifica esito a Operatore Economico`: KO.
 - `Notifica Decorrenza Termini a Operatore Economico`: KO.
 - `Attestazione avvenuta trasmissione`: KO.
+
+## Checkpoint portale 2026-08-06 22:53 CEST
+
+Test obbligatori superati:
+
+- `Ricezione Fattura`: OK dal `2026-08-06 16:53:05`.
+- `Ricevuta consegna`: OK dal `2026-08-06 21:07:52`.
+- `Notifica mancata consegna (B2G) / Notifica impossibilita recapito (B2B, B2C)`: OK dal `2026-08-06 22:53:35`.
+- `Notifica scarto (B2G) / Ricevuta scarto (B2B, B2C)`: OK dal `2026-08-06 18:52:09`.
+
+Ulteriori test FatturaPA:
+
+- `Notifica di esito da PA`: OK dal `2026-08-06 21:11:03`.
+- `Notifica di Scarto esito a PA`: KO.
+- `Notifica Decorrenza Termini a PA`: KO.
+- `Notifica esito a Operatore Economico`: KO.
+- `Notifica Decorrenza Termini a Operatore Economico`: KO.
+- `Attestazione avvenuta trasmissione`: KO.
+
+Nota: dopo questo checkpoint non ripetere i test obbligatori gia OK salvo regressioni. Concentrarsi sui test FatturaPA facoltativi/residui e sulla preparazione del flusso CRM reale.
 
 Flussi reali confermati:
 
@@ -346,14 +366,29 @@ Caso confermato:
 
 ## Cosa non funziona ancora
 
-Resta da completare il piano test, non il canale base:
+I test obbligatori del canale sono OK. Resta da completare la parte FatturaPA opzionale/residua e il flusso applicativo CRM:
 
-- Scenario `NotificaMancataConsegna` / `RicevutaImpossibilitaRecapito`.
 - Scenario `Notifica di Scarto esito a PA`, probabilmente inviando un esito committente non accettabile o duplicato secondo piano test.
 - Scenario `Notifica Decorrenza Termini a PA`.
 - Scenario `Notifica esito a Operatore Economico`.
 - Scenario `Notifica Decorrenza Termini a Operatore Economico`.
 - Scenario `Attestazione avvenuta trasmissione`.
+
+## Prossimi lavori CRM dopo accreditamento
+
+Obiettivi funzionali da implementare prima della produzione:
+
+- Azzerare in modo sicuro i dati di test SdI e le fatture demo senza cancellare configurazioni, utenti, anagrafiche reali, certificati, impostazioni aziendali e registri schema.
+- Importare fatture storiche da XML esportati da cassetto fiscale/portale, mantenendo XML originale, hash SHA-256, metadati SdI, numero, data, soggetto, righe, riepiloghi IVA e stato.
+- Ricostruire la numerazione fatture attive gia emesse prima di generare nuove fatture dal CRM.
+- Generare nuove fatture elettroniche da ordini evasi, con bozza, validazione XSD/applicativa, anteprima XML, invio SdI TEST/PROD controllato e blocco immutabile dell'XML inviato.
+- Sincronizzare automaticamente nuove fatture passive e notifiche ricevute via endpoint SdI, evitando duplicati tramite hash, nome file e IdentificativoSdI.
+- Separare chiaramente modalita `test` e `production`; nessun invio PROD deve essere possibile senza conferma e configurazione produzione completata.
+
+Regola operativa per reset:
+
+- Preparare uno script dedicato e reversibile per pulizia ambiente test, con dry-run obbligatorio e backup database prima dell'esecuzione.
+- Non usare cancellazioni manuali estese su tabelle SdI/fatture senza backup.
 
 Attenzione PA outbound:
 
