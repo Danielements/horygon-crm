@@ -70,6 +70,11 @@ const seedSetting = db.prepare(`
   INSERT OR IGNORE INTO app_settings (key, value, type, updated_at)
   VALUES (?, ?, ?, datetime('now'))
 `);
+const fillSettingIfBlank = db.prepare(`
+  UPDATE app_settings
+  SET value = ?, type = ?, updated_at = datetime('now')
+  WHERE key = ? AND (value IS NULL OR trim(value) = '')
+`);
 seedSetting.run('notifications.email_enabled', '0', 'boolean');
 seedSetting.run('notifications.deadline_days', '3,1', 'string');
 seedSetting.run('notifications.recipient_mode', 'all_active_users', 'string');
@@ -85,13 +90,31 @@ seedSetting.run('sdi.company.fiscal_code', '', 'string');
 seedSetting.run('sdi.company.denomination', '', 'string');
 seedSetting.run('sdi.company.regime_fiscale', 'RF01', 'string');
 seedSetting.run('sdi.company.address', '', 'string');
+seedSetting.run('sdi.company.street_number', '', 'string');
 seedSetting.run('sdi.company.cap', '', 'string');
 seedSetting.run('sdi.company.city', '', 'string');
 seedSetting.run('sdi.company.province', '', 'string');
 seedSetting.run('sdi.company.pec', '', 'string');
+seedSetting.run('sdi.company.email', '', 'string');
 seedSetting.run('sdi.company.rea_office', '', 'string');
 seedSetting.run('sdi.company.rea_number', '', 'string');
 seedSetting.run('sdi.company.share_capital', '0', 'string');
+[
+  ['sdi.company.country', 'IT', 'string'],
+  ['sdi.company.vat', '03365990591', 'string'],
+  ['sdi.company.fiscal_code', '03365990591', 'string'],
+  ['sdi.company.denomination', 'HORYGON S.R.L.', 'string'],
+  ['sdi.company.regime_fiscale', 'RF01', 'string'],
+  ['sdi.company.address', 'Via Monte Lupone', 'string'],
+  ['sdi.company.street_number', '4C', 'string'],
+  ['sdi.company.cap', '04100', 'string'],
+  ['sdi.company.city', 'Latina', 'string'],
+  ['sdi.company.province', 'LT', 'string'],
+  ['sdi.company.pec', 'horygonsrl@pec.it', 'string'],
+  ['sdi.company.email', 'info@horygon.com', 'string'],
+  ['sdi.company.rea_office', 'LT', 'string'],
+  ['sdi.company.rea_number', '335485', 'string']
+].forEach(([key, value, type]) => fillSettingIfBlank.run(value, type, key));
 const sdiDir = process.env.SDI_CERTS_DIR || '/run/sdi-certs';
 seedSetting.run('sdi.mode', 'test', 'string');
 seedSetting.run('sdi.test.endpoint', 'https://testservizi.fatturapa.it/', 'string');

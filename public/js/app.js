@@ -4476,10 +4476,46 @@ async function loadStatistics() {
 async function loadSettingsPage() {
   const rows = await api('GET', '/system/settings');
   const box = document.getElementById('settings-list');
-  box.innerHTML = (rows || []).map(r => `<div style="display:grid;grid-template-columns:220px 1fr;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)">
-      <div><strong>${r.key}</strong><div style="font-size:12px;color:var(--text-muted)">${r.type}</div></div>
-      <input type="text" data-setting-key="${r.key}" data-setting-type="${r.type}" value="${String(r.value || '').replace(/"/g, '&quot;')}">
-    </div>`).join('');
+  const settingsRows = rows || [];
+  const featuredSettings = [
+    ['sdi.company.country', 'Paese'],
+    ['sdi.company.vat', 'Partita IVA'],
+    ['sdi.company.fiscal_code', 'Codice fiscale'],
+    ['sdi.company.denomination', 'Denominazione'],
+    ['sdi.company.regime_fiscale', 'Regime fiscale'],
+    ['sdi.company.address', 'Via/Piazza'],
+    ['sdi.company.street_number', 'Numero civico'],
+    ['sdi.company.cap', 'CAP'],
+    ['sdi.company.city', 'Citta'],
+    ['sdi.company.province', 'Provincia'],
+    ['sdi.company.pec', 'PEC'],
+    ['sdi.company.email', 'Email'],
+    ['sdi.company.rea_office', 'Ufficio REA'],
+    ['sdi.company.rea_number', 'Numero REA']
+  ];
+  const featuredKeys = new Set(featuredSettings.map(([key]) => key));
+  const rowMap = new Map(settingsRows.map(row => [row.key, row]));
+  const renderSettingField = (row, label = row.key) => `<div style="display:grid;grid-template-columns:220px 1fr;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)">
+      <div><strong>${escapeHtml(label)}</strong><div style="font-size:12px;color:var(--text-muted)">${escapeHtml(row.key)} · ${escapeHtml(row.type)}</div></div>
+      <input type="text" data-setting-key="${escapeAttr(row.key)}" data-setting-type="${escapeAttr(row.type || 'string')}" value="${escapeAttr(String(row.value || ''))}">
+    </div>`;
+  const companyProfileHtml = featuredSettings
+    .map(([key, label]) => rowMap.get(key) ? renderSettingField(rowMap.get(key), label) : '')
+    .join('');
+  const remainingHtml = settingsRows
+    .filter(row => !featuredKeys.has(row.key))
+    .map(row => renderSettingField(row))
+    .join('');
+  box.innerHTML = `
+    <div class="dash-card" style="padding:16px;margin-bottom:16px">
+      <h3 style="margin-top:0;font-size:16px">Profilo azienda SDI</h3>
+      <p style="font-size:12px;color:var(--text-muted)">Dati emittente usati per compilare il blocco CedentePrestatore delle fatture elettroniche.</p>
+      ${companyProfileHtml}
+    </div>
+    <div class="dash-card" style="padding:16px">
+      <h3 style="margin-top:0;font-size:16px">Altre impostazioni tecniche</h3>
+      ${remainingHtml}
+    </div>`;
   loadSdiDiagnostics();
 }
 
