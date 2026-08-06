@@ -552,7 +552,7 @@ function organizeNavigationLayout() {
     { label: 'Logistica', sections: ['prodotti', 'kit', 'magazzino', 'preventivi', 'ordini', 'ddt', 'container', 'documenti'] },
     { label: 'Contabilita', sections: ['fatture-attive', 'fatture-passive', 'fatture-fuori-campo'] },
     { label: 'Statistica', sections: ['mepa', 'rdo', 'analytics'] },
-    { label: 'Amministrazione', sections: ['utenti', 'audit-log', 'system-log', 'automazioni'] }
+    { label: 'Amministrazione', sections: ['settings', 'utenti', 'audit-log', 'system-log', 'automazioni'] }
   ];
   nav.innerHTML = '';
   groups.forEach(group => {
@@ -586,6 +586,7 @@ function organizeNavigationLayout() {
         : section === 'rdo' ? getItem('rdo', 'RdO', '&#128221;')
         : section === 'analytics' ? getItem('analytics', 'Analisi API MEPA', '&#128202;')
         : section === 'statistics' ? getItem('statistics', 'Statistiche', '&#128200;')
+        : section === 'settings' ? getItem('settings', 'Impostazioni', '&#9881;')
         : section === 'utenti' ? getItem('utenti', 'Utenti', '&#9881;', 'nav-utenti')
         : section === 'automazioni' ? getItem('automazioni', 'Automazioni', '&#9889;')
         : null;
