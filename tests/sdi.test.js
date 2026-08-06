@@ -8,7 +8,17 @@ const { validateInvoiceXml } = require('../src/services/sdi-xml-validator');
 const { parseSdiNotificationXml } = require('../src/services/sdi-notification-parser');
 const { receiveSdiNotificationXml } = require('../src/services/sdi-inbound');
 const { getSchemaRegistryEntry, listSchemaRegistry, syncSchemaRegistry } = require('../src/services/sdi-schema-registry');
-const { buildRiceviFileSoapEnvelope, parseRiceviFileResponse } = require('../src/services/sdi-transmission');
+const { buildRiceviFileMtomMessage, buildRiceviFileSoapEnvelope, parseRiceviFileResponse } = require('../src/services/sdi-transmission');
+const {
+  RECEPTION_TYPES_NS,
+  TRANSMISSION_TYPES_NS,
+  decodeSdiBase64File,
+  extractSdiPayload,
+  identifySdiOperation,
+  normalizeSoapAction,
+  parseSoapEnvelope,
+  processInboundSdiRequest
+} = require('../src/services/sdi-soap-inbound');
 
 function makeOrdinaryPayload(format) {
   return {
@@ -239,6 +249,14 @@ test('transmission SOAP envelope carries invoice filename and payload', () => {
   assert.match(envelope, /PEZhdHR1cmFFbGV0dHJvbmljYT5vazwvRmF0dHVyYUVsZXR0cm9uaWNhPg==/);
 });
 
+test('transmission MTOM message carries xop include and binary attachment', () => {
+  const message = buildRiceviFileMtomMessage('IT03365990591_00001.xml', Buffer.from('<FatturaElettronica>ok</FatturaElettronica>'));
+  assert.match(message.contentType, /multipart\/related/);
+  assert.match(message.contentType, /application\/xop\+xml/);
+  assert.match(message.envelope, /xop:Include/);
+  assert.equal(message.body.includes(Buffer.from('<FatturaElettronica>ok</FatturaElettronica>')), true);
+});
+
 test('transmission parser extracts SdI identifier from RiceviFile response', () => {
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
@@ -252,4 +270,101 @@ test('transmission parser extracts SdI identifier from RiceviFile response', () 
   const parsed = parseRiceviFileResponse(xml);
   assert.equal(parsed.identificativoSdi, '32480000');
   assert.equal(parsed.dataOraRicezione, '2026-08-06T15:10:00');
+});
+
+test('SOAP parser recognizes SOAP 1.1 prefixes and default namespace', () => {
+  const variants = [
+    ['soapenv', '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"><soapenv:Body><types:notificaScarto xmlns:types="http://www.fatturapa.gov.it/sdi/ws/trasmissione/v1.0/types"><IdentificativoSdI>123</IdentificativoSdI><NomeFile>IT03365990591_00007.xml</NomeFile><File>PHg+eTwveD4=</File></types:notificaScarto></soapenv:Body></soapenv:Envelope>'],
+    ['soap', '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><types:notificaScarto xmlns:types="http://www.fatturapa.gov.it/sdi/ws/trasmissione/v1.0/types"><IdentificativoSdI>123</IdentificativoSdI><NomeFile>IT03365990591_00007.xml</NomeFile><File>PHg+eTwveD4=</File></types:notificaScarto></soap:Body></soap:Envelope>'],
+    ['S', '<S:Envelope xmlns:S="http://schemas.xmlsoap.org/soap/envelope/"><S:Body><types:notificaScarto xmlns:types="http://www.fatturapa.gov.it/sdi/ws/trasmissione/v1.0/types"><IdentificativoSdI>123</IdentificativoSdI><NomeFile>IT03365990591_00007.xml</NomeFile><File>PHg+eTwveD4=</File></types:notificaScarto></S:Body></S:Envelope>'],
+    ['default', '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/"><Body><types:notificaScarto xmlns:types="http://www.fatturapa.gov.it/sdi/ws/trasmissione/v1.0/types"><IdentificativoSdI>123</IdentificativoSdI><NomeFile>IT03365990591_00007.xml</NomeFile><File>PHg+eTwveD4=</File></types:notificaScarto></Body></Envelope>']
+  ];
+  for (const [, xml] of variants) {
+    const parsed = parseSoapEnvelope(xml);
+    assert.equal(parsed.isSoap, true);
+    assert.equal(parsed.soapVersion, '1.1');
+    assert.equal(parsed.operationLocalName, 'notificaScarto');
+    assert.equal(parsed.operationNamespace, TRANSMISSION_TYPES_NS);
+  }
+});
+
+test('SOAP parser recognizes SOAP 1.2 namespace', () => {
+  const parsed = parseSoapEnvelope('<S:Envelope xmlns:S="http://www.w3.org/2003/05/soap-envelope"><S:Body><types:fileSdIConMetadati xmlns:types="http://www.fatturapa.gov.it/sdi/ws/ricezione/v1.0/types"><IdentificativoSdI>123</IdentificativoSdI><NomeFile>IT03365990591_00007.xml</NomeFile><File>PHg+eTwveD4=</File><NomeFileMetadati>IT03365990591_00007_MT_001.xml</NomeFileMetadati><Metadati>PG0+PC9tPg==</Metadati></types:fileSdIConMetadati></S:Body></S:Envelope>');
+  assert.equal(parsed.soapVersion, '1.2');
+  assert.equal(parsed.operationLocalName, 'fileSdIConMetadati');
+  assert.equal(parsed.operationNamespace, RECEPTION_TYPES_NS);
+});
+
+test('SOAPAction is normalized with and without quotes', () => {
+  assert.equal(normalizeSoapAction('"http://www.fatturapa.it/TrasmissioneFatture/NotificaScarto"'), 'http://www.fatturapa.it/TrasmissioneFatture/NotificaScarto');
+  assert.equal(normalizeSoapAction('http://www.fatturapa.it/TrasmissioneFatture/NotificaScarto'), 'http://www.fatturapa.it/TrasmissioneFatture/NotificaScarto');
+  assert.equal(normalizeSoapAction(undefined), '');
+});
+
+test('operation resolver maps transmission and reception operations', () => {
+  assert.equal(identifySdiOperation('RicevutaConsegna', TRANSMISSION_TYPES_NS).responseKind, 'empty_200');
+  assert.equal(identifySdiOperation('notificaMancataConsegna', TRANSMISSION_TYPES_NS).responseKind, 'empty_200');
+  assert.equal(identifySdiOperation('NotificaScarto', TRANSMISSION_TYPES_NS).kind, 'REJECTED');
+  assert.equal(identifySdiOperation('notificaEsito', TRANSMISSION_TYPES_NS).kind, 'CUSTOMER_OUTCOME');
+  assert.equal(identifySdiOperation('notificaDecorrenzaTermini', TRANSMISSION_TYPES_NS).kind, 'DEADLINE_EXPIRED');
+  assert.equal(identifySdiOperation('attestazioneTrasmissioneFattura', TRANSMISSION_TYPES_NS).kind, 'TRANSMISSION_ATTESTATION');
+  assert.equal(identifySdiOperation('fileSdIConMetadati', RECEPTION_TYPES_NS).responseKind, 'ricevi_fatture_er01');
+});
+
+test('payload extractor decodes base64 with new lines', () => {
+  const encoded = Buffer.from('<NotificaScarto>ok</NotificaScarto>').toString('base64').replace(/(.{8})/g, '$1\n');
+  const parsed = parseSoapEnvelope(`<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"><soapenv:Body><types:notificaScarto xmlns:types="${TRANSMISSION_TYPES_NS}"><IdentificativoSdI>32477506</IdentificativoSdI><NomeFile>IT03365990591_00007.xml</NomeFile><File>${encoded}</File></types:notificaScarto></soapenv:Body></soapenv:Envelope>`);
+  const payload = extractSdiPayload(parsed.operationElement);
+  const decoded = decodeSdiBase64File(payload.file, payload.nomeFile);
+  assert.equal(payload.identificativoSdI, '32477506');
+  assert.equal(payload.nomeFile, 'IT03365990591_00007.xml');
+  assert.equal(decoded.buffer.toString('utf8'), '<NotificaScarto>ok</NotificaScarto>');
+  assert.equal(decoded.contentType, 'xml');
+});
+
+test('base64 decoder identifies p7m and zip payloads', () => {
+  assert.equal(decodeSdiBase64File(Buffer.from([0x30, 0x82, 0x01, 0x02]).toString('base64'), 'file.xml.p7m').contentType, 'p7m');
+  assert.equal(decodeSdiBase64File(Buffer.from([0x50, 0x4b, 0x03, 0x04]).toString('base64'), 'file.zip').contentType, 'zip');
+  assert.throws(() => decodeSdiBase64File('', 'empty.xml'), /Campo File SDI vuoto/);
+  assert.throws(() => decodeSdiBase64File('@@@', 'bad.xml'), /base64 valido/);
+});
+
+test('real regression fixture is not parsed as Envelope operation', () => {
+  const decodedNotification = `<?xml version="1.0" encoding="UTF-8"?>
+<NotificaScarto xmlns="http://ivaservizi.agenziaentrate.gov.it/docs/xsd/fatture/v1.2">
+  <IdentificativoSdI>32477506</IdentificativoSdI>
+  <NomeFile>IT03365990591_00007.xml</NomeFile>
+  <ListaErrori><Errore><Codice>00404</Codice><Descrizione>File duplicato</Descrizione></Errore></ListaErrori>
+</NotificaScarto>`;
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <types:notificaScarto xmlns:types="${TRANSMISSION_TYPES_NS}">
+      <IdentificativoSdI>32477506</IdentificativoSdI>
+      <NomeFile>IT03365990591_00007.xml</NomeFile>
+      <File>${Buffer.from(decodedNotification).toString('base64')}</File>
+    </types:notificaScarto>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+  const req = {
+    body: Buffer.from(xml),
+    headers: {
+      'content-type': 'text/xml',
+      'user-agent': 'IBM WebServices/1.0',
+      soapaction: '"http://www.fatturapa.it/TrasmissioneFatture/NotificaScarto"'
+    },
+    ip: '127.0.0.1',
+    socket: { remoteAddress: '127.0.0.1' }
+  };
+  const result = processInboundSdiRequest(req);
+  assert.equal(result.isSoap, true);
+  assert.equal(result.soapVersion, '1.1');
+  assert.equal(result.operationName, 'notificaScarto');
+  assert.equal(result.payloadRootElement, 'notificaScarto');
+  assert.notEqual(result.operationName, 'Envelope');
+  assert.equal(result.responseKind, 'empty_200');
+  assert.equal(result.kind, 'notification-unmatched');
+  assert.equal(fs.existsSync(path.join(process.cwd(), result.storage.envelopePath.replace(/^\//, '').replace(/\//g, path.sep))), true);
+  assert.equal(fs.existsSync(path.join(process.cwd(), result.storage.decodedPath.replace(/^\//, '').replace(/\//g, path.sep))), true);
 });

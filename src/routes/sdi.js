@@ -8,6 +8,7 @@ const { writeAudit } = require('../services/audit');
 const { writeSystemLog } = require('../services/system-log');
 const { generateOutboundXmlForInvoice } = require('../services/sdi-fatturapa');
 const { transmitInvoiceToSdiTest } = require('../services/sdi-transmission');
+const { buildRiceviFattureResponse, processInboundSdiRequest } = require('../services/sdi-soap-inbound');
 const { receiveSdiNotificationXml } = require('../services/sdi-inbound');
 const { importInvoiceXml } = require('../services/fattura-import');
 const { XMLParser } = require('fast-xml-parser');
@@ -15,14 +16,14 @@ const { XMLParser } = require('fast-xml-parser');
 const ROOT = path.resolve(__dirname, '../../');
 const INBOUND_DIR = path.join(ROOT, 'uploads', 'sdi-inbound');
 
-const xmlTextParser = express.text({
-  type: ['application/xml', 'text/xml', 'application/soap+xml', 'text/plain'],
-  limit: '5mb'
+const xmlTextParser = express.raw({
+  type: ['application/xml', 'text/xml', 'application/soap+xml', 'multipart/related', 'text/plain'],
+  limit: '30mb'
 });
 
 router.get('/ws/inbound', (req, res) => {
   if ('wsdl' in (req.query || {})) {
-    const wsdl = buildInboundWsdl(req);
+    const wsdl = readInboundWsdl(req);
     res.type('application/wsdl+xml').send(wsdl);
     return;
   }
@@ -38,160 +39,31 @@ router.get('/ws/inbound', (req, res) => {
 
 router.post('/ws/inbound', xmlTextParser, (req, res) => {
   try {
-    const rawXml = String(req.body || '').trim();
-    if (!rawXml) return res.status(400).json({ error: 'Body XML mancante' });
-    const envelope = unwrapInboundEnvelope(rawXml);
-    const wrappedPayload = extractWrappedInboundPayload(envelope.payloadXml);
-    const payloadXml = wrappedPayload.payloadXml;
-    const envelopeRootElement = detectRootElement(rawXml);
-    const rootElement = detectRootElement(payloadXml);
-    const rawStorage = persistInboundXml(rawXml, req.headers['x-original-filename'] ? String(req.headers['x-original-filename']) : 'sdi-envelope');
-    writeSystemLog({
-      livello: 'info',
-      origine: 'sdi.ws.inbound',
-      route: '/api/sdi/ws/inbound',
-      metodo: 'POST',
-      messaggio: 'Richiesta SDI ricevuta',
-      dettagli: {
-        contentType: String(req.headers['content-type'] || ''),
-        userAgent: String(req.headers['user-agent'] || ''),
-        soapVersion: detectSoapVersion(req),
-        envelopeRootElement,
-        payloadRootElement: rootElement,
-        operationName: wrappedPayload.operationName,
-        isSoap: envelope.isSoap,
-        requestPath: rawStorage.relativePath
-      }
-    });
-    let result;
-    if (isInvoiceRoot(rootElement)) {
-      const inboundFileName = wrappedPayload.fileName
-        || (req.headers['x-original-filename'] ? String(req.headers['x-original-filename']) : null)
-        || 'fattura-ricevuta';
-      const storage = persistInboundXml(payloadXml, inboundFileName);
-      let metadataStorage = null;
-      if (wrappedPayload.metadataXml) {
-        metadataStorage = persistInboundXml(wrappedPayload.metadataXml, wrappedPayload.metadataFileName || `${inboundFileName}-metadati`);
-      }
-      try {
-        const imported = importInvoiceXml(payloadXml, {
-          xmlPath: storage.relativePath,
-          source: 'sdi-ws'
-        });
-        result = {
-          kind: 'invoice',
-          operationName: wrappedPayload.operationName,
-          importedId: imported.duplicate ? imported.existingId : imported.id,
-          duplicate: imported.duplicate,
-          storage,
-          metadataStorage,
-          parsed: imported.parsed,
-          rootElement,
-          metadataXml: wrappedPayload.metadataXml || null
-        };
-        writeSystemLog({
-          livello: 'info',
-          origine: 'sdi.ws.inbound',
-          route: '/api/sdi/ws/inbound',
-          metodo: 'POST',
-          messaggio: imported.duplicate
-            ? `Fattura passiva SdI gia presente: ${imported.existingId}`
-            : `Fattura passiva SdI importata: ${imported.id}`,
-          dettagli: {
-            rootElement,
-            fatturaId: result.importedId,
-            duplicate: imported.duplicate,
-            xmlPath: storage.relativePath,
-            metadataPath: metadataStorage?.relativePath || null,
-            numero: imported.parsed?.numero || null,
-            fornitore: imported.parsed?.fornitore_nome || null
-          }
-        });
-      } catch (importError) {
-        result = {
-          kind: 'invoice-stored',
-          operationName: wrappedPayload.operationName,
-          accepted: true,
-          storage,
-          metadataStorage,
-          rootElement
-        };
-        writeSystemLog({
-          livello: 'error',
-          origine: 'sdi.ws.inbound',
-          route: '/api/sdi/ws/inbound',
-          metodo: 'POST',
-          messaggio: `Fattura SdI salvata ma non importata: ${importError.message}`,
-          stack: importError.stack || null,
-          dettagli: {
-            rootElement,
-            xmlPath: storage.relativePath,
-            metadataPath: metadataStorage?.relativePath || null
-          }
-        });
-      }
-    } else {
-      try {
-        const notification = receiveSdiNotificationXml(payloadXml, {
-          originalFilename: req.headers['x-original-filename'] ? String(req.headers['x-original-filename']) : null
-        });
-        result = {
-          kind: 'notification',
-          operationName: wrappedPayload.operationName,
-          flowId: notification.flowId,
-          fatturaId: notification.fatturaId,
-          tipoNotifica: notification.parsed.tipoNotifica,
-          statoNormalizzato: notification.statoNormalizzato,
-          rootElement
-        };
-        writeSystemLog({
-          livello: 'info',
-          origine: 'sdi.ws.inbound',
-          route: '/api/sdi/ws/inbound',
-          metodo: 'POST',
-          messaggio: `Notifica SDI ricevuta: ${notification.parsed.tipoNotifica}`,
-          dettagli: {
-            flowId: notification.flowId,
-            fatturaId: notification.fatturaId,
-            stato: notification.statoNormalizzato,
-            identificativoSdi: notification.parsed.identificativoSdi,
-            nomeFileFattura: notification.parsed.nomeFileFattura
-          }
-        });
-      } catch (notificationError) {
-        if (!/Nessun flusso SDI trovato/i.test(notificationError.message)) throw notificationError;
-        const storage = persistInboundXml(payloadXml, req.headers['x-original-filename'] ? String(req.headers['x-original-filename']) : 'notifica-sdi');
-        result = {
-          kind: 'notification-unmatched',
-          operationName: wrappedPayload.operationName,
-          accepted: true,
-          storage,
-          rootElement
-        };
-        writeSystemLog({
-          livello: 'warning',
-          origine: 'sdi.ws.inbound',
-          route: '/api/sdi/ws/inbound',
-          metodo: 'POST',
-          messaggio: notificationError.message,
-          dettagli: {
-            rootElement,
-            xmlPath: storage.relativePath
-          }
-        });
-      }
+    const result = processInboundSdiRequest(req);
+    if (result.responseKind === 'ricevi_fatture_er01') {
+      res
+        .set('Content-Type', 'text/xml; charset="utf-8"')
+        .status(200)
+        .send(buildRiceviFattureResponse(result.soapVersion));
+      return;
     }
-    respondInboundSuccess(req, res, result);
+    res.status(200).end();
   } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
     writeSystemLog({
       livello: 'error',
       origine: 'sdi.ws.inbound',
       route: '/api/sdi/ws/inbound',
       metodo: 'POST',
-      messaggio: error.message,
-      stack: error.stack || null
+      messaggio: 'sdi.soap.parse_failed',
+      stack: err.stack || null,
+      dettagli: {
+        errorName: err.name,
+        errorMessage: err.message,
+        cause: err.cause ? String(err.cause.message || err.cause) : null
+      }
     });
-    respondInboundError(req, res, error);
+    res.status(400).end();
   }
 });
 
@@ -329,6 +201,16 @@ function getPublicBaseUrl(req) {
   const proto = req.headers['x-forwarded-proto'] ? String(req.headers['x-forwarded-proto']).split(',')[0].trim() : req.protocol;
   const host = req.headers['x-forwarded-host'] || req.get('host');
   return `${proto}://${host}`;
+}
+
+function readInboundWsdl(req) {
+  const requested = String(req.query.wsdl || 'ricezione').trim().toLowerCase();
+  const filename = ['trasmissione', 'notifiche', 'notifications'].includes(requested)
+    ? path.join(ROOT, 'resources', 'sdi', 'wsdl', 'TrasmissioneFatture_v1.1.wsdl')
+    : path.join(ROOT, 'resources', 'sdi', 'wsdl', 'RicezioneFatture_v1.0.wsdl');
+  const location = `${getPublicBaseUrl(req)}/api/sdi/ws/inbound`;
+  return fs.readFileSync(filename, 'utf8')
+    .replace(/<soapbind:address\s+location="[^"]*"\s*\/>/i, `<soapbind:address location="${xmlEscape(location)}" />`);
 }
 
 function buildInboundWsdl(req) {

@@ -29,11 +29,11 @@ async function transmitGeneratedFlow(flowId, options = {}) {
 
   const xmlAbsolutePath = resolveUploadPath(flow.xml_path);
   if (!fs.existsSync(xmlAbsolutePath)) throw new Error(`XML SDI non trovato: ${flow.xml_path}`);
-  const xml = fs.readFileSync(xmlAbsolutePath, 'utf8');
+  const xmlBuffer = fs.readFileSync(xmlAbsolutePath);
   const mode = String(options.mode || flow.modalita || 'test').trim();
   const endpoint = getTransmissionEndpoint(mode);
-  const soapBody = buildRiceviFileSoapEnvelope(flow.nome_file, xml);
-  const response = await postSoapToSdi(endpoint, soapBody, mode);
+  const soapMessage = buildRiceviFileMtomMessage(flow.nome_file, xmlBuffer);
+  const response = await postSoapToSdi(endpoint, soapMessage, mode);
   const responseStorage = persistTransmissionResponse(response.body, flow.nome_file || `flow-${flow.id}`);
   const parsed = parseRiceviFileResponse(response.body);
   const success = response.statusCode >= 200 && response.statusCode < 300 && !parsed.fault;
@@ -85,10 +85,10 @@ function getTransmissionEndpoint(mode = 'test') {
   return new URL('/ricevi_file', configured.endsWith('/') ? configured : `${configured}/`).toString();
 }
 
-function postSoapToSdi(endpoint, soapBody, mode = 'test') {
+function postSoapToSdi(endpoint, soapMessage, mode = 'test') {
   const target = new URL(endpoint);
   const tls = loadTlsMaterial(mode);
-  const body = Buffer.from(soapBody, 'utf8');
+  const body = soapMessage.body;
   const requestOptions = {
     protocol: target.protocol,
     hostname: target.hostname,
@@ -102,7 +102,7 @@ function postSoapToSdi(endpoint, soapBody, mode = 'test') {
     rejectUnauthorized: true,
     headers: {
       Host: target.host,
-      'Content-Type': 'text/xml;charset="utf-8"',
+      'Content-Type': soapMessage.contentType,
       Accept: 'text/xml',
       'Cache-Control': 'no-cache',
       Pragma: 'no-cache',
@@ -172,6 +172,50 @@ function buildRiceviFileSoapEnvelope(filename, xml) {
     </typ:fileSdIAccoglienza>
   </soapenv:Body>
 </soapenv:Envelope>`;
+}
+
+function buildRiceviFileMtomMessage(filename, fileBuffer) {
+  const boundary = `----=_HorygonSdiMtom_${crypto.randomUUID().replace(/-/g, '')}`;
+  const rootContentId = `<root.${crypto.randomUUID()}@horygon.it>`;
+  const fileContentId = `<file.${crypto.randomUUID()}@horygon.it>`;
+  const href = `cid:${fileContentId.slice(1, -1)}`;
+  const envelope = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ns1="http://www.fatturapa.gov.it/sdi/ws/trasmissione/v1.0" xmlns:typ="http://www.fatturapa.gov.it/sdi/ws/trasmissione/v1.0/types" xmlns:xop="http://www.w3.org/2004/08/xop/include" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <typ:fileSdIAccoglienza>
+      <NomeFile>${xmlEscape(filename)}</NomeFile>
+      <File><xop:Include href="${href}"/></File>
+    </typ:fileSdIAccoglienza>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+
+  const rootPart = Buffer.from([
+    `--${boundary}`,
+    'Content-Type: application/xop+xml; charset=UTF-8; type="text/xml"',
+    'Content-Transfer-Encoding: binary',
+    `Content-ID: ${rootContentId}`,
+    '',
+    envelope,
+    ''
+  ].join('\r\n'), 'utf8');
+  const filePartHeaders = Buffer.from([
+    `--${boundary}`,
+    'Content-Type: application/octet-stream',
+    'Content-Transfer-Encoding: binary',
+    `Content-ID: ${fileContentId}`,
+    ''
+  ].join('\r\n'), 'utf8');
+  const closing = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
+
+  return {
+    body: Buffer.concat([rootPart, filePartHeaders, Buffer.from(fileBuffer), closing]),
+    contentType: `multipart/related; type="application/xop+xml"; start="${rootContentId}"; start-info="text/xml"; boundary="${boundary}"`,
+    boundary,
+    rootContentId,
+    fileContentId,
+    envelope
+  };
 }
 
 function parseRiceviFileResponse(xml) {
@@ -283,6 +327,7 @@ function xmlEscape(value) {
 
 module.exports = {
   buildRiceviFileSoapEnvelope,
+  buildRiceviFileMtomMessage,
   getTransmissionEndpoint,
   parseRiceviFileResponse,
   transmitGeneratedFlow,
