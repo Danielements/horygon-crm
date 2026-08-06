@@ -35,18 +35,19 @@ Lo stesso URL riceve piu contratti SOAP, distinguendo namespace, SOAPAction e op
 Componenti gia implementati:
 
 - Client `SdIRiceviFile`: invia fatture a SdI TEST via SOAP 1.1 MTOM/XOP.
+- Client `SdIRiceviNotifica`: invia `NotificaEsitoCommittente` a SdI TEST via SOAP 1.1.
 - Server `RicezioneFatture`: riceve fatture passive da SdI, decodifica file e metadati, importa la fattura e risponde `ER01`.
 - Server `TrasmissioneFatture`: riceve notifiche lato trasmittente, salva XML e collega il flusso.
 - Registro schemi FatturaPA locali: FPA12, FPR12, FSM10.
 - Validazione XSD locale prima dell'invio.
+- Persistenza dei metadati SdI delle fatture passive ricevute: `IdentificativoSdI`, nome file fattura, nome file metadati, path XML e hash.
 - Log tecnico su `System Log` e audit utente.
 
 Ancora da completare:
 
-- Client `SdIRiceviNotifica` per inviare `NotificaEsitoCommittente` allo SdI.
-- Gestione completa ES00/ES01/ES02 per notifica esito committente.
 - Test automatici MTOM inbound reali per tutte le operazioni.
-- Flussi applicativi definitivi per tutti i test PA.
+- Verifica reale sul portale degli step PA con invio `EC01` / `EC02` da fattura passiva FPA12 ricevuta.
+- Decorrenza termini e attestazione, che dipendono dai tempi/stati del simulatore SdI.
 
 ## Ambiente server
 
@@ -309,7 +310,14 @@ In `Fatture attive`:
 - `Genera XML TEST`: genera solo XML e crea un flusso locale `sdi.test-send`.
 - `Invia a SdI TEST`: genera XML e lo trasmette realmente a SdI TEST, creando log `sdi.test-transmit`.
 
+In `Fatture passive`:
+
+- `Accetta SdI TEST`: genera `NotificaEsitoCommittente` con `EC01` e la invia a `SdIRiceviNotifica` in ambiente TEST.
+- `Rifiuta SdI TEST`: genera `NotificaEsitoCommittente` con `EC02` e la invia a `SdIRiceviNotifica` in ambiente TEST.
+
 Nota: i log `sdi.test-send` non dimostrano invio a SdI. Per far avanzare il portale interoperabilita servono invii `sdi.test-transmit` e successive callback `sdi.ws.inbound`.
+
+Nota: l'esito committente e previsto per fatture PA `FPA12` ricevute dallo SdI. Il CRM usa l'`IdentificativoSdI` ricevuto nel wrapper `RicezioneFatture`, non il `ProgressivoInvio` interno alla fattura.
 
 ## Tabelle principali
 
@@ -388,16 +396,18 @@ Operazioni:
 
 Attenzione: `TrasmissioneFatture/NotificaDecorrenzaTermini` e `RicezioneFatture/NotificaDecorrenzaTermini` hanno lo stesso localName ma sono operazioni diverse, distinte da namespace e SOAPAction.
 
-## Requisiti allegato da completare
+## Requisiti allegato
 
-Dal memo operativo del 2026-08-06 restano vincolanti:
+Dal memo operativo del 2026-08-06 risultano implementati:
 
-- Implementare client separato `SdIRiceviNotifica/NotificaEsito` per `NotificaEsitoCommittente`.
 - Gestire risposta `ES01` come accettata.
 - Gestire risposta `ES00` con `ScartoEsito` decodificato e codici `EN00`/`EN01`.
 - Gestire risposta `ES02` come retryable.
 - Aggiungere supporto e test MTOM inbound dove il nodo `File` contiene `xop:Include`.
 - Salvare separatamente stato lato trasmittente e stato lato ricevente.
+
+Restano da completare/verificare:
+
 - Aggiungere fixture per tutte le operazioni one-way.
 - Produrre tabella finale dei test con fattura, file, IdentificativoSdI, codice destinatario, operazione attesa, endpoint, data invio, data callback, HTTP restituito ed esito portale.
 

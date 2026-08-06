@@ -3448,6 +3448,7 @@ function renderFattureRows(targetId, rows) {
       <button class="btn btn-outline btn-sm" onclick="previewFattura(${f.id})" title="Anteprima fattura">&#128065;</button>
       ${f.xml_path ? `<button class="btn btn-outline btn-sm" onclick="openFatturaXml(${f.id})" title="Apri XML">XML</button>` : ''}
       ${f.tipo === 'emessa' ? `<button class="btn btn-outline btn-sm" onclick="testSendFatturaSdi(${f.id})">Genera XML TEST</button><button class="btn btn-accent btn-sm" onclick="testTransmitFatturaSdi(${f.id})">Invia a SdI TEST</button>` : ''}
+      ${f.tipo === 'ricevuta' ? `<button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC01')">Accetta SdI TEST</button><button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC02')">Rifiuta SdI TEST</button>` : ''}
     </div></td></tr>`).join('');
 }
 
@@ -3496,6 +3497,22 @@ async function testTransmitFatturaSdi(id) {
     }
   } catch (e) {
     toast(e.message || 'Errore invio a SdI TEST', 'error');
+  }
+}
+
+async function testEsitoCommittenteSdi(id, esito) {
+  const label = esito === 'EC02' ? 'rifiutare' : 'accettare';
+  if (!confirm(`Inviare davvero a SdI in ambiente TEST l'esito per ${label} questa fattura ricevuta?`)) return;
+  try {
+    const descrizione = esito === 'EC02' ? 'Rifiuto di test da CRM Horygon' : '';
+    const result = await api('POST', `/sdi/fatture/${id}/esito-committente-test`, { esito, descrizione });
+    toast(`Esito committente ${esito} inviato a SdI TEST: ${result?.esitoRisposta || 'ok'}`, 'success');
+    const active = document.querySelector('.section.active')?.id?.replace('section-', '') || 'fatture-passive';
+    if (['fatture-attive', 'fatture-passive', 'fatture-fuori-campo'].includes(active)) {
+      loadFattureBySection(active);
+    }
+  } catch (e) {
+    toast(e.message || 'Errore invio esito committente SdI TEST', 'error');
   }
 }
 

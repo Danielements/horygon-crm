@@ -11,6 +11,14 @@ const { getSchemaRegistryEntry, listSchemaRegistry, syncSchemaRegistry } = requi
 const { buildFilename } = require('../src/services/sdi-fatturapa');
 const { buildRiceviFileMtomMessage, buildRiceviFileSoapEnvelope, extractXmlFromHttpResponse, parseRiceviFileResponse } = require('../src/services/sdi-transmission');
 const {
+  MESSAGGI_NS,
+  RICEZIONE_TYPES_NS,
+  buildEsitoCommittenteFilename,
+  buildNotificaEsitoCommittenteXml,
+  buildSdIRiceviNotificaSoapEnvelope,
+  parseSdIRiceviNotificaResponse
+} = require('../src/services/sdi-esito-committente');
+const {
   RECEPTION_TYPES_NS,
   TRANSMISSION_TYPES_NS,
   decodeSdiBase64File,
@@ -319,6 +327,61 @@ test('transmission parser extracts XML from multipart SdI response', () => {
   });
   assert.match(extracted, /rispostaSdIRiceviFile/);
   assert.equal(parseRiceviFileResponse(extracted).identificativoSdi, '32480001');
+});
+
+test('customer outcome XML follows NotificaEsitoCommittente contract', () => {
+  const xml = buildNotificaEsitoCommittenteXml({
+    identificativoSdi: '32477506',
+    numeroFattura: 'UMZGLCP-00008-1',
+    annoFattura: '2026',
+    posizioneFattura: 1,
+    esito: 'EC01',
+    messageIdCommittente: '412209483'
+  });
+  assert.match(xml, new RegExp(`<types:NotificaEsitoCommittente[^>]+${MESSAGGI_NS}`));
+  assert.match(xml, /<IdentificativoSdI>32477506<\/IdentificativoSdI>/);
+  assert.match(xml, /<NumeroFattura>UMZGLCP-00008-1<\/NumeroFattura>/);
+  assert.match(xml, /<AnnoFattura>2026<\/AnnoFattura>/);
+  assert.match(xml, /<PosizioneFattura>1<\/PosizioneFattura>/);
+  assert.match(xml, /<Esito>EC01<\/Esito>/);
+});
+
+test('customer outcome filename appends EC suffix and respects SdI limits', () => {
+  const filename = buildEsitoCommittenteFilename('IT03365990591_00008.xml', 1);
+  assert.equal(filename, 'IT03365990591_00008_EC_001.xml');
+  assert.match(filename, /^[A-Za-z0-9_.]{9,50}$/);
+  assert.equal(filename.length <= 50, true);
+  assert.throws(() => buildEsitoCommittenteFilename('IT03365990591_123456789012345678901234567890.xml', 1), /Nome file esito committente non valido/);
+});
+
+test('customer outcome SOAP envelope uses SdIRiceviNotifica fileSdI wrapper', () => {
+  const outcomeXml = '<types:NotificaEsitoCommittente xmlns:types="http://www.fatturapa.gov.it/sdi/messaggi/v1.0" versione="1.0"><IdentificativoSdI>32477506</IdentificativoSdI><Esito>EC01</Esito></types:NotificaEsitoCommittente>';
+  const envelope = buildSdIRiceviNotificaSoapEnvelope({
+    identificativoSdi: '32477506',
+    filename: 'IT03365990591_00008_EC_001.xml',
+    outcomeXml
+  });
+  const text = envelope.body.toString('utf8');
+  assert.match(text, new RegExp(`xmlns:typ="${RICEZIONE_TYPES_NS}"`));
+  assert.match(text, /<typ:fileSdI>/);
+  assert.match(text, /<IdentificativoSdI>32477506<\/IdentificativoSdI>/);
+  assert.match(text, /<NomeFile>IT03365990591_00008_EC_001\.xml<\/NomeFile>/);
+  assert.equal(text.includes(Buffer.from(outcomeXml).toString('base64')), true);
+});
+
+test('customer outcome response parser handles ES01 ES02 and ES00 scarto payload', () => {
+  const ok = parseSdIRiceviNotificaResponse('<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><types:rispostaSdINotificaEsito xmlns:types="http://www.fatturapa.gov.it/sdi/ws/ricezione/v1.0/types"><Esito>ES01</Esito></types:rispostaSdINotificaEsito></soap:Body></soap:Envelope>');
+  assert.equal(ok.accepted, true);
+  assert.equal(ok.esito, 'ES01');
+
+  const retry = parseSdIRiceviNotificaResponse('<rispostaSdINotificaEsito><Esito>ES02</Esito></rispostaSdINotificaEsito>');
+  assert.equal(retry.retryable, true);
+
+  const scartoXml = '<ScartoEsitoCommittente><IdentificativoSdI>32477506</IdentificativoSdI><ListaErrori><Errore><Codice>EN01</Codice><Descrizione>Esito non ammissibile</Descrizione></Errore></ListaErrori></ScartoEsitoCommittente>';
+  const rejected = parseSdIRiceviNotificaResponse(`<rispostaSdINotificaEsito><Esito>ES00</Esito><ScartoEsito><NomeFile>IT03365990591_00008_EC_001.xml</NomeFile><File>${Buffer.from(scartoXml).toString('base64')}</File></ScartoEsito></rispostaSdINotificaEsito>`);
+  assert.equal(rejected.rejected, true);
+  assert.equal(rejected.scarto.codice, 'EN01');
+  assert.equal(rejected.scarto.descrizione, 'Esito non ammissibile');
 });
 
 test('SOAP parser recognizes SOAP 1.1 prefixes and default namespace', () => {

@@ -88,10 +88,11 @@ function getTransmissionEndpoint(mode = 'test') {
   return new URL('/ricevi_file', configured.endsWith('/') ? configured : `${configured}/`).toString();
 }
 
-function postSoapToSdi(endpoint, soapMessage, mode = 'test') {
+function postSoapToSdi(endpoint, soapMessage, mode = 'test', options = {}) {
   const target = new URL(endpoint);
   const tls = loadTlsMaterial(mode);
   const body = soapMessage.body;
+  const soapAction = options.soapAction || SOAP_ACTION_RICEVI_FILE;
   const requestOptions = {
     protocol: target.protocol,
     hostname: target.hostname,
@@ -109,7 +110,7 @@ function postSoapToSdi(endpoint, soapMessage, mode = 'test') {
       Accept: 'text/xml',
       'Cache-Control': 'no-cache',
       Pragma: 'no-cache',
-      SOAPAction: `"${SOAP_ACTION_RICEVI_FILE}"`,
+      SOAPAction: `"${soapAction}"`,
       'Content-Length': body.length
     },
     timeout: 30000
@@ -385,6 +386,8 @@ module.exports = {
   extractXmlFromHttpResponse,
   getTransmissionEndpoint,
   parseRiceviFileResponse,
+  persistTransmissionResponse,
+  postSoapToSdi,
   transmitGeneratedFlow,
   transmitInvoiceToSdiTest
 };

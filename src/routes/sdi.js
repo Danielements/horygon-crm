@@ -8,6 +8,7 @@ const { writeAudit } = require('../services/audit');
 const { writeSystemLog } = require('../services/system-log');
 const { generateOutboundXmlForInvoice } = require('../services/sdi-fatturapa');
 const { transmitInvoiceToSdiTest } = require('../services/sdi-transmission');
+const { sendEsitoCommittenteToSdiTest } = require('../services/sdi-esito-committente');
 const { buildRiceviFattureResponse, processInboundSdiRequest } = require('../services/sdi-soap-inbound');
 const { receiveSdiNotificationXml } = require('../services/sdi-inbound');
 const { importInvoiceXml } = require('../services/fattura-import');
@@ -186,6 +187,51 @@ router.post('/fatture/:id/test-transmit', requirePermesso('fatture', 'edit'), as
       livello: 'error',
       origine: 'sdi.test-transmit',
       route: `/api/sdi/fatture/${req.params.id}/test-transmit`,
+      metodo: 'POST',
+      utente_id: req.user.id,
+      messaggio: error.message,
+      stack: error.stack || null
+    });
+    res.status(400).json({ error: error.message });
+  }
+});
+
+router.post('/fatture/:id/esito-committente-test', requirePermesso('fatture', 'edit'), async (req, res) => {
+  try {
+    const result = await sendEsitoCommittenteToSdiTest(req.params.id, {
+      esito: req.body?.esito || 'EC01',
+      descrizione: req.body?.descrizione || '',
+      posizioneFattura: req.body?.posizioneFattura || 1
+    });
+    writeAudit({
+      utente_id: req.user.id,
+      azione: 'sdi.fattura.esito_committente_test',
+      entita_tipo: 'fattura',
+      entita_id: Number(req.params.id),
+      dettagli: {
+        flowId: result.flowId,
+        filename: result.filename,
+        endpoint: result.endpoint,
+        esitoRisposta: result.esitoRisposta
+      }
+    });
+    writeSystemLog({
+      livello: result.success ? 'info' : 'error',
+      origine: 'sdi.esito-committente',
+      route: `/api/sdi/fatture/${req.params.id}/esito-committente-test`,
+      metodo: 'POST',
+      utente_id: req.user.id,
+      messaggio: result.success
+        ? `Esito committente inviato a SDI TEST: ${result.esitoRisposta}`
+        : `Esito committente SDI TEST non accettato: ${result.esitoRisposta || result.statusCode}`,
+      dettagli: result
+    });
+    res.status(result.success ? 200 : 502).json({ ok: result.success, ...result });
+  } catch (error) {
+    writeSystemLog({
+      livello: 'error',
+      origine: 'sdi.esito-committente',
+      route: `/api/sdi/fatture/${req.params.id}/esito-committente-test`,
       metodo: 'POST',
       utente_id: req.user.id,
       messaggio: error.message,

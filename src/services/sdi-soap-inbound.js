@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { XMLParser } = require('fast-xml-parser');
+const db = require('../db/database');
 const { writeSystemLog } = require('./system-log');
 const { receiveSdiNotificationXml } = require('./sdi-inbound');
 const { importInvoiceXml } = require('./fattura-import');
@@ -197,6 +198,13 @@ function processIncomingInvoice({ result, decodedXml, payload, storage }) {
     result.importedId = imported.duplicate ? imported.existingId : imported.id;
     result.duplicate = imported.duplicate;
     result.processingStatus = imported.duplicate ? 'duplicate' : 'imported';
+    persistIncomingInvoiceSdiMetadata({
+      fatturaId: result.importedId,
+      imported,
+      result,
+      payload,
+      storage
+    });
     updateManifest(storage.manifestPath, {
       processingStatus: result.processingStatus,
       invoiceId: result.importedId
@@ -242,6 +250,66 @@ function processIncomingInvoice({ result, decodedXml, payload, storage }) {
       }
     });
   }
+}
+
+function persistIncomingInvoiceSdiMetadata({ fatturaId, imported, result, payload, storage }) {
+  if (!fatturaId) return;
+  const current = db.prepare('SELECT documento_meta FROM fatture WHERE id = ?').get(fatturaId);
+  const documentoMeta = {
+    ...parseJsonObject(current?.documento_meta),
+    ...(imported.parsed?.documento_meta || {}),
+    source: 'sdi-ws',
+    identificativo_sdi: payload.identificativoSdI || result.identificativoSdI || null,
+    nome_file_sdi: payload.nomeFile || null,
+    nome_file_metadati: payload.nomeFileMetadati || null,
+    metadata_path: storage.metadataPath || null,
+    envelope_path: storage.envelopePath || null,
+    request_id: result.requestId,
+    operation_name: result.operationName,
+    operation_namespace: result.operationNamespace,
+    decoded_file_sha256: result.decodedFileSha256
+  };
+  db.prepare(`
+    UPDATE fatture
+    SET sdi_id = COALESCE(?, sdi_id),
+        documento_meta = ?
+    WHERE id = ?
+  `).run(
+    payload.identificativoSdI || null,
+    JSON.stringify(documentoMeta),
+    fatturaId
+  );
+  const existingFlow = db.prepare(`
+    SELECT id
+    FROM fatture_sdi_flussi
+    WHERE fattura_id = ?
+      AND direzione = 'inbound'
+      AND (nome_file = ? OR hash_file = ?)
+    LIMIT 1
+  `).get(fatturaId, payload.nomeFile || null, result.decodedFileSha256 || null);
+  if (existingFlow) return;
+  db.prepare(`
+    INSERT INTO fatture_sdi_flussi (
+      fattura_id, direzione, modalita, tipo_messaggio, nome_file, identificativo_sdi, stato,
+      xml_path, response_path, hash_file, payload_meta, ricevuto_il, ultimo_evento_il,
+      sdi_formato, sdi_xml_sha256, sdi_xml_immutabile_path
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'),datetime('now'),?,?,?)
+  `).run(
+    fatturaId,
+    'inbound',
+    'test',
+    'fattura',
+    payload.nomeFile || null,
+    payload.identificativoSdI || null,
+    imported.duplicate ? 'duplicata_importata' : 'importata',
+    storage.decodedPath || null,
+    storage.metadataPath || null,
+    result.decodedFileSha256 || null,
+    JSON.stringify(documentoMeta),
+    documentoMeta.formato_trasmissione || null,
+    result.decodedFileSha256 || null,
+    storage.decodedPath || null
+  );
 }
 
 function processTransmissionNotification({ result, decodedXml, payload, storage }) {
@@ -653,6 +721,15 @@ function updateManifest(relativePath, patch) {
   if (!fs.existsSync(absolutePath)) return;
   const current = JSON.parse(fs.readFileSync(absolutePath, 'utf8'));
   fs.writeFileSync(absolutePath, JSON.stringify({ ...current, ...patch }, null, 2), 'utf8');
+}
+
+function parseJsonObject(value) {
+  try {
+    const parsed = JSON.parse(String(value || '{}'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 function typedError(name, message, cause = null) {
