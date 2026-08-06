@@ -14,9 +14,11 @@ const {
   RECEPTION_TYPES_NS,
   TRANSMISSION_TYPES_NS,
   decodeSdiBase64File,
+  decodeSdiFile,
   extractSdiPayload,
   identifySdiOperation,
   normalizeSoapAction,
+  parseMultipartRelated,
   parseSoapEnvelope,
   processInboundSdiRequest
 } = require('../src/services/sdi-soap-inbound');
@@ -356,6 +358,9 @@ test('operation resolver maps transmission and reception operations', () => {
   assert.equal(identifySdiOperation('notificaDecorrenzaTermini', TRANSMISSION_TYPES_NS).kind, 'DEADLINE_EXPIRED');
   assert.equal(identifySdiOperation('attestazioneTrasmissioneFattura', TRANSMISSION_TYPES_NS).kind, 'TRANSMISSION_ATTESTATION');
   assert.equal(identifySdiOperation('fileSdIConMetadati', RECEPTION_TYPES_NS).responseKind, 'ricevi_fatture_er01');
+  const ricezioneDecorrenza = identifySdiOperation('notificaDecorrenzaTermini', RECEPTION_TYPES_NS);
+  assert.equal(ricezioneDecorrenza.contractName, 'RicezioneFatture');
+  assert.equal(ricezioneDecorrenza.responseKind, 'empty_200');
 });
 
 test('payload extractor decodes base64 with new lines', () => {
@@ -366,6 +371,44 @@ test('payload extractor decodes base64 with new lines', () => {
   assert.equal(payload.identificativoSdI, '32477506');
   assert.equal(payload.nomeFile, 'IT03365990591_00007.xml');
   assert.equal(decoded.buffer.toString('utf8'), '<NotificaScarto>ok</NotificaScarto>');
+  assert.equal(decoded.contentType, 'xml');
+});
+
+test('payload extractor decodes MTOM xop include attachments', () => {
+  const boundary = 'MIMEBoundary_horygon_test';
+  const fileContentId = 'file-test@horygon.it';
+  const decodedNotification = '<RicevutaConsegna><IdentificativoSdI>32480002</IdentificativoSdI><NomeFile>IT03365990591_00002.xml</NomeFile></RicevutaConsegna>';
+  const envelope = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:types="${TRANSMISSION_TYPES_NS}" xmlns:xop="http://www.w3.org/2004/08/xop/include">
+  <soapenv:Body>
+    <types:ricevutaConsegna>
+      <IdentificativoSdI>32480002</IdentificativoSdI>
+      <NomeFile>IT03365990591_00002_RC_001.xml</NomeFile>
+      <File><xop:Include href="cid:${fileContentId}"/></File>
+    </types:ricevutaConsegna>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+  const body = Buffer.from([
+    `--${boundary}`,
+    'Content-Type: application/xop+xml; charset=UTF-8; type="text/xml"',
+    'Content-ID: <root-test@horygon.it>',
+    '',
+    envelope,
+    `--${boundary}`,
+    'Content-Type: application/octet-stream',
+    `Content-ID: <${fileContentId}>`,
+    '',
+    decodedNotification,
+    `--${boundary}--`,
+    ''
+  ].join('\r\n'), 'utf8');
+  const multipart = parseMultipartRelated(body, `multipart/related; boundary="${boundary}"; type="application/xop+xml"; start="<root-test@horygon.it>"`);
+  const parsed = parseSoapEnvelope(multipart.rootPart.body.toString('utf8'));
+  const payload = extractSdiPayload(parsed.operationElement);
+  const decoded = decodeSdiFile(payload.file, payload.nomeFile, multipart);
+  assert.equal(payload.identificativoSdI, '32480002');
+  assert.equal(payload.file.xopHref, `cid:${fileContentId}`);
+  assert.equal(decoded.buffer.toString('utf8'), decodedNotification);
   assert.equal(decoded.contentType, 'xml');
 });
 

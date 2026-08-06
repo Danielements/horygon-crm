@@ -51,6 +51,10 @@ function processInboundSdiRequest(req) {
   const rawBuffer = getRawRequestBuffer(req);
   const contentType = String(req.headers['content-type'] || '');
   const soapAction = normalizeSoapAction(req.headers.soapaction);
+  const multipart = parseMultipartRelated(rawBuffer, contentType);
+  const isMtom = Boolean(multipart);
+  const envelopeBuffer = multipart?.rootPart?.body || rawBuffer;
+  const envelopeXml = envelopeBuffer.toString('utf8');
 
   writeSystemLog({
     livello: 'info',
@@ -65,13 +69,13 @@ function processInboundSdiRequest(req) {
       contentLength: rawBuffer.length,
       remoteIp: req.ip || req.socket?.remoteAddress || null,
       forwardedFor: String(req.headers['x-forwarded-for'] || ''),
-      soapAction
+      soapAction,
+      isMtom
     }
   });
 
   if (!rawBuffer.length) throw typedError('EmptyRequestBodyError', 'Body XML mancante');
-  const rawXml = rawBuffer.toString('utf8');
-  const parsedSoap = parseSoapEnvelope(rawXml);
+  const parsedSoap = parseSoapEnvelope(envelopeXml);
   const operation = identifySdiOperation(parsedSoap.operationLocalName, parsedSoap.operationNamespace);
 
   writeSystemLog({
@@ -87,16 +91,19 @@ function processInboundSdiRequest(req) {
       envelopeNamespace: parsedSoap.envelopeNamespace,
       operationName: parsedSoap.operationLocalName,
       operationNamespace: parsedSoap.operationNamespace,
-      soapAction
+      soapAction,
+      contractName: operation.contractName,
+      isMtom
     }
   });
 
   const payload = extractSdiPayload(parsedSoap.operationElement);
-  const decodedFile = decodeSdiBase64File(payload.file, payload.nomeFile);
+  const decodedFile = decodeSdiFile(payload.file, payload.nomeFile, multipart);
   const decodedXml = decodedFile.contentType === 'xml' ? decodedFile.buffer.toString('utf8') : '';
   const metadataFile = payload.metadati
-    ? decodeSdiBase64File(payload.metadati, payload.nomeFileMetadati || `${payload.nomeFile || 'metadati'}_MT.xml`)
+    ? decodeSdiFile(payload.metadati, payload.nomeFileMetadati || `${payload.nomeFile || 'metadati'}_MT.xml`, multipart)
     : null;
+  const decodedInnerRoot = decodedXml ? detectXmlRoot(decodedXml) : null;
 
   writeSystemLog({
     livello: 'info',
@@ -113,6 +120,7 @@ function processInboundSdiRequest(req) {
       decodedSize: decodedFile.buffer.length,
       decodedSha256: decodedFile.sha256,
       decodedContentType: decodedFile.contentType,
+      decodedInnerRoot,
       metadataSha256: metadataFile?.sha256 || null
     }
   });
@@ -121,11 +129,14 @@ function processInboundSdiRequest(req) {
     requestId,
     req,
     rawBuffer,
+    envelopeBuffer,
     parsedSoap,
     operation,
     payload,
     decodedFile,
-    metadataFile
+    metadataFile,
+    isMtom,
+    decodedInnerRoot
   });
 
   const result = {
@@ -137,9 +148,12 @@ function processInboundSdiRequest(req) {
     operationName: parsedSoap.operationLocalName,
     operationNamespace: parsedSoap.operationNamespace,
     operationKind: operation.kind,
+    contractName: operation.contractName,
+    isMtom,
     identificativoSdI: payload.identificativoSdI,
     nomeFile: payload.nomeFile,
     decodedFileSha256: decodedFile.sha256,
+    decodedInnerRoot,
     storage,
     responseKind: operation.responseKind
   };
@@ -384,32 +398,49 @@ function identifySdiOperation(operationName, operationNamespace) {
     if (operationNamespace !== RECEPTION_TYPES_NS) {
       throw typedError('InvalidSdiNamespaceError', `Namespace ricezione non valido: ${operationNamespace}`);
     }
-    return { kind, responseKind: 'ricevi_fatture_er01', oneWay: false };
+    return { kind, contractName: 'RicezioneFatture', responseKind: 'ricevi_fatture_er01', oneWay: false };
+  }
+  if (operationNamespace === RECEPTION_TYPES_NS && kind === 'DEADLINE_EXPIRED') {
+    return { kind: 'RECEPTION_DEADLINE_EXPIRED', contractName: 'RicezioneFatture', responseKind: 'empty_200', oneWay: true };
   }
   if (operationNamespace !== TRANSMISSION_TYPES_NS) {
     throw typedError('InvalidSdiNamespaceError', `Namespace trasmissione non valido: ${operationNamespace}`);
   }
-  return { kind, responseKind: 'empty_200', oneWay: true };
+  return { kind, contractName: 'TrasmissioneFatture', responseKind: 'empty_200', oneWay: true };
 }
 
 function extractSdiPayload(operationElement) {
   return {
     identificativoSdI: getDirectChildText(operationElement, 'IdentificativoSdI'),
     nomeFile: sanitizeSdiFilename(getDirectChildText(operationElement, 'NomeFile')),
-    file: getDirectChildText(operationElement, 'File'),
+    file: getDirectChildContent(operationElement, 'File'),
     nomeFileMetadati: sanitizeSdiFilename(getDirectChildText(operationElement, 'NomeFileMetadati')),
-    metadati: getDirectChildText(operationElement, 'Metadati')
+    metadati: getDirectChildContent(operationElement, 'Metadati')
   };
 }
 
+function decodeSdiFile(value, filename, multipart = null) {
+  if (value?.xopHref) {
+    if (!multipart) throw typedError('MissingMtomAttachmentError', `Allegato MTOM non disponibile per ${value.xopHref}`);
+    const attachment = multipart.partsByContentId.get(normalizeContentId(value.xopHref.replace(/^cid:/i, '')));
+    if (!attachment) throw typedError('MissingMtomAttachmentError', `Allegato MTOM non trovato: ${value.xopHref}`);
+    return buildDecodedFile(attachment.body, filename);
+  }
+  return decodeSdiBase64File(value?.text ?? value, filename);
+}
+
 function decodeSdiBase64File(value, filename) {
-  const normalized = String(value || '').replace(/\s+/g, '');
+  const normalized = String((value?.text ?? value) || '').replace(/\s+/g, '');
   if (!normalized) throw typedError('EmptySdiFileError', 'Campo File SDI vuoto');
   if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalized) || normalized.length % 4 !== 0) {
     throw typedError('InvalidBase64FileError', 'Campo File SDI non e base64 valido');
   }
   const buffer = Buffer.from(normalized, 'base64');
   if (!buffer.length) throw typedError('InvalidBase64FileError', 'Campo File SDI decodificato vuoto');
+  return buildDecodedFile(buffer, filename);
+}
+
+function buildDecodedFile(buffer, filename) {
   return {
     buffer,
     sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
@@ -418,7 +449,7 @@ function decodeSdiBase64File(value, filename) {
   };
 }
 
-function storeInboundSdiRequest({ requestId, req, rawBuffer, parsedSoap, operation, payload, decodedFile, metadataFile }) {
+function storeInboundSdiRequest({ requestId, req, rawBuffer, envelopeBuffer, parsedSoap, operation, payload, decodedFile, metadataFile, isMtom, decodedInnerRoot }) {
   const now = new Date();
   const dayDir = path.join(
     INBOUND_DIR,
@@ -433,7 +464,9 @@ function storeInboundSdiRequest({ requestId, req, rawBuffer, parsedSoap, operati
   fs.mkdirSync(metadataDir, { recursive: true });
 
   const envelopePath = path.join(dayDir, 'sdi-envelope.xml');
-  fs.writeFileSync(envelopePath, rawBuffer);
+  fs.writeFileSync(envelopePath, envelopeBuffer || rawBuffer);
+  const rawPath = isMtom ? path.join(dayDir, 'sdi-raw-multipart.bin') : null;
+  if (rawPath) fs.writeFileSync(rawPath, rawBuffer);
   const decodedName = sanitizeFilePart(payload.nomeFile || decodedFile.originalName || 'sdi-file');
   const decodedPath = path.join(decodedDir, decodedName);
   fs.writeFileSync(decodedPath, decodedFile.buffer);
@@ -452,18 +485,21 @@ function storeInboundSdiRequest({ requestId, req, rawBuffer, parsedSoap, operati
     forwardedFor: String(req.headers['x-forwarded-for'] || ''),
     contentType: String(req.headers['content-type'] || ''),
     contentLength: rawBuffer.length,
+    isMtom,
     userAgent: String(req.headers['user-agent'] || ''),
     soapVersion: parsedSoap.soapVersion,
     soapAction: normalizeSoapAction(req.headers.soapaction),
     envelopeNamespace: parsedSoap.envelopeNamespace,
     operationName: parsedSoap.operationLocalName,
     operationNamespace: parsedSoap.operationNamespace,
+    contractName: operation.contractName,
     operationKind: operation.kind,
     identificativoSdI: payload.identificativoSdI,
     nomeFile: payload.nomeFile,
     nomeFileMetadati: payload.nomeFileMetadati,
     decodedFileSha256: decodedFile.sha256,
     decodedContentType: decodedFile.contentType,
+    decodedInnerRoot,
     envelopeSha256: crypto.createHash('sha256').update(rawBuffer).digest('hex'),
     matchedTransmissionId: null,
     processingStatus: 'stored',
@@ -475,6 +511,7 @@ function storeInboundSdiRequest({ requestId, req, rawBuffer, parsedSoap, operati
   return {
     requestDir: relativeFromRoot(dayDir),
     envelopePath: relativeFromRoot(envelopePath),
+    rawPath: rawPath ? relativeFromRoot(rawPath) : null,
     decodedPath: relativeFromRoot(decodedPath),
     metadataPath: metadataPath ? relativeFromRoot(metadataPath) : null,
     manifestPath: relativeFromRoot(manifestPath)
@@ -491,6 +528,53 @@ function getRawRequestBuffer(req) {
   return Buffer.from(String(req.body ?? ''), 'utf8');
 }
 
+function parseMultipartRelated(rawBuffer, contentType) {
+  if (!/multipart\/related/i.test(contentType)) return null;
+  const boundaryMatch = String(contentType || '').match(/boundary="?([^";]+)"?/i);
+  if (!boundaryMatch) throw typedError('InvalidMultipartError', 'Boundary multipart mancante');
+  const boundary = boundaryMatch[1];
+  const raw = rawBuffer.toString('binary');
+  const chunks = raw.split(`--${boundary}`).filter((part) => {
+    const trimmed = part.trim();
+    return trimmed && trimmed !== '--';
+  });
+  const parts = chunks.map((chunk) => {
+    const separator = chunk.indexOf('\r\n\r\n');
+    if (separator < 0) return null;
+    const headerText = chunk.slice(0, separator).trim();
+    let bodyText = chunk.slice(separator + 4);
+    bodyText = bodyText.replace(/\r\n--\s*$/, '').replace(/\r\n$/, '');
+    const headers = parseMimeHeaders(headerText);
+    return { headers, body: Buffer.from(bodyText, 'binary') };
+  }).filter(Boolean);
+  if (!parts.length) throw typedError('InvalidMultipartError', 'Nessuna parte multipart valida');
+  const partsByContentId = new Map();
+  parts.forEach((part) => {
+    const id = normalizeContentId(part.headers['content-id']);
+    if (id) partsByContentId.set(id, part);
+  });
+  const startMatch = String(contentType || '').match(/start="?([^";]+)"?/i);
+  const startId = normalizeContentId(startMatch?.[1]);
+  const rootPart = (startId && partsByContentId.get(startId))
+    || parts.find((part) => /xml|xop/i.test(part.headers['content-type'] || ''))
+    || parts[0];
+  return { boundary, parts, partsByContentId, rootPart };
+}
+
+function parseMimeHeaders(headerText) {
+  const headers = {};
+  String(headerText || '').split(/\r\n/).forEach((line) => {
+    const separator = line.indexOf(':');
+    if (separator <= 0) return;
+    headers[line.slice(0, separator).trim().toLowerCase()] = line.slice(separator + 1).trim();
+  });
+  return headers;
+}
+
+function normalizeContentId(value) {
+  return String(value || '').trim().replace(/^<|>$/g, '');
+}
+
 function normalizeSoapAction(value) {
   return String(value ?? '').trim().replace(/^"(.*)"$/, '$1');
 }
@@ -503,6 +587,18 @@ function getDirectChildText(parent, localName) {
     .map((node) => node.text)
     .join('')
     .trim();
+}
+
+function getDirectChildContent(parent, localName) {
+  const child = findDirectChild(parent, localName);
+  if (!child) return '';
+  const xop = child.children.find((node) => (
+    node.type === 'element'
+    && node.localName === 'Include'
+    && node.namespaceURI === 'http://www.w3.org/2004/08/xop/include'
+  ));
+  if (xop?.attributes?.href) return { xopHref: xop.attributes.href, text: '' };
+  return { text: getDirectChildText(parent, localName) };
 }
 
 function findDirectChild(parent, localName, namespaceURI = null) {
@@ -529,6 +625,12 @@ function detectDecodedContentType(buffer, filename = '') {
   const start = buffer.toString('utf8', 0, Math.min(buffer.length, 100)).trimStart();
   if (start.startsWith('<?xml') || start.startsWith('<')) return 'xml';
   return 'binary';
+}
+
+function detectXmlRoot(xml) {
+  const match = String(xml || '').trim().match(/^<\?xml[^>]*>\s*<([\w:-]+)|^<([\w:-]+)/i);
+  const root = match ? (match[1] || match[2] || '') : '';
+  return root.includes(':') ? root.split(':').pop() : root;
 }
 
 function sanitizeSdiFilename(value) {
@@ -568,10 +670,12 @@ module.exports = {
   buildElementTree,
   buildRiceviFattureResponse,
   decodeSdiBase64File,
+  decodeSdiFile,
   extractSdiPayload,
   getDirectChildText,
   identifySdiOperation,
   normalizeSoapAction,
+  parseMultipartRelated,
   parseSoapEnvelope,
   processInboundSdiRequest
 };
