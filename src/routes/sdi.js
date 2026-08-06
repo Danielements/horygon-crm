@@ -40,7 +40,25 @@ router.post('/ws/inbound', xmlTextParser, (req, res) => {
     if (!rawXml) return res.status(400).json({ error: 'Body XML mancante' });
     const envelope = unwrapInboundEnvelope(rawXml);
     const payloadXml = envelope.payloadXml;
+    const envelopeRootElement = detectRootElement(rawXml);
     const rootElement = detectRootElement(payloadXml);
+    const rawStorage = persistInboundXml(rawXml, req.headers['x-original-filename'] ? String(req.headers['x-original-filename']) : 'sdi-envelope');
+    writeSystemLog({
+      livello: 'info',
+      origine: 'sdi.ws.inbound',
+      route: '/api/sdi/ws/inbound',
+      metodo: 'POST',
+      messaggio: 'Richiesta SDI ricevuta',
+      dettagli: {
+        contentType: String(req.headers['content-type'] || ''),
+        userAgent: String(req.headers['user-agent'] || ''),
+        soapVersion: detectSoapVersion(req),
+        envelopeRootElement,
+        payloadRootElement: rootElement,
+        isSoap: envelope.isSoap,
+        requestPath: rawStorage.relativePath
+      }
+    });
     let result;
     if (isInvoiceRoot(rootElement)) {
       const storage = persistInboundXml(payloadXml, req.headers['x-original-filename'] ? String(req.headers['x-original-filename']) : 'fattura-ricevuta');
@@ -274,7 +292,7 @@ function buildInboundWsdl(req) {
 
 function unwrapInboundEnvelope(xml) {
   const raw = String(xml || '').trim();
-  if (!/^<[\w:-]*Envelope\b/i.test(raw)) {
+  if (!/^<[\w:-]*Envelope\b/i.test(raw) && !/http:\/\/www\.w3\.org\/2003\/05\/soap-envelope/i.test(raw)) {
     return { payloadXml: raw, isSoap: false };
   }
   const bodyMatch = raw.match(/<[\w:-]*Body\b[^>]*>([\s\S]*?)<\/[\w:-]*Body>/i);
