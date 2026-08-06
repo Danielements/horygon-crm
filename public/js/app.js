@@ -2191,8 +2191,7 @@ async function openRecordPicker(entity, options = {}) {
     entity,
     targetId: options?.targetId || null,
     labelId: options?.labelId || null,
-    rows: Array.isArray(rows) ? rows.length : 0,
-    activeSection: currentSection || null
+    rows: Array.isArray(rows) ? rows.length : 0
   });
   const head = document.getElementById('record-picker-head');
   const search = document.getElementById('record-picker-search');
