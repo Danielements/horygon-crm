@@ -15,6 +15,7 @@ try { db.exec(`ALTER TABLE anagrafiche ADD COLUMN tipologia_cliente TEXT DEFAULT
 try { db.exec(`ALTER TABLE anagrafiche ADD COLUMN pa_mepa INTEGER DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE anagrafiche ADD COLUMN pa_sda INTEGER DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE anagrafiche ADD COLUMN pa_rdo INTEGER DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE anagrafiche ADD COLUMN codice_destinatario TEXT`); } catch {}
 
 router.get('/', (req, res) => {
   const { tipo, q } = req.query;
@@ -100,8 +101,8 @@ router.post('/', requirePermesso('clienti', 'edit'), (req, res) => {
   try {
     const r = db.prepare(`
       INSERT INTO anagrafiche
-      (tipo,ragione_sociale,piva,cf,indirizzo,cap,citta,provincia,paese,lat,lng,email,pec,telefono,sito_web,note,canale_cliente,tipologia_cliente,pa_mepa,pa_sda,pa_rdo)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      (tipo,ragione_sociale,piva,cf,indirizzo,cap,citta,provincia,paese,lat,lng,email,pec,telefono,sito_web,note,codice_destinatario,canale_cliente,tipologia_cliente,pa_mepa,pa_sda,pa_rdo)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       s(b.tipo) || 'cliente',
       s(b.ragione_sociale),
@@ -109,7 +110,7 @@ router.post('/', requirePermesso('clienti', 'edit'), (req, res) => {
       s(b.indirizzo), s(b.cap), s(b.citta), s(b.provincia),
       s(b.paese) || 'IT',
       n(b.lat), n(b.lng),
-      s(b.email), s(b.pec), s(b.telefono), s(b.sito_web), s(b.note), s(b.canale_cliente) || 'privato',
+      s(b.email), s(b.pec), s(b.telefono), s(b.sito_web), s(b.note), s(b.codice_destinatario), s(b.canale_cliente) || 'privato',
       s(b.tipologia_cliente) || 'privato',
       b.pa_mepa ? 1 : 0,
       b.pa_sda ? 1 : 0,
@@ -130,14 +131,14 @@ router.put('/:id', requirePermesso('clienti', 'edit'), (req, res) => {
     db.prepare(`
       UPDATE anagrafiche SET
         ragione_sociale=?,piva=?,cf=?,indirizzo=?,cap=?,citta=?,provincia=?,paese=?,
-        lat=?,lng=?,email=?,pec=?,telefono=?,sito_web=?,note=?,canale_cliente=?,tipologia_cliente=?,pa_mepa=?,pa_sda=?,pa_rdo=?,attivo=?
+        lat=?,lng=?,email=?,pec=?,telefono=?,sito_web=?,note=?,codice_destinatario=?,canale_cliente=?,tipologia_cliente=?,pa_mepa=?,pa_sda=?,pa_rdo=?,attivo=?
       WHERE id=?
     `).run(
       s(b.ragione_sociale), s(b.piva), s(b.cf),
       s(b.indirizzo), s(b.cap), s(b.citta), s(b.provincia),
       s(b.paese) || 'IT',
       n(b.lat), n(b.lng),
-      s(b.email), s(b.pec), s(b.telefono), s(b.sito_web), s(b.note), s(b.canale_cliente) || 'privato',
+      s(b.email), s(b.pec), s(b.telefono), s(b.sito_web), s(b.note), s(b.codice_destinatario), s(b.canale_cliente) || 'privato',
       s(b.tipologia_cliente) || 'privato',
       b.pa_mepa ? 1 : 0,
       b.pa_sda ? 1 : 0,

@@ -504,6 +504,9 @@ function ensureAccountingSections() {
     const ivaTh = document.createElement('th');
     ivaTh.textContent = 'IVA';
     theadRow.insertBefore(ivaTh, statoTh);
+    const sdiTh = document.createElement('th');
+    sdiTh.textContent = 'SDI';
+    theadRow.appendChild(sdiTh);
     theadRow.dataset.ivaAdded = '1';
   }
   base.dataset.accountingSplit = '1';
@@ -3367,7 +3370,8 @@ function renderFattureRows(targetId, rows) {
     <td><span class="badge badge-${f.stato}">${f.stato}</span></td>
     <td><select class="btn btn-outline btn-sm" onchange="cambiaStatoFattura(${f.id},this.value)">
       ${['ricevuta','pagata','scaduta','annullata'].map(s=>`<option value="${s}"${f.stato===s?' selected':''}>${s}</option>`).join('')}
-    </select></td></tr>`).join('');
+    </select></td>
+    <td>${f.tipo === 'emessa' ? `<button class="btn btn-outline btn-sm" onclick="testSendFatturaSdi(${f.id})">Test SDI</button>` : '-'}</td></tr>`).join('');
 }
 
 async function loadFattureBySection(section) {
@@ -3388,6 +3392,19 @@ async function loadFattureBySection(section) {
 
 async function loadFatture() {
   return loadFattureBySection('fatture-attive');
+}
+
+async function testSendFatturaSdi(id) {
+  try {
+    const result = await api('POST', `/sdi/fatture/${id}/test-send`, {});
+    toast(`XML SDI generato: ${result?.filename || 'ok'}`, 'success');
+    const active = document.querySelector('.section.active')?.id?.replace('section-', '') || 'fatture-attive';
+    if (['fatture-attive', 'fatture-passive', 'fatture-fuori-campo'].includes(active)) {
+      loadFattureBySection(active);
+    }
+  } catch (e) {
+    toast(e.message || 'Errore generazione XML SDI', 'error');
+  }
 }
 
 async function importXML(input) {

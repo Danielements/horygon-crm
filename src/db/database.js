@@ -323,6 +323,15 @@ function ensureColumn(table, definition) {
 }
 
 [
+  "codice_destinatario TEXT",
+  "canale_cliente TEXT DEFAULT 'privato'",
+  "tipologia_cliente TEXT DEFAULT 'privato'",
+  "pa_mepa INTEGER DEFAULT 0",
+  "pa_sda INTEGER DEFAULT 0",
+  "pa_rdo INTEGER DEFAULT 0"
+].forEach(col => ensureColumn('anagrafiche', col));
+
+[
   "tipo_documento TEXT DEFAULT 'fattura'",
   "direzione TEXT DEFAULT 'attiva'",
   "data_ricezione TEXT",
@@ -398,6 +407,40 @@ db.exec(`
     imposta REAL,
     riferimento_normativo TEXT,
     FOREIGN KEY (fattura_id) REFERENCES fatture(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS fatture_sdi_flussi (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fattura_id INTEGER NOT NULL,
+    direzione TEXT DEFAULT 'outbound',
+    modalita TEXT DEFAULT 'test',
+    tipo_messaggio TEXT DEFAULT 'fattura',
+    nome_file TEXT,
+    identificativo_sdi TEXT,
+    stato TEXT DEFAULT 'bozza',
+    esito_codice TEXT,
+    esito_descrizione TEXT,
+    xml_path TEXT,
+    response_path TEXT,
+    hash_file TEXT,
+    payload_meta TEXT,
+    inviato_il TEXT,
+    ricevuto_il TEXT,
+    ultimo_evento_il TEXT DEFAULT (datetime('now')),
+    creato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (fattura_id) REFERENCES fatture(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS fatture_sdi_notifiche (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    flusso_id INTEGER NOT NULL,
+    tipo_notifica TEXT NOT NULL,
+    codice TEXT,
+    descrizione TEXT,
+    xml_path TEXT,
+    payload_meta TEXT,
+    creato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (flusso_id) REFERENCES fatture_sdi_flussi(id) ON DELETE CASCADE
   );
 
   CREATE TABLE IF NOT EXISTS proforme_invoice (
