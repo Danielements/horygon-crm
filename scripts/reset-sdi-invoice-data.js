@@ -106,5 +106,16 @@ try {
   process.exit(1);
 }
 
+// Nel container e' montato solo horygon.db, non i sidecar -wal/-shm: senza
+// checkpoint le modifiche restano nel WAL, che vive nel layer scrivibile e
+// viene buttato via al primo "docker compose up --build". Sopravvivono al
+// restart ma non alla ricreazione del container.
+try {
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  console.log('\nCheckpoint WAL eseguito: le modifiche sono nel file del database.');
+} catch (error) {
+  console.error(`\nATTENZIONE: checkpoint WAL fallito (${error.message}). Le modifiche potrebbero andare perse al prossimo rebuild del container.`);
+}
+
 printTable(snapshot(TARGET_TABLES), 'Dopo la cancellazione:');
 console.log(`\nFatto. ${totalToDelete} righe rimosse. Backup: ${backup}`);
