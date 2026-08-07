@@ -1,0 +1,216 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema 
+	xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	xmlns:types="http://ivaservizi.agenziaentrate.gov.it/docs/wsdl/ServiziMassivi/v1.0/types"
+	targetNamespace="http://ivaservizi.agenziaentrate.gov.it/docs/wsdl/ServiziMassivi/v1.0/types"
+	version="1.0">
+
+	<!-- ELEMENTI MESSAGGI -->	
+
+		<!-- SCARICO MASSIVO -->	
+		
+	<xs:element name="InoltroRichiestaRequest" type="types:InoltroRichiestaRequestType" />
+	<xs:element name="InoltroRichiestaResponse" type="types:InoltroRichiestaResponseType" />
+	
+	<xs:element name="EsitoRichiestaRequest" type="types:EsitoRichiestaRequestType" />
+	<xs:element name="EsitoRichiestaResponse" type="types:EsitoRichiestaResponseType" />
+	
+	<xs:element name="ScaricoFileRequest" type="types:ScaricoFileRequestType" />
+	<xs:element name="ScaricoFileResponse" type="types:ScaricoFileResponseType" />
+	
+		<!-- TRASMISSIONE MASSIVA -->	
+	
+	<xs:element name="TrasmissioneElenchiRequest" type="types:TrasmissioneElenchiRequestType" />
+	<xs:element name="TrasmissioneElenchiResponse" type="types:TrasmissioneElenchiResponseType" />
+	
+	<xs:element name="EsitoTrasmissioneRequest" type="types:EsitoTrasmissioneRequestType" />
+	<xs:element name="EsitoTrasmissioneResponse" type="types:EsitoTrasmissioneResponseType" />
+	
+	<!-- TIPI PER MESSAGGI -->
+		
+		<!-- SCARICO MASSIVO -->	
+			
+	<xs:complexType name="InoltroRichiestaRequestType">
+		<xs:sequence>
+			<xs:element name="FileRichiesta" type="types:FileType" />	
+		</xs:sequence>
+	</xs:complexType>
+	
+	<xs:complexType name="InoltroRichiestaResponseType">
+		<xs:sequence>
+			<xs:element name="IdRichiesta" type="types:Id_Type" />
+			<xs:element name="DataOraRicezione" type="xs:dateTime" minOccurs="0"/> 
+			<xs:element name="Errore" type="types:ErroreType" minOccurs="0"/>
+		</xs:sequence>
+	</xs:complexType>
+	
+	<xs:complexType name="EsitoRichiestaRequestType">
+		<xs:sequence>
+			<xs:element name="IdRichiesta" type="types:Id_Type" />
+		</xs:sequence>
+	</xs:complexType>	
+	
+	<xs:complexType name="EsitoRichiestaResponseType">
+		<xs:sequence>
+			<xs:element name="Stato" type="types:StatoType" />
+			<xs:element name="Tipo" type="xs:string"  minOccurs="0"/>			
+			<xs:element name="EsitoFile" type="types:FileType" minOccurs="0" />
+			<xs:element name="DataOraProduzioneFile" type="xs:dateTime" minOccurs="0"/>		
+			<xs:element name="Errore" type="types:ErroreType" minOccurs="0"/>		
+		</xs:sequence>
+	</xs:complexType>
+
+	<xs:complexType name="ScaricoFileRequestType">
+		<xs:sequence>
+			<xs:element name="IdRichiesta" type="types:Id_Type" />		
+			<xs:element name="IdFile" type="types:Id_Type" />
+		</xs:sequence>
+	</xs:complexType>	
+
+	<xs:complexType name="ScaricoFileResponseType">
+		<xs:sequence>
+			<xs:element name="ArchivioFile" type="types:FileType" minOccurs="0" />
+			<xs:element name="Errore" type="types:ErroreType" minOccurs="0"/>	
+		</xs:sequence>
+	</xs:complexType>	
+
+		<!-- TRASMISSIONE MASSIVA -->
+	
+	<xs:complexType name="TrasmissioneElenchiRequestType">
+		<xs:sequence>
+			<xs:element name="FileElenchi" type="types:FileType" />	
+		</xs:sequence>
+	</xs:complexType>
+	
+	<xs:complexType name="TrasmissioneElenchiResponseType">
+		<xs:sequence>
+			<xs:element name="IdTrasmissione" type="types:Id_Type" />
+			<xs:element name="DataOraTrasmissione" type="xs:dateTime" minOccurs="0"/> 	
+			<xs:element name="Errore" type="types:ErroreType" minOccurs="0"/>
+		</xs:sequence>
+	</xs:complexType>
+	
+	<xs:complexType name="EsitoTrasmissioneRequestType">
+		<xs:sequence>
+			<xs:element name="IdTrasmissione" type="types:Id_Type" />
+		</xs:sequence>
+	</xs:complexType>	
+	
+	<xs:complexType name="EsitoTrasmissioneResponseType">
+		<xs:sequence>
+			<xs:element name="Stato" type="types:StatoType" />
+			<xs:element name="Tipo" type="xs:string"  minOccurs="0"/>			
+			<xs:element name="EsitoFile" type="types:FileType" minOccurs="0" />
+			<xs:element name="DataOraProduzioneEsito" type="xs:dateTime" minOccurs="0"/>		
+			<xs:element name="Errore" type="types:ErroreType" minOccurs="0"/>		
+		</xs:sequence>
+	</xs:complexType>
+	
+	
+	<!-- COMPLEX TYPE -->
+	<xs:complexType name="ErroreType">
+		<xs:sequence>
+			<xs:element name="Codice" type="types:CodiceErroreRichiestaType"/>
+			<xs:element name="Descrizione" type="xs:string"/>
+		</xs:sequence>
+	</xs:complexType>
+	
+
+	<xs:complexType name="FileType">
+		<xs:sequence>
+			<xs:element name="NomeFile" type="types:NomeFileType" />
+			<xs:element name="File" type="xs:base64Binary" xmime:expectedContentTypes="*/*" xmlns:xmime="http://www.w3.org/2005/05/xmlmime" />
+		</xs:sequence>
+	</xs:complexType>
+	
+	<!-- SIMPLE TYPES -->
+	<xs:simpleType name="Id_Type">
+		<xs:restriction base="xs:normalizedString">
+			<xs:pattern value="[a-zA-Z0-9_\.]{1,100}" />
+		</xs:restriction>
+	</xs:simpleType>
+	
+	
+	<xs:simpleType name="NomeFileType">
+		<xs:restriction base="xs:normalizedString">
+			<xs:pattern value="[a-zA-Z0-9_\.]{9,50}" />
+		</xs:restriction>
+	</xs:simpleType>
+
+    <!-- ENUMERAZIONE CODICI ERRORI RICHIESTA -->
+	<xs:simpleType name="CodiceErroreRichiestaType">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="ER01" >
+				<xs:annotation>
+					<xs:documentation>
+						ER01 = SERVIZIO NON DISPONIBILE
+					</xs:documentation>
+				</xs:annotation>
+			</xs:enumeration>
+			<xs:enumeration value="ER02" >
+				<xs:annotation>
+					<xs:documentation>
+						ER02 = UTENTE NON ABILITATO
+					</xs:documentation>
+				</xs:annotation>
+			</xs:enumeration>
+			<xs:enumeration value="ER03" >
+				<xs:annotation>
+					<xs:documentation>
+						ER03 = RICHIESTA TROPPO FREQUENTE
+					</xs:documentation>
+				</xs:annotation>
+			</xs:enumeration>
+			<xs:enumeration value="ER04" >
+				<xs:annotation>
+					<xs:documentation>
+						ER04 = PARAMETRI DI INPUT NON VALIDI
+					</xs:documentation>
+				</xs:annotation>
+			</xs:enumeration>
+			<xs:enumeration value="ER05" >
+				<xs:annotation>
+					<xs:documentation>
+						ER05 = DATO NON TROVATO
+					</xs:documentation>
+				</xs:annotation>
+			</xs:enumeration>			
+		</xs:restriction>
+	</xs:simpleType>
+	
+	<!-- ENUMERAZIONE STATI -->
+	<xs:simpleType name="StatoType">
+		<xs:restriction base="xs:string">
+		<xs:enumeration value="ST00">
+				<xs:annotation>
+					<xs:documentation>
+						ST00 = NON DISPONIBILE
+					</xs:documentation>
+				</xs:annotation>
+			</xs:enumeration>
+			<xs:enumeration value="ST01">
+				<xs:annotation>
+					<xs:documentation>
+						ST01 = IN ELABORAZIONE
+					</xs:documentation>
+				</xs:annotation>
+			</xs:enumeration>
+			<xs:enumeration value="ST02" >
+				<xs:annotation>
+					<xs:documentation>
+						ST02 = SCARTATO
+					</xs:documentation>
+				</xs:annotation>
+			</xs:enumeration>
+			<xs:enumeration value="ST03" >
+				<xs:annotation>
+					<xs:documentation>
+						ST03 = ELABORATO
+					</xs:documentation>
+				</xs:annotation>
+			</xs:enumeration>
+
+		</xs:restriction>
+	</xs:simpleType>
+	
+</xs:schema>

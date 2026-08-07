@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<wsdl:definitions 
+	xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+	xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+	xmlns:mime="http://schemas.xmlsoap.org/wsdl/mime/"
+	xmlns:soapbind="http://schemas.xmlsoap.org/wsdl/soap/"
+	xmlns:types="http://ivaservizi.agenziaentrate.gov.it/docs/wsdl/ServiziMassivi/v1.0/types"
+	xmlns:tns="http://ivaservizi.agenziaentrate.gov.it/docs/wsdl/ServiziMassivi/v1.0"
+	targetNamespace="http://ivaservizi.agenziaentrate.gov.it/docs/wsdl/ServiziMassivi/v1.0">
+
+	<!-- TIPI -->
+	<wsdl:types>
+		<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+			<xsd:import namespace="http://ivaservizi.agenziaentrate.gov.it/docs/wsdl/ServiziMassivi/v1.0/types" schemaLocation="ServiziMassiviTypes_v1.0.xsd"/>
+		</xsd:schema>
+	</wsdl:types>
+
+	<!-- MESSAGGI -->
+	
+	<!-- RICHIESTA SCARICO MASSIVO -->
+	<wsdl:message name="inoltroRichiestaInput">
+		<wsdl:part name="parametersIn" element="types:InoltroRichiestaRequest" />
+	</wsdl:message>
+	<wsdl:message name="inoltroRichiestaOutput">
+		<wsdl:part name="parametersOut" element="types:InoltroRichiestaResponse" />
+	</wsdl:message>
+	<wsdl:message name="esitoRichiestaInput">
+		<wsdl:part name="parametersIn" element="types:EsitoRichiestaRequest" />
+	</wsdl:message>
+	<wsdl:message name="esitoRichiestaOutput">
+		<wsdl:part name="parametersOut" element="types:EsitoRichiestaResponse" />
+	</wsdl:message>
+	<wsdl:message name="scaricoFileInput">
+		<wsdl:part name="parametersIn" element="types:ScaricoFileRequest" />
+	</wsdl:message>
+	<wsdl:message name="scaricoFileOutput">
+		<wsdl:part name="parametersOut" element="types:ScaricoFileResponse" />
+	</wsdl:message>
+		
+	<!-- PORT TYPE -->
+	<wsdl:portType name="ServiziScaricoMassivo">
+		<wsdl:operation name="inoltroRichiesta">
+			<wsdl:input message="tns:inoltroRichiestaInput" />
+			<wsdl:output message="tns:inoltroRichiestaOutput" />
+		</wsdl:operation>
+		<wsdl:operation name="esitoRichiesta">
+			<wsdl:input message="tns:esitoRichiestaInput" />
+			<wsdl:output message="tns:esitoRichiestaOutput" />
+		</wsdl:operation>
+		<wsdl:operation name="scaricoFile">
+			<wsdl:input message="tns:scaricoFileInput" />
+			<wsdl:output message="tns:scaricoFileOutput" />
+		</wsdl:operation>
+	</wsdl:portType>
+
+	<!-- PORT BINDING -->
+	<wsdl:binding name="ServiziScaricoMassivo_binding" type="tns:ServiziScaricoMassivo">
+		<soapbind:binding style="document" transport="http://schemas.xmlsoap.org/soap/http" />
+		<wsdl:operation name="inoltroRichiesta">
+			<soapbind:operation soapAction="inoltroRichiesta"/>
+			<wsdl:input>
+				<soapbind:body use="literal" />
+			</wsdl:input>
+			<wsdl:output>
+				<soapbind:body use="literal" />
+			</wsdl:output>
+		</wsdl:operation>
+		<wsdl:operation name="esitoRichiesta">
+			<soapbind:operation soapAction="esitoRichiesta" />
+			<wsdl:input>
+				<soapbind:body use="literal" />
+			</wsdl:input>
+			<wsdl:output>
+				<soapbind:body use="literal" />
+			</wsdl:output>
+		</wsdl:operation>
+		<wsdl:operation name="scaricoFile">
+			<soapbind:operation soapAction="scaricoFile" />
+			<wsdl:input>
+				<soapbind:body use="literal" />
+			</wsdl:input>
+			<wsdl:output>
+				<soapbind:body use="literal" />
+			</wsdl:output>
+		</wsdl:operation>
+	</wsdl:binding>
+	
+	<!-- SERVICE -->
+	<wsdl:service name="ServiziScaricoMassivoService">
+		<wsdl:port name="ServiziScaricoMassivo_port" binding="tns:ServiziScaricoMassivo_binding">
+      		<soapbind:address location="https://servizi.fatturapa.it/sm-scarico-file"/>
+		</wsdl:port>
+	</wsdl:service>				
+</wsdl:definitions>

@@ -717,6 +717,226 @@ try {
   console.error('[sdi] indice univoco nome file non creato:', error.message);
 }
 
+// --- Impianto multi-tenant e sincronizzazione SdI -------------------------
+// L'XML originale resta la fonte fiscale di verita': queste tabelle sono la
+// proiezione interrogabile, non un sostituto del tracciato.
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS tenants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    codice TEXT NOT NULL UNIQUE,
+    ragione_sociale TEXT NOT NULL,
+    attivo INTEGER DEFAULT 1,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS sdi_fiscal_configuration (
+    tenant_id INTEGER PRIMARY KEY,
+    vat_number TEXT,
+    tax_code TEXT,
+    sdi_mode TEXT DEFAULT 'test',
+    realtime_enabled INTEGER DEFAULT 0,
+    realtime_start_at TEXT,
+    historical_sync_enabled INTEGER DEFAULT 0,
+    reconciliation_enabled INTEGER DEFAULT 0,
+    recipient_code TEXT,
+    transmission_enabled INTEGER DEFAULT 0,
+    reception_enabled INTEGER DEFAULT 0,
+    massive_services_enabled INTEGER DEFAULT 0,
+    massive_services_provider_enabled INTEGER DEFAULT 0,
+    massive_services_authorized_at TEXT,
+    production_send_policy TEXT DEFAULT 'MANUAL_CONFIRMATION',
+    aggiornato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+  );
+
+  -- Timeline append-only: lo stato corrente non sostituisce la storia.
+  CREATE TABLE IF NOT EXISTS sdi_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    fattura_id INTEGER,
+    identificativo_sdi TEXT,
+    source TEXT NOT NULL,
+    contract_name TEXT,
+    operation_name TEXT,
+    notification_type TEXT,
+    status_before TEXT,
+    status_after TEXT,
+    event_timestamp TEXT,
+    received_at TEXT,
+    original_filename TEXT,
+    sha256 TEXT,
+    metadata TEXT,
+    creato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (fattura_id) REFERENCES fatture(id) ON DELETE SET NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS sdi_historical_sync_job (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    request_type TEXT NOT NULL,
+    date_from TEXT NOT NULL,
+    date_to TEXT NOT NULL,
+    remote_request_id TEXT,
+    status TEXT NOT NULL DEFAULT 'CREATED',
+    dry_run INTEGER DEFAULT 0,
+    submitted_at TEXT,
+    completed_at TEXT,
+    expires_at TEXT,
+    archives_count INTEGER DEFAULT 0,
+    documents_found INTEGER DEFAULT 0,
+    documents_imported INTEGER DEFAULT 0,
+    duplicates INTEGER DEFAULT 0,
+    unmatched INTEGER DEFAULT 0,
+    errors TEXT,
+    creato_il TEXT DEFAULT (datetime('now')),
+    aggiornato_il TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS sdi_historical_sync_archive (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    job_id INTEGER NOT NULL,
+    remote_archive_id TEXT,
+    remote_filename TEXT,
+    size INTEGER,
+    sha256 TEXT,
+    downloaded_at TEXT,
+    local_path TEXT,
+    processed_at TEXT,
+    status TEXT DEFAULT 'PENDING',
+    FOREIGN KEY (job_id) REFERENCES sdi_historical_sync_job(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS sdi_historical_sync_item (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    job_id INTEGER NOT NULL,
+    archive_id INTEGER,
+    entry_name TEXT,
+    document_type TEXT,
+    direction TEXT,
+    identificativo_sdi TEXT,
+    original_filename TEXT,
+    original_sha256 TEXT,
+    xml_sha256 TEXT,
+    local_path TEXT,
+    outcome TEXT,
+    fattura_id INTEGER,
+    dedup_key TEXT,
+    dedup_level TEXT,
+    error_message TEXT,
+    creato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (job_id) REFERENCES sdi_historical_sync_job(id) ON DELETE CASCADE,
+    FOREIGN KEY (archive_id) REFERENCES sdi_historical_sync_archive(id) ON DELETE SET NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS sdi_reconciliation_job (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    flow_side TEXT NOT NULL,
+    period_from TEXT NOT NULL,
+    period_to TEXT NOT NULL,
+    remote_request_id TEXT,
+    status TEXT NOT NULL DEFAULT 'CREATED',
+    started_at TEXT,
+    completed_at TEXT,
+    errors TEXT,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS sdi_reconciliation_report (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    job_id INTEGER,
+    period_from TEXT,
+    period_to TEXT,
+    remote_count INTEGER DEFAULT 0,
+    local_count INTEGER DEFAULT 0,
+    matched INTEGER DEFAULT 0,
+    missing_locally INTEGER DEFAULT 0,
+    missing_remotely INTEGER DEFAULT 0,
+    duplicates INTEGER DEFAULT 0,
+    errors TEXT,
+    dettaglio TEXT,
+    creato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (job_id) REFERENCES sdi_reconciliation_job(id) ON DELETE SET NULL
+  );
+
+  -- Blocchi del tracciato che oggi andavano persi e che su fattura PA servono.
+  CREATE TABLE IF NOT EXISTS fatture_documenti_correlati (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    fattura_id INTEGER NOT NULL,
+    tipo TEXT NOT NULL,
+    riferimento_numero_linea TEXT,
+    id_documento TEXT,
+    data TEXT,
+    num_item TEXT,
+    codice_commessa_convenzione TEXT,
+    codice_cup TEXT,
+    codice_cig TEXT,
+    FOREIGN KEY (fattura_id) REFERENCES fatture(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS fatture_allegati_xml (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    fattura_id INTEGER NOT NULL,
+    nome_attachment TEXT,
+    algoritmo_compressione TEXT,
+    formato_attachment TEXT,
+    descrizione_attachment TEXT,
+    local_path TEXT,
+    sha256 TEXT,
+    FOREIGN KEY (fattura_id) REFERENCES fatture(id) ON DELETE CASCADE
+  );
+`);
+
+[
+  "tenant_id INTEGER DEFAULT 1",
+  "source TEXT DEFAULT 'CRM'",
+  "sdi_send_allowed INTEGER DEFAULT 1",
+  "formato_trasmissione TEXT",
+  "original_filename TEXT",
+  "original_file_path TEXT",
+  "original_sha256 TEXT",
+  "tracciato_extra TEXT"
+].forEach(col => ensureColumn('fatture', col));
+
+[
+  "tenant_id INTEGER DEFAULT 1",
+  "unita_misura TEXT",
+  "numero_linea INTEGER",
+  "codice_articolo TEXT",
+  "sconto_maggiorazione TEXT",
+  "riferimento_normativo TEXT",
+  "dati_gestionali TEXT"
+].forEach(col => ensureColumn('fatture_righe', col));
+
+["tenant_id INTEGER DEFAULT 1"].forEach(col => ensureColumn('fatture_iva_riepilogo', col));
+["tenant_id INTEGER DEFAULT 1"].forEach(col => ensureColumn('fatture_sdi_flussi', col));
+["tenant_id INTEGER DEFAULT 1"].forEach(col => ensureColumn('fatture_sdi_notifiche', col));
+
+try {
+  db.exec(`
+    INSERT OR IGNORE INTO tenants (id, codice, ragione_sociale)
+    VALUES (1, 'HORYGON', 'HORYGON S.R.L.');
+
+    CREATE INDEX IF NOT EXISTS idx_sdi_events_tenant_sdi ON sdi_events(tenant_id, identificativo_sdi);
+    CREATE INDEX IF NOT EXISTS idx_sdi_events_tenant_fattura ON sdi_events(tenant_id, fattura_id);
+    CREATE INDEX IF NOT EXISTS idx_fatture_tenant_sdi ON fatture(tenant_id, sdi_id);
+    CREATE INDEX IF NOT EXISTS idx_fatture_tenant_sha ON fatture(tenant_id, original_sha256);
+    CREATE INDEX IF NOT EXISTS idx_fatture_tenant_hash_doc ON fatture(tenant_id, hash_documento);
+    CREATE INDEX IF NOT EXISTS idx_sync_item_tenant_sdi ON sdi_historical_sync_item(tenant_id, identificativo_sdi);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_job_unico
+      ON sdi_historical_sync_job(tenant_id, request_type, date_from, date_to)
+      WHERE status NOT IN ('COMPLETED', 'FAILED', 'EXPIRED');
+  `);
+} catch (error) {
+  console.error('[sdi] impianto multi-tenant non completato:', error.message);
+}
+
 const ROLE_DEFS = [
   { id: 1, nome: 'readonly', descrizione: 'Solo lettura' },
   { id: 2, nome: 'commerciale', descrizione: 'Vendite, clienti, preventivi, ordini e attivita' },

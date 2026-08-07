@@ -1,0 +1,447 @@
+<!-- versione 1.5-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:ns1="http://www.sogei.it/InputPubblico" targetNamespace="http://www.sogei.it/InputPubblico" elementFormDefault="qualified" attributeFormDefault="unqualified">
+	
+	<xs:simpleType name="TipoElencoType">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="ELENCO_VIDIMAZIONI_RSM"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="PivaType">
+		<xs:restriction base="xs:string">
+			<xs:pattern value="\d{11,11}"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="FatturaB2BEmesseType">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="ALL"/>
+			<xs:enumeration value="CON"/>
+			<xs:enumeration value="DIS"/>
+			<!--- tutti i tipi di fattura, consegnate, messe a disposizione -->
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="FatturaPAEmesseType">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="ALL"/>
+			<xs:enumeration value="CON"/>
+			<xs:enumeration value="ACC"/>
+			<xs:enumeration value="RIF"/>
+			<xs:enumeration value="DEC"/>
+			<xs:enumeration value="IMP"/>
+			<!--- tutti i tipi di fattura, consegnate, accettate, rifiutate, decorrenza termini,  impossibilità di recapito -->
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="FatturaB2BRicevuteType">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="ALL"/>
+			<xs:enumeration value="CON"/>
+			<!--- tutti i tipi di fattura, consegnate -->
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="FatturaPARicevuteType">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="ALL"/>
+			<xs:enumeration value="CON"/>
+			<xs:enumeration value="ACC"/>
+			<xs:enumeration value="RIF"/>
+			<xs:enumeration value="DEC"/>
+			<!--- tutti i tipi di fattura, consegnate, accettate, rifiutate, decorrenza termini -->
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="FatturaB2BAccType">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="ALL"/>
+			<xs:enumeration value="CON"/>
+			<xs:enumeration value="DIS"/>
+			<!--- tutti i tipi di fattura, consegnate, messe a disposizione -->
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="FatturaPAAccType">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="ALL"/>
+			<xs:enumeration value="CON"/>
+			<xs:enumeration value="ACC"/>
+			<xs:enumeration value="RIF"/>
+			<xs:enumeration value="DEC"/>
+			<xs:enumeration value="IMP"/>
+			<!--- tutti i tipi di fattura, consegnate, accettate, rifiutate, decorrenza termini,  impossibilità di recapito -->
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="TipoRicercaType">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="PUNTUALE"/>
+			<xs:enumeration value="COMPLETA"/>
+			<!--- ricerca da effettuare sulla singola partita iva o su tutto il soggetto-->
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="TipoOutputType">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="FILE_FATTURA"/>
+			<xs:enumeration value="ELENCO"/>
+			<!--- FILE_FATTURA restituisce uno zip contenente fatture + metadati, ELENCO restituisce un CSV con gli estremi dei file fatture -->
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="TipoCorrispettivoType">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="RT"/>
+			<xs:enumeration value="MC"/>
+			<xs:enumeration value="DA"/>
+			<xs:enumeration value="DC"/>
+			<xs:enumeration value="RC"/>
+			<!--- RT - registratori telematici, MC - multicassa, DA - distributori automatici, DC - dati contabili, RC - registratore di cassa-->
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="OutputFileType">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="CSV"/>
+			<xs:enumeration value="XML"/>
+			<xs:enumeration value="PDF"/>
+			<xs:enumeration value="TXT"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="RegistroType">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="0"/>
+			<xs:enumeration value="1"/>
+			<xs:enumeration value="2"/>
+			<!---  può assumere questi valori  1 Vendita/  2  acquisti /  0 entrambi -->
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="StatoModelloType">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="PRECOMPILATA"/>
+			<xs:enumeration value="INLAVORAZIONE"/>
+			<xs:enumeration value="INVIATA"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="TipoModelloType">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="0"/>
+			<xs:enumeration value="1"/>
+			<xs:enumeration value="2"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<xs:simpleType name="TipoVidimazioneType">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="ESITATE"/>
+			<xs:enumeration value="NON_ESITATE"/>
+			<xs:enumeration value="TUTTE"/>
+		</xs:restriction>
+	</xs:simpleType>
+	<!---  può assumere questi valori  0 (primo invio), 1 (correttiva), 2 (integrativa)-->
+	<xs:element name="InputMassivo">
+		<xs:complexType>
+			<xs:sequence>
+				<xs:element name="TipoRichiesta">
+					<xs:complexType>
+						<xs:sequence>
+							<xs:choice>
+								<xs:element name="Fatture">
+									<xs:complexType>
+										<xs:sequence>
+											<xs:element name="Richiesta" type="xs:string" fixed="FATT"/>
+											<xs:element name="ElencoPiva">
+												<xs:complexType>
+													<xs:sequence>
+														<xs:element name="Piva" type="ns1:PivaType" maxOccurs="unbounded"/>
+													</xs:sequence>
+												</xs:complexType>
+											</xs:element>
+											<xs:element name="TipoRicerca" type="ns1:TipoRicercaType"/>
+											<xs:element name="TipoOutput" type="ns1:TipoOutputType" minOccurs="0"/>
+											<xs:choice>
+												<xs:element name="FattureEmesse">
+													<xs:complexType>
+														<xs:sequence>
+															<xs:element name="DataEmissione">
+																<xs:complexType>
+																	<xs:sequence>
+																		<xs:element name="Da" type="xs:date"/>
+																		<xs:element name="A" type="xs:date"/>
+																	</xs:sequence>
+																</xs:complexType>
+															</xs:element>
+															<xs:element name="Flusso">
+																<xs:complexType>
+																	<xs:choice>
+																		<xs:element name="Tutte" type="xs:string" fixed="ALL"/>
+																		<xs:element name="FatturaB2B" type="ns1:FatturaB2BEmesseType"/>
+																		<xs:element name="FatturaPA" type="ns1:FatturaPAEmesseType"/>
+																	</xs:choice>
+																</xs:complexType>
+															</xs:element>
+															<xs:element name="Ruolo" type="xs:string" fixed="CEDENTE"/>
+														</xs:sequence>
+													</xs:complexType>
+												</xs:element>
+												<xs:element name="FattureRicevute">
+													<xs:complexType>
+														<xs:sequence>
+															<xs:choice>
+																<xs:element name="DataEmissione">
+																	<xs:complexType>
+																		<xs:sequence>
+																			<xs:element name="Da" type="xs:date"/>
+																			<xs:element name="A" type="xs:date"/>
+																		</xs:sequence>
+																	</xs:complexType>
+																</xs:element>
+																<xs:element name="DataRicezione">
+																	<xs:complexType>
+																		<xs:sequence>
+																			<xs:element name="Da" type="xs:date"/>
+																			<xs:element name="A" type="xs:date"/>
+																		</xs:sequence>
+																	</xs:complexType>
+																</xs:element>
+															</xs:choice>
+															<xs:element name="Flusso">
+																<xs:complexType>
+																	<xs:choice>
+																		<xs:element name="Tutte" type="xs:string" fixed="ALL"/>
+																		<xs:element name="FatturaB2B" type="ns1:FatturaB2BRicevuteType"/>
+																		<xs:element name="FatturaPA" type="ns1:FatturaPARicevuteType"/>
+																	</xs:choice>
+																</xs:complexType>
+															</xs:element>
+															<xs:element name="Ruolo" type="xs:string" fixed="CESSIONARIO"/>
+														</xs:sequence>
+													</xs:complexType>
+												</xs:element>
+												<xs:element name="FattureFEDisposizione">
+													<xs:complexType>
+														<xs:sequence>
+															<xs:element name="DataEmissione">
+																<xs:complexType>
+																	<xs:sequence>
+																		<xs:element name="Da" type="xs:date"/>
+																		<xs:element name="A" type="xs:date"/>
+																	</xs:sequence>
+																</xs:complexType>
+															</xs:element>
+															<xs:element name="Ruolo" type="xs:string" fixed="CESSIONARIO"/>
+														</xs:sequence>
+													</xs:complexType>
+												</xs:element>
+												<xs:element name="FattureSDI">
+													<xs:complexType>
+														<xs:sequence>
+															<xs:element name="idsdi" type="xs:long" maxOccurs="10000"/>
+														</xs:sequence>
+													</xs:complexType>
+												</xs:element>
+												<xs:element name="FattureDataAcc">
+													<xs:complexType>
+														<xs:sequence>
+															<xs:element name="DataAccoglienza">
+																<xs:complexType>
+																	<xs:sequence>
+																		<xs:element name="Da" type="xs:date"/>
+																		<xs:element name="A" type="xs:date"/>
+																	</xs:sequence>
+																</xs:complexType>
+															</xs:element>
+															<xs:element name="Flusso">
+																<xs:complexType>
+																	<xs:choice>
+																		<xs:element name="Tutte" type="xs:string" fixed="ALL"/>
+																		<xs:element name="FatturaB2B" type="ns1:FatturaB2BAccType"/>
+																		<xs:element name="FatturaPA" type="ns1:FatturaPAAccType"/>
+																	</xs:choice>
+																</xs:complexType>
+															</xs:element>
+															<xs:element name="Ruolo">
+																<xs:complexType>
+																	<xs:choice>
+																		<xs:element name="Cedente" type="xs:string" fixed="CEDENTE"/>
+																		<xs:element name="Cessionario" type="xs:string" fixed="CESSIONARIO"/>
+																	</xs:choice>
+																</xs:complexType>
+															</xs:element>
+														</xs:sequence>
+													</xs:complexType>
+												</xs:element>
+											</xs:choice>
+										</xs:sequence>
+									</xs:complexType>
+								</xs:element>
+								<xs:element name="Corrispettivi">
+									<xs:complexType>
+										<xs:sequence>
+											<xs:element name="Richiesta" type="xs:string" fixed="CORR"/>
+											<xs:element name="DataRilevazione">
+												<xs:complexType>
+													<xs:sequence>
+														<xs:element name="Da" type="xs:date"/>
+														<xs:element name="A" type="xs:date"/>
+													</xs:sequence>
+												</xs:complexType>
+											</xs:element>
+											<xs:element name="ElencoPiva">
+												<xs:complexType>
+													<xs:sequence>
+														<xs:element name="Piva" type="ns1:PivaType" maxOccurs="unbounded"/>
+													</xs:sequence>
+												</xs:complexType>
+											</xs:element>
+											<xs:element name="TipoCorrispettivo" type="ns1:TipoCorrispettivoType"/>
+										</xs:sequence>
+									</xs:complexType>
+								</xs:element>
+								<xs:element name="Elenchi">
+									<xs:complexType>
+										<xs:sequence>
+											<xs:element name="Richiesta" type="ns1:TipoElencoType"/>
+											<xs:element name="ElencoPiva">
+												<xs:complexType>
+													<xs:sequence>
+														<xs:element name="Piva" type="ns1:PivaType" maxOccurs="unbounded"/>
+													</xs:sequence>
+												</xs:complexType>
+											</xs:element>
+											<xs:element name="TipoRicerca" type="ns1:TipoRicercaType"/>
+											<xs:choice>																						
+												<xs:element name="ElencoVidimazioniFattureRSM">
+													<xs:complexType>
+														<xs:choice>
+															<xs:element name="FattureEmesse">
+																<xs:complexType>
+																	<xs:sequence>
+																		<xs:choice>
+																			<xs:sequence>
+																				<xs:element name="DataEmissione">
+																					<xs:complexType>
+																						<xs:sequence>
+																							<xs:element name="Da" type="xs:date"/>
+																							<xs:element name="A" type="xs:date"/>
+																						</xs:sequence>
+																					</xs:complexType>
+																				</xs:element>
+																				<xs:element name="VidimazioneEm" type="ns1:TipoVidimazioneType"/>
+																			</xs:sequence>
+																			<xs:sequence>
+																				<xs:element name="DataVidimazione">
+																					<xs:complexType>
+																						<xs:sequence>
+																							<xs:element name="Da" type="xs:date"/>
+																							<xs:element name="A" type="xs:date"/>
+																						</xs:sequence>
+																					</xs:complexType>
+																				</xs:element>
+																				<xs:element name="VidimazioneVid" type="xs:string" fixed="ESITATE"/>
+																			</xs:sequence>
+																		</xs:choice>
+																		<xs:element name="Ruolo" type="xs:string" fixed="CEDENTE"/>
+																	</xs:sequence>
+																</xs:complexType>
+															</xs:element>
+															<xs:element name="FattureRicevute">
+																<xs:complexType>
+																	<xs:sequence>
+																		<xs:choice>
+																			<xs:sequence>
+																				<xs:element name="DataEmissione">
+																					<xs:complexType>
+																						<xs:sequence>
+																							<xs:element name="Da" type="xs:date"/>
+																							<xs:element name="A" type="xs:date"/>
+																						</xs:sequence>
+																					</xs:complexType>
+																				</xs:element>
+																				<xs:element name="VidimazioneEm" type="ns1:TipoVidimazioneType"/>
+																			</xs:sequence>
+																			<xs:sequence>
+																				<xs:element name="DataRicezione">
+																					<xs:complexType>
+																						<xs:sequence>
+																							<xs:element name="Da" type="xs:date"/>
+																							<xs:element name="A" type="xs:date"/>
+																						</xs:sequence>
+																					</xs:complexType>
+																				</xs:element>
+																				<xs:element name="VidimazioneRic" type="ns1:TipoVidimazioneType"/>
+																			</xs:sequence>
+																			<xs:sequence>
+																				<xs:element name="DataVidimazione">
+																					<xs:complexType>
+																						<xs:sequence>
+																							<xs:element name="Da" type="xs:date"/>
+																							<xs:element name="A" type="xs:date"/>
+																						</xs:sequence>
+																					</xs:complexType>
+																				</xs:element>
+																				<xs:element name="VidimazioneVid" type="xs:string" fixed="ESITATE"/>
+																			</xs:sequence>
+																		</xs:choice>
+																		<xs:element name="Ruolo" type="xs:string" fixed="CESSIONARIO"/>
+																	</xs:sequence>
+																</xs:complexType>
+															</xs:element>
+														</xs:choice>
+													</xs:complexType>
+												</xs:element>
+											</xs:choice>
+										</xs:sequence>
+									</xs:complexType>
+								</xs:element>
+								<xs:element name="IvaPrecompilata">
+									<xs:complexType>
+										<xs:sequence>
+											<xs:element name="Richiesta" type="xs:string" fixed="IVA"/>
+											<xs:element name="ElencoPiva">
+												<xs:complexType>
+													<xs:sequence>
+														<xs:element name="Piva" type="ns1:PivaType" maxOccurs="unbounded"/>
+													</xs:sequence>
+												</xs:complexType>
+											</xs:element>
+											<xs:element name="Ricerca" type="xs:string" fixed="PUNTUALE"/>
+											<xs:element name="Anno" type="xs:string"/>
+											<xs:element name="Mese" type="xs:string"/>
+											<xs:choice>
+												<xs:element name="Registro">
+													<xs:complexType>
+														<xs:sequence>
+															<xs:element name="TipoRichiesta" type="xs:string" fixed="REGI"/>
+															<xs:element name="TipoOutput" type="ns1:OutputFileType"/>
+															<xs:element name="TipoRegistro" type="ns1:RegistroType"/>
+														</xs:sequence>
+													</xs:complexType>
+												</xs:element>
+												<xs:element name="Prospetto">
+													<xs:complexType>
+														<xs:sequence>
+															<xs:element name="TipoRichiesta" type="xs:string" fixed="PROS"/>
+														</xs:sequence>
+													</xs:complexType>
+												</xs:element>
+												<xs:element name="Lipe">
+													<xs:complexType>
+														<xs:sequence>
+															<xs:element name="TipoRichiesta" type="xs:string" fixed="LIPE"/>
+															<xs:element name="TipoOutput" type="ns1:OutputFileType"/>
+															<xs:element name="StatoModello" type="ns1:StatoModelloType"/>
+														</xs:sequence>
+													</xs:complexType>
+												</xs:element>
+												<xs:element name="Dichiarazione">
+													<xs:complexType>
+														<xs:sequence>
+															<xs:element name="TipoRichiesta" type="xs:string" fixed="DICH"/>
+															<xs:element name="TipoOutput" type="ns1:OutputFileType"/>
+															<xs:element name="StatoModello" type="ns1:StatoModelloType"/>
+															<xs:element name="TipoModello" type="ns1:TipoModelloType" minOccurs="0"/>
+														</xs:sequence>
+													</xs:complexType>
+												</xs:element>
+											</xs:choice>
+										</xs:sequence>
+									</xs:complexType>
+								</xs:element>
+							</xs:choice>
+						</xs:sequence>
+					</xs:complexType>
+				</xs:element>
+			</xs:sequence>
+		</xs:complexType>
+	</xs:element>
+</xs:schema>
