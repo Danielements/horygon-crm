@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { XMLParser } = require('fast-xml-parser');
 const { getSchemaRegistryEntry, syncSchemaRegistry } = require('./sdi-schema-registry');
+const { runSdiFiscalChecks } = require('./sdi-fiscal-checks');
 
 let libxmlPromise = null;
 
@@ -19,12 +20,18 @@ async function validateInvoiceXml({ xml, format }) {
   const rootInfo = detectRoot(parsed);
   const appErrors = validateApplicationRules({ parsed, rootInfo, format, schema });
   const formalTaxId = validateFormalTaxIds(xml);
+  const fiscalErrors = runSdiFiscalChecks(xml, { format });
   const warnings = buildValidationWarnings({ formalTaxId });
   const xsd = await validateXsd(xml, schema);
   return {
-    ok: xsd.ok && appErrors.length === 0 && formalTaxId.ok,
+    ok: xsd.ok && appErrors.length === 0 && formalTaxId.ok && fiscalErrors.length === 0,
     xsdValid: xsd.ok,
     formalTaxIdValid: formalTaxId.ok,
+    fiscalChecksValid: fiscalErrors.length === 0,
+    fiscal: {
+      ok: fiscalErrors.length === 0,
+      errors: fiscalErrors
+    },
     taxRegistryVerified: false,
     taxRegistryVerificationStatus: 'NOT_CHECKED',
     warnings,

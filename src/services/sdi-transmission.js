@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
+const tls = require('tls');
 const crypto = require('crypto');
 const { XMLParser } = require('fast-xml-parser');
 const db = require('../db/database');
@@ -13,8 +14,18 @@ const SDI_CERTS_DIR = process.env.SDI_CERTS_DIR || '/run/sdi-certs';
 const SOAP_ACTION_RICEVI_FILE = 'http://www.fatturapa.it/SdIRiceviFile/RiceviFile';
 
 async function transmitInvoiceToSdiTest(fatturaId) {
-  const generated = await generateOutboundXmlForInvoice(fatturaId, { mode: 'test' });
-  const result = await transmitGeneratedFlow(generated.flowId, { mode: 'test' });
+  return transmitInvoiceToSdi(fatturaId, { mode: 'test' });
+}
+
+async function transmitInvoiceToSdi(fatturaId, options = {}) {
+  const mode = String(options.mode || 'test').trim();
+  if (mode !== 'test' && mode !== 'production') throw new Error(`Modalita SDI non valida: ${mode}`);
+  const generated = await generateOutboundXmlForInvoice(fatturaId, {
+    mode,
+    allowUnsigned: options.allowUnsigned === true,
+    forceFormat: options.forceFormat
+  });
+  const result = await transmitGeneratedFlow(generated.flowId, { mode });
   return { ...generated, transmission: result };
 }
 
@@ -34,19 +45,43 @@ async function transmitGeneratedFlow(flowId, options = {}) {
   if (!flow) throw new Error('Flusso SDI non trovato');
   if (!flow.xml_path) throw new Error('Flusso SDI senza XML generato');
 
+  const mode = String(options.mode || flow.modalita || 'test').trim();
+
+  // I guardrail di ambiente vanno valutati prima di toccare il file: un flusso
+  // generato per un ambiente non deve poter finire nell'altro, perche' nome file
+  // e progressivo restano legati alla modalita' con cui sono stati prodotti.
+  const flowMode = String(flow.modalita || 'test').trim();
+  if (flowMode !== mode) {
+    throw new Error(`Il flusso SDI ${flow.id} e stato generato in modalita "${flowMode}" e non puo essere trasmesso in "${mode}"`);
+  }
+  if (mode === 'production') {
+    const configuredMode = String(getSetting('sdi.mode', 'test') || 'test').trim();
+    if (configuredMode !== 'production') {
+      throw new Error('Invio in produzione bloccato: sdi.mode non e impostato su "production"');
+    }
+  }
+
   const xmlAbsolutePath = resolveUploadPath(flow.xml_path);
   if (!fs.existsSync(xmlAbsolutePath)) throw new Error(`XML SDI non trovato: ${flow.xml_path}`);
   const xmlBuffer = fs.readFileSync(xmlAbsolutePath);
-  const mode = String(options.mode || flow.modalita || 'test').trim();
   const endpoint = getTransmissionEndpoint(mode);
   const soapMessage = buildRiceviFileMtomMessage(flow.nome_file, xmlBuffer);
   const response = await postSoapToSdi(endpoint, soapMessage, mode);
   const responseStorage = persistTransmissionResponse(response.bodyBuffer, flow.nome_file || `flow-${flow.id}`);
   const responseXml = extractXmlFromHttpResponse(response);
   const parsed = parseRiceviFileResponse(responseXml || response.body);
-  const success = response.statusCode >= 200 && response.statusCode < 300 && !parsed.fault;
-  const stato = success ? 'inviato_test' : 'errore_invio_test';
-  const descrizione = parsed.fault?.faultstring || parsed.erroreDescrizione || response.statusMessage || response.body.slice(0, 500) || null;
+  const httpOk = response.statusCode >= 200 && response.statusCode < 300;
+  const success = httpOk && !parsed.fault && parsed.accepted === true;
+  const retryable = Boolean(parsed.retryable) || (!httpOk && response.statusCode >= 500);
+  const stato = success
+    ? `inviato_${mode}`
+    : (retryable ? `invio_da_ritentare_${mode}` : `errore_invio_${mode}`);
+  const descrizione = parsed.fault?.faultstring
+    || parsed.erroreDescrizione
+    || (httpOk && !parsed.identificativoSdi ? 'Risposta SdI senza IdentificativoSdI: presa in carico non confermata' : null)
+    || response.statusMessage
+    || response.body.slice(0, 500)
+    || null;
 
   db.prepare(`
     UPDATE fatture_sdi_flussi
@@ -61,7 +96,7 @@ async function transmitGeneratedFlow(flowId, options = {}) {
   `).run(
     stato,
     parsed.identificativoSdi || null,
-    parsed.esito || (success ? 'HTTP_200' : `HTTP_${response.statusCode}`),
+    parsed.errore || (success ? 'ACCETTATO' : `HTTP_${response.statusCode}`),
     descrizione,
     responseStorage.relativePath,
     flow.id
@@ -97,12 +132,16 @@ async function transmitGeneratedFlow(flowId, options = {}) {
 
   return {
     flowId: flow.id,
+    mode,
     endpoint,
     statusCode: response.statusCode,
     statusMessage: response.statusMessage,
     responsePath: responseStorage.relativePath,
     identificativoSdi: parsed.identificativoSdi || null,
-    esito: parsed.esito || null,
+    errore: parsed.errore || null,
+    erroreDescrizione: parsed.erroreDescrizione || null,
+    retryable,
+    stato,
     fault: parsed.fault || null,
     responseHeaders: response.headers,
     responsePreview: response.body.slice(0, 1200),
@@ -189,9 +228,17 @@ function loadCaBundle(mode = 'test') {
       .filter((name) => /\.(cer|crt|pem)$/i.test(name))
       .forEach((name) => files.push(path.join(folder, name)));
   }
-  return [...new Set(files)]
+  const local = [...new Set(files)]
     .filter((file) => fs.existsSync(file))
     .map((file) => loadCertificatePem(file));
+
+  // Passare "ca" a Node sostituisce lo store di sistema. Gli endpoint SdI usano
+  // certificati server emessi da CA pubbliche (servizi.fatturapa.it e'
+  // firmato Sectigo), quindi senza le radici di sistema la connessione si
+  // reggerebbe solo sul certificato foglia copiato in cartella: al primo
+  // rinnovo da parte di SOGEI l'handshake fallirebbe. Le radici standard
+  // restano quindi in bundle insieme alla CA dell'Agenzia delle Entrate.
+  return [...tls.rootCertificates, ...local];
 }
 
 function buildRiceviFileSoapEnvelope(filename, xml) {
@@ -277,15 +324,33 @@ function parseRiceviFileResponse(xml) {
       || body?.RiceviFileResponse
       || findObjectByKey(parsed, 'rispostaSdIRiceviFile')
       || findObjectByKey(parsed, 'RispostaSdIRiceviFile');
+    const identificativoSdi = firstValue(response, ['IdentificativoSdI', 'identificativoSdI']);
+    const errore = firstValue(response, ['Errore', 'errore']);
     return {
-      identificativoSdi: firstValue(response, ['IdentificativoSdI', 'identificativoSdI']),
+      identificativoSdi,
       dataOraRicezione: firstValue(response, ['DataOraRicezione', 'dataOraRicezione']),
-      esito: firstValue(response, ['Esito', 'esito']),
-      erroreDescrizione: firstValue(response, ['Errore', 'errore', 'Descrizione', 'descrizione'])
+      errore: errore || null,
+      erroreDescrizione: errore ? describeErroreInvio(errore) : null,
+      // Il SdI risponde HTTP 200 anche quando rifiuta la presa in carico: la
+      // trasmissione e' andata a buon fine solo senza Errore e con un
+      // IdentificativoSdI valorizzato (TrasmissioneTypes_v1.1.xsd).
+      accepted: Boolean(identificativoSdi) && !errore,
+      retryable: errore === 'EI02'
     };
   } catch (error) {
-    return { parseError: error.message };
+    return { parseError: error.message, accepted: false, retryable: false };
   }
+}
+
+// Istruzioni per il servizio SDICoop - Trasmissione v3.3, operazione RiceviFile.
+const ERRORI_INVIO = {
+  EI01: 'File allegato vuoto',
+  EI02: 'Servizio momentaneamente non disponibile',
+  EI03: 'Utente non abilitato'
+};
+
+function describeErroreInvio(code) {
+  return `${code} - ${ERRORI_INVIO[code] || 'Errore di trasmissione non documentato'}`;
 }
 
 function extractXmlFromHttpResponse(response) {
@@ -427,5 +492,6 @@ module.exports = {
   persistTransmissionResponse,
   postSoapToSdi,
   transmitGeneratedFlow,
+  transmitInvoiceToSdi,
   transmitInvoiceToSdiTest
 };

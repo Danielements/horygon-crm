@@ -5,6 +5,8 @@ const db = require('../db/database');
 const { getSetting } = require('./google');
 const { getSchemaRegistryEntry, syncSchemaRegistry } = require('./sdi-schema-registry');
 const { validateInvoiceXml } = require('./sdi-xml-validator');
+const { allocateOutboundProgressivo } = require('./sdi-progressivo');
+const { applySdiSignature, getSignatureStatus, isSignatureRequired } = require('./sdi-signature');
 const {
   buildOrdinaryInvoiceXml,
   buildSimplifiedInvoiceXml,
@@ -20,11 +22,29 @@ async function generateOutboundXmlForInvoice(fatturaId, options = {}) {
   syncSchemaRegistry();
   const invoice = loadInvoice(fatturaId);
   if (!invoice) throw new Error('Fattura non trovata');
-  if (invoice.tipo !== 'emessa') throw new Error('Il test SDI e disponibile solo per fatture emesse');
+  if (invoice.tipo !== 'emessa') throw new Error('La generazione XML SDI e disponibile solo per fatture emesse');
 
   const company = loadCompanyProfile();
   const customer = loadRecipientProfile(invoice.anagrafica_id);
-  const payload = buildInvoicePayload(invoice, company, customer, options);
+  const format = options.forceFormat || (customer.isPa ? 'FPA12' : 'FPR12');
+
+  // Firma e codice destinatario vanno verificati prima di consumare un
+  // progressivo: un nome file bruciato non e' piu' riutilizzabile presso il SdI.
+  if (isSignatureRequired(format) && !options.allowUnsigned) {
+    const status = getSignatureStatus();
+    if (!status.available) {
+      throw new Error(
+        `La fattura ${format} e' destinata alla PA e deve essere firmata `
+        + `(Specifiche tecniche SdI par. 2.1), ma la firma non e' disponibile: ${status.reason}`
+      );
+    }
+  }
+  resolveDestinationCode(customer, format);
+
+  const payload = buildInvoicePayload(invoice, company, customer, {
+    ...options,
+    progressivo: options.progressivo || allocateOutboundProgressivo()
+  });
   const xml = payload.formatoTrasmissione === 'FSM10'
     ? buildSimplifiedInvoiceXml(payload)
     : buildOrdinaryInvoiceXml(payload);
@@ -32,11 +52,17 @@ async function generateOutboundXmlForInvoice(fatturaId, options = {}) {
   if (!validation.ok) {
     const messages = [
       ...(validation.xsd.errors || []).map((item) => item.message),
-      ...(validation.application.errors || [])
+      ...(validation.application.errors || []),
+      ...(validation.fiscal?.errors || []).map((item) => `${item.code} ${item.message}`)
     ].filter(Boolean);
     throw new Error(`XML FatturaPA non valido: ${messages.join(' | ')}`);
   }
-  return saveOutboundXml(invoice, customer, xml, payload, validation, options);
+
+  const signature = applySdiSignature(xml, {
+    format: payload.formatoTrasmissione,
+    force: Boolean(options.allowUnsigned)
+  });
+  return saveOutboundXml(invoice, customer, xml, payload, validation, options, signature);
 }
 
 function loadInvoice(fatturaId) {
@@ -157,6 +183,7 @@ function buildInvoicePayload(invoice, company, customer, options = {}) {
       quantita,
       unitaMisura: String(line.unita_misura || 'NR').trim(),
       prezzoUnitario,
+      scontoMaggiorazione: buildScontoMaggiorazione(line, quantita),
       totaleRiga,
       aliquotaIva,
       importoIva: toAmount(line.importo_iva) ?? round2(totaleRiga * aliquotaIva / 100),
@@ -178,6 +205,7 @@ function buildInvoicePayload(invoice, company, customer, options = {}) {
     : summarizeVat(lines);
 
   const format = options.forceFormat || (customer.isPa ? 'FPA12' : 'FPR12');
+  const destinationCode = resolveDestinationCode(customer, format);
   const schema = getSchemaRegistryEntry(format);
   const totaleDocumento = toAmount(invoice.totale) || round2(lines.reduce((sum, line) => sum + line.totaleRiga, 0) + riepilogo.reduce((sum, row) => sum + row.imposta, 0));
   const customerVat = splitVat(customer.piva);
@@ -190,8 +218,10 @@ function buildInvoicePayload(invoice, company, customer, options = {}) {
     tipoDocumento: mapDocumentType(invoice.tipo_documento),
     formatoTrasmissione: format,
     namespace: schema.namespace,
-    fileProgressivo: buildProgressivoInvio(invoice.id),
-    destinationCode: customer.destinationCode || (customer.pec ? '0000000' : ''),
+    fileProgressivo: options.progressivo || buildProgressivoInvio(invoice.id),
+    destinationCode,
+    // Il builder emette PECDestinatario solo quando la regola lo consente
+    // (CodiceDestinatario 0000000 e destinatario diverso dalla PA).
     pecDestinatario: customer.pec ? String(customer.pec).trim() : '',
     company,
     transmitter: {
@@ -218,37 +248,51 @@ function buildInvoicePayload(invoice, company, customer, options = {}) {
   };
 }
 
-function saveOutboundXml(invoice, customer, xml, payload, validation, options = {}) {
+function saveOutboundXml(invoice, customer, xml, payload, validation, options = {}, signature = null) {
   const schema = getSchemaRegistryEntry(payload.formatoTrasmissione);
   const dayDir = path.join(OUTBOUND_DIR, new Date().toISOString().slice(0, 10).replace(/-/g, '/'));
   ensureDir(dayDir);
-  const filename = buildFilename(invoice, customer, payload);
-  const xmlSha256 = crypto.createHash('sha256').update(xml).digest('hex');
-  const immutableFilename = `${xmlSha256}_${filename}`;
-  const absolutePath = path.join(dayDir, immutableFilename);
-  if (!fs.existsSync(absolutePath)) fs.writeFileSync(absolutePath, xml, 'utf8');
-  const relativePath = `/${toPosix(path.relative(ROOT, absolutePath))}`;
+  const applied = signature || { signed: false, buffer: Buffer.from(xml, 'utf8'), extension: '.xml', meta: { signed: false } };
+  const filename = buildFilename(invoice, customer, payload, applied.extension);
   const mode = String(options.mode || getSetting('sdi.mode', 'test') || 'test').trim();
+
+  const xmlSha256 = crypto.createHash('sha256').update(xml).digest('hex');
+  const transmittedSha256 = crypto.createHash('sha256').update(applied.buffer).digest('hex');
+
+  // Il file trasmesso e' quello firmato quando la firma e' richiesta; l'XML in
+  // chiaro resta comunque archiviato in forma immutabile per l'audit.
+  const absolutePath = path.join(dayDir, `${transmittedSha256}_${filename}`);
+  if (!fs.existsSync(absolutePath)) fs.writeFileSync(absolutePath, applied.buffer);
+  const relativePath = `/${toPosix(path.relative(ROOT, absolutePath))}`;
+
+  let xmlRelativePath = relativePath;
+  if (applied.signed) {
+    const xmlAbsolutePath = path.join(dayDir, `${xmlSha256}_${filename.replace(/\.p7m$/i, '')}`);
+    if (!fs.existsSync(xmlAbsolutePath)) fs.writeFileSync(xmlAbsolutePath, xml, 'utf8');
+    xmlRelativePath = `/${toPosix(path.relative(ROOT, xmlAbsolutePath))}`;
+  }
 
   const flow = db.prepare(`
     INSERT INTO fatture_sdi_flussi (
       fattura_id, direzione, modalita, tipo_messaggio, nome_file, stato, xml_path, hash_file, payload_meta, ultimo_evento_il,
-      sdi_formato, sdi_schema_name, sdi_schema_version, sdi_schema_sha256, sdi_xml_sha256, sdi_xml_immutabile_path
-    ) VALUES (?,?,?,?,?,?,?,?,?,datetime('now'),?,?,?,?,?,?)
+      sdi_formato, sdi_schema_name, sdi_schema_version, sdi_schema_sha256, sdi_xml_sha256, sdi_xml_immutabile_path,
+      firma_applicata, firma_meta
+    ) VALUES (?,?,?,?,?,?,?,?,?,datetime('now'),?,?,?,?,?,?,?,?)
   `).run(
     invoice.id,
     'outbound',
     mode,
     'fattura',
     filename,
-    'xml_generato_test',
+    `xml_generato_${mode}`,
     relativePath,
-    xmlSha256,
+    transmittedSha256,
     JSON.stringify({
       formato_trasmissione: payload.formatoTrasmissione,
       progressivo_invio: payload.fileProgressivo,
       codice_destinatario: payload.destinationCode,
       cliente: payload.customer.denomination,
+      firma: applied.meta,
       validation
     }),
     payload.formatoTrasmissione,
@@ -256,31 +300,38 @@ function saveOutboundXml(invoice, customer, xml, payload, validation, options = 
     schema.schemaVersion,
     schema.sha256,
     xmlSha256,
-    relativePath
+    xmlRelativePath,
+    applied.signed ? (applied.meta?.format || 'CAdES-BES') : null,
+    JSON.stringify(applied.meta || {})
   );
 
   db.prepare(`
     UPDATE fatture
     SET xml_path = ?, stato_sdi = ?
     WHERE id = ?
-  `).run(relativePath, 'xml_generato_test', invoice.id);
+  `).run(relativePath, `xml_generato_${mode}`, invoice.id);
 
   return {
     flowId: flow.lastInsertRowid,
     filename,
+    mode,
+    signed: applied.signed,
+    signature: applied.meta,
     xmlPath: relativePath,
+    unsignedXmlPath: xmlRelativePath,
     absolutePath,
-    hash: xmlSha256,
+    hash: transmittedSha256,
+    xmlHash: xmlSha256,
     validation,
     preview: xml
   };
 }
 
-function buildFilename(invoice, customer, payload) {
+function buildFilename(invoice, customer, payload, extension = '.xml') {
   const transmitterCountry = xmlSafeFilePart(payload.company.country || 'IT').slice(0, 2).toUpperCase();
   const transmitterCode = xmlSafeFilePart(payload.company.vat || payload.company.fiscalCode || '00000000000').slice(0, 28);
   const progressivo = buildFilenameProgressivo(payload.fileProgressivo || buildProgressivoInvio(invoice.id));
-  return `${transmitterCountry}${transmitterCode}_${progressivo}.xml`;
+  return `${transmitterCountry}${transmitterCode}_${progressivo}${extension}`;
 }
 
 function buildFilenameProgressivo(value) {
@@ -289,13 +340,50 @@ function buildFilenameProgressivo(value) {
 
 function buildPaymentPayload(invoice, total) {
   return {
-    condizioniPagamento: 'TP02',
+    condizioniPagamento: String(getSetting('sdi.payment.condizioni', 'TP02') || 'TP02').trim(),
     details: [{
-      modalitaPagamento: 'MP05',
+      modalitaPagamento: String(getSetting('sdi.payment.modalita', 'MP05') || 'MP05').trim(),
       dataScadenzaPagamento: normalizeDate(invoice.scadenza || invoice.data) || undefined,
-      importoPagamento: total
+      importoPagamento: total,
+      istitutoFinanziario: String(getSetting('sdi.payment.istituto', '') || '').trim() || undefined,
+      iban: normalizeIdentifier(getSetting('sdi.payment.iban', '')) || undefined,
+      bic: normalizeIdentifier(getSetting('sdi.payment.bic', '')) || undefined
     }]
   };
+}
+
+// Il CRM registra lo sconto di riga come importo assoluto sul totale della riga
+// (totale_riga = quantita * prezzo_unitario - sconto), mentre il controllo SdI
+// 00423 confronta PrezzoTotale con (PrezzoUnitario - ScontoTot) * Quantita, dove
+// lo sconto e' riferito alla singola unita'. Va quindi riportato per unita'.
+function buildScontoMaggiorazione(line, quantita) {
+  const sconto = toAmount(line.sconto) || 0;
+  if (!sconto || !quantita) return null;
+  const perUnit = sconto / quantita;
+  return [{
+    tipo: perUnit >= 0 ? 'SC' : 'MG',
+    importo: Math.abs(perUnit)
+  }];
+}
+
+// Controllo SdI 00427: FPA12 richiede un codice di 6 caratteri, FPR12 e FSM10 di
+// 7. Il codice convenzionale 0000000 vale solo per i destinatari privati.
+function resolveDestinationCode(customer, format) {
+  const configured = String(customer.destinationCode || '').trim().toUpperCase();
+  if (format === 'FPA12') {
+    if (!configured) {
+      throw new Error('La fattura e destinata a una PA ma il Codice Univoco Ufficio (6 caratteri) non e valorizzato');
+    }
+    if (configured.length !== 6) {
+      throw new Error(`Codice Univoco Ufficio "${configured}" non valido per una fattura PA: sono richiesti 6 caratteri`);
+    }
+    return configured;
+  }
+  if (!configured) return '0000000';
+  if (configured.length !== 7) {
+    throw new Error(`Codice Destinatario "${configured}" non valido per il formato ${format}: sono richiesti 7 caratteri`);
+  }
+  return configured;
 }
 
 function splitVat(value) {

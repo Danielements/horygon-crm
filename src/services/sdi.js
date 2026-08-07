@@ -26,7 +26,28 @@ const DEFAULT_SETTINGS = {
   'sdi.test.remote_server_cert_path': sdiPath('test', 'testservizi.fatturapa.it.cer'),
   'sdi.test.remote_client_public_cert_path': sdiPath('test', 'SistemaInterscambioFatturaPATest.cer'),
   'sdi.csr.client_path': sdiPath('csr', 'client.csr'),
-  'sdi.csr.server_path': sdiPath('csr', 'server.csr')
+  'sdi.csr.server_path': sdiPath('csr', 'server.csr'),
+  // Guardrail operativo sull'invio in produzione (non e' un requisito SdI).
+  'sdi.production_send_policy': 'MANUAL_CONFIRMATION',
+  // Verifica applicativa del certificato client SdI: off | log | enforce.
+  'sdi.inbound.client_cert_policy': 'log',
+  'sdi.inbound.client_dn_match': 'Sistema Interscambio Fattura PA',
+  // Firma CAdES-BES richiesta dalle Specifiche tecniche par. 2.1 per le FPA12.
+  'sdi.signature.mode': 'disabled',
+  // when_required = firma solo le FPA12 (obbligatorie); always = firma tutto.
+  'sdi.signature.apply': 'when_required',
+  'sdi.signature.certificate_path': sdiPath('firma', 'signer.pem'),
+  'sdi.signature.key_path': sdiPath('firma', 'signer.key'),
+  'sdi.signature.chain_path': '',
+  // Progressivo tecnico del nome file: prefisso + contatore persistente.
+  'sdi.progressivo.prefix': 'H',
+  'sdi.progressivo.start': '1',
+  // Dati di pagamento riportati in fattura.
+  'sdi.payment.condizioni': 'TP02',
+  'sdi.payment.modalita': 'MP05',
+  'sdi.payment.iban': '',
+  'sdi.payment.bic': '',
+  'sdi.payment.istituto': ''
 };
 
 function ensureSdiSettingsSeed() {

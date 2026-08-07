@@ -7,7 +7,10 @@ const { authMiddleware, requirePermesso } = require('../middleware/auth');
 const { writeAudit } = require('../services/audit');
 const { writeSystemLog } = require('../services/system-log');
 const { generateOutboundXmlForInvoice } = require('../services/sdi-fatturapa');
-const { transmitInvoiceToSdiTest } = require('../services/sdi-transmission');
+const { transmitInvoiceToSdi, transmitInvoiceToSdiTest } = require('../services/sdi-transmission');
+const { getSignatureStatus } = require('../services/sdi-signature');
+const { peekOutboundSequence } = require('../services/sdi-progressivo');
+const { getSetting } = require('../services/google');
 const { sendEsitoCommittenteToSdiTest } = require('../services/sdi-esito-committente');
 const { buildRiceviFattureResponse, processInboundSdiRequest, sendEmptySdiOneWayResponse } = require('../services/sdi-soap-inbound');
 const { receiveSdiNotificationXml } = require('../services/sdi-inbound');
@@ -40,6 +43,31 @@ router.get('/ws/inbound', (req, res) => {
 
 router.post('/ws/inbound', xmlTextParser, (req, res) => {
   try {
+    const clientCert = checkInboundClientCertificate(req);
+    if (!clientCert.ok) {
+      writeSystemLog({
+        livello: clientCert.policy === 'enforce' ? 'error' : 'warning',
+        origine: 'sdi.ws.inbound',
+        route: '/api/sdi/ws/inbound',
+        metodo: 'POST',
+        messaggio: clientCert.policy === 'enforce'
+          ? `Chiamata SdI rifiutata: ${clientCert.reason}`
+          : `Chiamata SdI senza certificato client valido: ${clientCert.reason}`,
+        dettagli: {
+          event: 'sdi.inbound.client_cert',
+          policy: clientCert.policy,
+          verify: clientCert.verify,
+          dn: clientCert.dn,
+          host: String(req.headers.host || ''),
+          remoteIp: req.ip || req.socket?.remoteAddress || null
+        }
+      });
+      if (clientCert.policy === 'enforce') {
+        res.status(403).end();
+        return;
+      }
+    }
+
     const result = processInboundSdiRequest(req);
     if (result.responseKind === 'ricevi_fatture_er01') {
       res
@@ -242,7 +270,149 @@ router.post('/fatture/:id/esito-committente-test', requirePermesso('fatture', 'e
   }
 });
 
+// Stato operativo del canale: modalita, policy di invio, firma e progressivi.
+router.get('/status', requirePermesso('fatture', 'read'), (req, res) => {
+  const mode = normalizeMode(getSetting('sdi.mode', 'test'));
+  const signature = getSignatureStatus();
+  res.json({
+    mode,
+    productionSendPolicy: getProductionSendPolicy(),
+    signature: {
+      mode: signature.mode,
+      available: signature.available,
+      reason: signature.reason,
+      certificate: signature.certificate
+    },
+    progressivo: peekOutboundSequence(),
+    canSendProduction: mode === 'production'
+  });
+});
+
+// Invio unificato test/produzione. La conferma esplicita e' un guardrail
+// operativo HORYGON, non un requisito SdI: con policy MANUAL_CONFIRMATION ogni
+// invio in produzione richiede confirm=true.
+router.post('/fatture/:id/send', requirePermesso('fatture', 'edit'), async (req, res) => {
+  const requestedMode = normalizeMode(req.body?.mode || 'test');
+  const route = `/api/sdi/fatture/${req.params.id}/send`;
+  try {
+    if (requestedMode === 'production') {
+      const configuredMode = normalizeMode(getSetting('sdi.mode', 'test'));
+      if (configuredMode !== 'production') {
+        throw new Error('Invio in produzione non disponibile: sdi.mode e impostato su "test"');
+      }
+      if (getProductionSendPolicy() === 'MANUAL_CONFIRMATION' && req.body?.confirm !== true) {
+        const error = new Error('Invio in produzione richiede conferma esplicita (confirm=true)');
+        error.needsConfirmation = true;
+        throw error;
+      }
+    }
+
+    const result = await transmitInvoiceToSdi(req.params.id, {
+      mode: requestedMode,
+      allowUnsigned: req.body?.allowUnsigned === true
+    });
+
+    writeAudit({
+      utente_id: req.user.id,
+      azione: requestedMode === 'production' ? 'sdi.fattura.send_production' : 'sdi.fattura.send_test',
+      entita_tipo: 'fattura',
+      entita_id: Number(req.params.id),
+      dettagli: {
+        mode: requestedMode,
+        flowId: result.flowId,
+        filename: result.filename,
+        signed: result.signed,
+        endpoint: result.transmission.endpoint,
+        statusCode: result.transmission.statusCode,
+        identificativoSdi: result.transmission.identificativoSdi,
+        errore: result.transmission.errore,
+        success: result.transmission.success
+      }
+    });
+    writeSystemLog({
+      livello: result.transmission.success ? 'info' : 'error',
+      origine: 'sdi.send',
+      route,
+      metodo: 'POST',
+      utente_id: req.user.id,
+      messaggio: result.transmission.success
+        ? `Fattura trasmessa a SDI ${requestedMode.toUpperCase()}: ${result.transmission.identificativoSdi || result.filename}`
+        : `Invio SDI ${requestedMode.toUpperCase()} non riuscito: ${result.transmission.erroreDescrizione || result.transmission.statusCode}`,
+      dettagli: { flowId: result.flowId, filename: result.filename, transmission: result.transmission }
+    });
+    res.status(result.transmission.success ? 200 : 502).json({ ok: result.transmission.success, ...result });
+  } catch (error) {
+    writeSystemLog({
+      livello: 'error',
+      origine: 'sdi.send',
+      route,
+      metodo: 'POST',
+      utente_id: req.user.id,
+      messaggio: error.message,
+      stack: error.stack || null
+    });
+    res.status(error.needsConfirmation ? 409 : 400).json({
+      error: error.message,
+      needsConfirmation: Boolean(error.needsConfirmation)
+    });
+  }
+});
+
 module.exports = router;
+
+// Verifica applicativa del certificato client SdI, a partire dall'esito che
+// nginx propaga in X-SSL-Client-Verify / X-SSL-Client-DN.
+//
+// Serve come secondo livello: se un giorno il vhost venisse riconfigurato senza
+// ssl_verify_client, la protezione resterebbe comunque attiva qui. Perche' sia
+// affidabile il container non deve essere raggiungibile direttamente da rete
+// (in docker-compose la porta e' pubblicata solo su 127.0.0.1), altrimenti quegli
+// header sono falsificabili dal chiamante.
+//
+// Politiche: off = nessun controllo; log = registra le anomalie senza bloccare;
+// enforce = rifiuta con 403. Il default e' "log" perche' bloccare per errore
+// significa perdere consegne SdI in silenzio.
+function checkInboundClientCertificate(req) {
+  const policy = String(getSetting('sdi.inbound.client_cert_policy', 'log') || 'log').trim().toLowerCase();
+  if (policy === 'off') return { ok: true, policy, verify: null, dn: null, reason: null };
+
+  const verify = String(req.headers['x-ssl-client-verify'] || '').trim().toUpperCase();
+  const dn = String(req.headers['x-ssl-client-dn'] || '').trim();
+  const expectedDn = String(getSetting('sdi.inbound.client_dn_match', 'Sistema Interscambio Fattura PA') || '').trim();
+
+  if (verify !== 'SUCCESS') {
+    return {
+      ok: false,
+      policy,
+      verify: verify || 'ASSENTE',
+      dn,
+      reason: verify
+        ? `esito verifica certificato client "${verify}"`
+        : 'nessun esito di verifica propagato dal proxy (header X-SSL-Client-Verify mancante)'
+    };
+  }
+  if (expectedDn && !dn.includes(expectedDn)) {
+    return {
+      ok: false,
+      policy,
+      verify,
+      dn,
+      reason: `certificato client valido ma intestato a "${dn}" invece di "${expectedDn}"`
+    };
+  }
+  return { ok: true, policy, verify, dn, reason: null };
+}
+
+function normalizeMode(value) {
+  const mode = String(value || 'test').trim().toLowerCase();
+  if (mode !== 'test' && mode !== 'production') throw new Error(`Modalita SDI non valida: ${value}`);
+  return mode;
+}
+
+function getProductionSendPolicy() {
+  const policy = String(getSetting('sdi.production_send_policy', 'MANUAL_CONFIRMATION') || 'MANUAL_CONFIRMATION').trim().toUpperCase();
+  return policy === 'AUTO_AFTER_VALIDATION' ? 'AUTO_AFTER_VALIDATION' : 'MANUAL_CONFIRMATION';
+}
 
 function getPublicBaseUrl(req) {
   const proto = req.headers['x-forwarded-proto'] ? String(req.headers['x-forwarded-proto']).split(',')[0].trim() : req.protocol;

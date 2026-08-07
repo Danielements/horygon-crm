@@ -365,25 +365,6 @@ function ensureColumn(table, definition) {
 ].forEach(col => ensureColumn('fatture_righe', col));
 
 [
-  "sdi_formato TEXT",
-  "sdi_schema_name TEXT",
-  "sdi_schema_version TEXT",
-  "sdi_schema_sha256 TEXT",
-  "sdi_xml_sha256 TEXT",
-  "sdi_xml_immutabile_path TEXT"
-].forEach(col => ensureColumn('fatture_sdi_flussi', col));
-
-[
-  "original_filename TEXT",
-  "identificativo_sdi TEXT",
-  "hash_sha256 TEXT",
-  "ricevuto_il TEXT",
-  "fattura_id INTEGER",
-  "stato_normalizzato TEXT",
-  "nome_file_fattura TEXT"
-].forEach(col => ensureColumn('fatture_sdi_notifiche', col));
-
-[
   "imponibile REAL DEFAULT 0",
   "iva REAL DEFAULT 0",
   "valuta TEXT DEFAULT 'EUR'"
@@ -482,6 +463,12 @@ db.exec(`
     sha256 TEXT NOT NULL,
     enabled INTEGER DEFAULT 1,
     updated_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS sdi_progressivi (
+    chiave TEXT PRIMARY KEY,
+    valore INTEGER NOT NULL DEFAULT 0,
+    aggiornato_il TEXT DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS sdi_interoperability_tests (
@@ -691,6 +678,44 @@ db.exec(`
     FOREIGN KEY (utente_id) REFERENCES utenti(id) ON DELETE CASCADE
   );
 `);
+
+// Le migrazioni delle tabelle SDI devono girare dopo il blocco di creazione qui
+// sopra: le tabelle fatture_sdi_flussi e fatture_sdi_notifiche non esistono
+// ancora nel punto in cui vengono applicate le altre ensureColumn, quindi su un
+// database nuovo le ALTER TABLE fallirebbero in silenzio.
+[
+  "sdi_formato TEXT",
+  "sdi_schema_name TEXT",
+  "sdi_schema_version TEXT",
+  "sdi_schema_sha256 TEXT",
+  "sdi_xml_sha256 TEXT",
+  "sdi_xml_immutabile_path TEXT",
+  "firma_applicata TEXT",
+  "firma_meta TEXT"
+].forEach(col => ensureColumn('fatture_sdi_flussi', col));
+
+[
+  "original_filename TEXT",
+  "identificativo_sdi TEXT",
+  "hash_sha256 TEXT",
+  "ricevuto_il TEXT",
+  "fattura_id INTEGER",
+  "stato_normalizzato TEXT",
+  "nome_file_fattura TEXT"
+].forEach(col => ensureColumn('fatture_sdi_notifiche', col));
+
+// Specifiche tecniche SdI par. 2.2: ogni file trasmesso deve avere un nome mai
+// usato prima. L'indice parziale rende il vincolo strutturale sui soli invii
+// fattura in uscita, senza toccare notifiche, esiti committente e flussi inbound.
+try {
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sdi_flussi_nome_file_outbound
+    ON fatture_sdi_flussi(nome_file)
+    WHERE direzione = 'outbound' AND tipo_messaggio = 'fattura' AND nome_file IS NOT NULL
+  `);
+} catch (error) {
+  console.error('[sdi] indice univoco nome file non creato:', error.message);
+}
 
 const ROLE_DEFS = [
   { id: 1, nome: 'readonly', descrizione: 'Solo lettura' },

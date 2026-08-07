@@ -92,6 +92,16 @@ function processInboundSdiRequest(req) {
       contentLength: rawBuffer.length,
       remoteIp: req.ip || req.socket?.remoteAddress || null,
       forwardedFor: String(req.headers['x-forwarded-for'] || ''),
+      // Hostname effettivamente chiamato dal SdI: e' l'unico modo per sapere
+      // quale endpoint risulta registrato nel Sistema di Accreditamento.
+      host: String(req.headers.host || ''),
+      forwardedHost: String(req.headers['x-forwarded-host'] || ''),
+      forwardedProto: String(req.headers['x-forwarded-proto'] || ''),
+      // Esito della verifica mTLS propagato da nginx: SUCCESS quando il
+      // chiamante ha presentato un certificato client valido, NONE quando non
+      // ne ha presentato alcuno.
+      sslClientVerify: String(req.headers['x-ssl-client-verify'] || ''),
+      sslClientDn: String(req.headers['x-ssl-client-dn'] || ''),
       soapAction,
       isMtom
     }
@@ -671,6 +681,10 @@ function storeInboundSdiRequest({ requestId, req, rawBuffer, envelopeBuffer, par
     receivedAt: now.toISOString(),
     remoteIp: req.ip || req.socket?.remoteAddress || null,
     forwardedFor: String(req.headers['x-forwarded-for'] || ''),
+    host: String(req.headers.host || ''),
+    forwardedHost: String(req.headers['x-forwarded-host'] || ''),
+    sslClientVerify: String(req.headers['x-ssl-client-verify'] || ''),
+    sslClientDn: String(req.headers['x-ssl-client-dn'] || ''),
     contentType: String(req.headers['content-type'] || ''),
     contentLength: rawBuffer.length,
     isMtom,

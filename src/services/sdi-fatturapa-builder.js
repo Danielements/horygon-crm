@@ -18,6 +18,7 @@ function buildOrdinaryInvoiceXml(payload) {
           ${line.quantita != null ? `<Quantita>${formatDecimal(line.quantita, 8)}</Quantita>` : ''}
           ${line.unitaMisura ? `<UnitaMisura>${xmlEscape(line.unitaMisura)}</UnitaMisura>` : ''}
           <PrezzoUnitario>${formatDecimal(line.prezzoUnitario, 8)}</PrezzoUnitario>
+          ${renderScontoMaggiorazione(line.scontoMaggiorazione)}
           <PrezzoTotale>${formatDecimal(line.totaleRiga, 8)}</PrezzoTotale>
           <AliquotaIVA>${formatDecimal(line.aliquotaIva, 2)}</AliquotaIVA>
           ${line.naturaIva ? `<Natura>${xmlEscape(line.naturaIva)}</Natura>` : ''}
@@ -44,7 +45,7 @@ function buildOrdinaryInvoiceXml(payload) {
       <FormatoTrasmissione>${payload.formatoTrasmissione}</FormatoTrasmissione>
       <CodiceDestinatario>${xmlEscape(payload.destinationCode || '0000000')}</CodiceDestinatario>
       ${transmissionContacts}
-      ${payload.pecDestinatario ? `<PECDestinatario>${xmlEscape(payload.pecDestinatario)}</PECDestinatario>` : ''}
+      ${shouldRenderPecDestinatario(payload) ? `<PECDestinatario>${xmlEscape(payload.pecDestinatario)}</PECDestinatario>` : ''}
     </DatiTrasmissione>
     <CedentePrestatore>
       <DatiAnagrafici>
@@ -132,7 +133,7 @@ function buildSimplifiedInvoiceXml(payload) {
       <ProgressivoInvio>${xmlEscape(payload.fileProgressivo)}</ProgressivoInvio>
       <FormatoTrasmissione>FSM10</FormatoTrasmissione>
       <CodiceDestinatario>${xmlEscape(payload.destinationCode || '0000000')}</CodiceDestinatario>
-      ${payload.pecDestinatario ? `<PECDestinatario>${xmlEscape(payload.pecDestinatario)}</PECDestinatario>` : ''}
+      ${shouldRenderPecDestinatario(payload) ? `<PECDestinatario>${xmlEscape(payload.pecDestinatario)}</PECDestinatario>` : ''}
     </DatiTrasmissione>
     <CedentePrestatore>
       <IdFiscaleIVA>
@@ -264,6 +265,16 @@ function renderOptionalTag(tag, value) {
   return value ? `<${tag}>${xmlEscape(value)}</${tag}>` : '';
 }
 
+// Specifiche formato FatturaPA 1.4 par. 1.1: PECDestinatario "viene valorizzato
+// nei soli casi di destinatario diverso da Pubblica Amministrazione, qualora il
+// destinatario utilizzi il canale PEC per ricevere le fatture. Puo' essere
+// valorizzato solo se il valore di CodiceDestinatario e' uguale a 0000000".
+function shouldRenderPecDestinatario(payload) {
+  if (!payload.pecDestinatario) return false;
+  if (payload.formatoTrasmissione === 'FPA12') return false;
+  return String(payload.destinationCode || '0000000').trim() === '0000000';
+}
+
 function renderOptionalBlock(tag, children) {
   const content = (children || []).filter(Boolean).join('');
   return content ? `<${tag}>${content}</${tag}>` : '';
@@ -271,6 +282,8 @@ function renderOptionalBlock(tag, children) {
 
 function renderPaymentBlocks(payment) {
   if (!payment?.details?.length) return '';
+  // L'ordine degli elementi segue DettaglioPagamentoType: IstitutoFinanziario
+  // precede IBAN, che precede BIC.
   return (payment.details || []).map((detail) => `
     <DatiPagamento>
       <CondizioniPagamento>${xmlEscape(payment.condizioniPagamento || 'TP02')}</CondizioniPagamento>
@@ -278,10 +291,31 @@ function renderPaymentBlocks(payment) {
         <ModalitaPagamento>${xmlEscape(detail.modalitaPagamento || 'MP05')}</ModalitaPagamento>
         ${detail.dataScadenzaPagamento ? `<DataScadenzaPagamento>${detail.dataScadenzaPagamento}</DataScadenzaPagamento>` : ''}
         <ImportoPagamento>${formatDecimal(detail.importoPagamento, 2)}</ImportoPagamento>
-        ${detail.iban ? `<IBAN>${xmlEscape(detail.iban)}</IBAN>` : ''}
         ${detail.istitutoFinanziario ? `<IstitutoFinanziario>${xmlEscape(detail.istitutoFinanziario)}</IstitutoFinanziario>` : ''}
+        ${detail.iban ? `<IBAN>${xmlEscape(detail.iban)}</IBAN>` : ''}
+        ${detail.bic ? `<BIC>${xmlEscape(detail.bic)}</BIC>` : ''}
       </DettaglioPagamento>
     </DatiPagamento>`).join('\n');
+}
+
+// ScontoMaggiorazioneType: Tipo (SC/MG), Percentuale, Importo.
+function renderScontoMaggiorazione(entries) {
+  const list = (Array.isArray(entries) ? entries : [entries]).filter(Boolean);
+  if (!list.length) return '';
+  return list.map((entry) => {
+    const tipo = String(entry.tipo || 'SC').trim().toUpperCase() === 'MG' ? 'MG' : 'SC';
+    // Controllo SdI 00437: Percentuale e Importo non possono essere entrambi
+    // assenti a fronte di Tipo valorizzato.
+    const percentuale = entry.percentuale != null ? `<Percentuale>${formatDecimal(entry.percentuale, 2)}</Percentuale>` : '';
+    const importo = entry.importo != null ? `<Importo>${formatDecimal(entry.importo, 8)}</Importo>` : '';
+    if (!percentuale && !importo) return '';
+    return `
+          <ScontoMaggiorazione>
+            <Tipo>${tipo}</Tipo>
+            ${percentuale}
+            ${importo}
+          </ScontoMaggiorazione>`;
+  }).filter(Boolean).join('');
 }
 
 module.exports = {
@@ -290,6 +324,7 @@ module.exports = {
   buildSimplifiedInvoiceXml,
   formatDecimal,
   mapDocumentType,
+  shouldRenderPecDestinatario,
   summarizeVat,
   xmlEscape
 };
