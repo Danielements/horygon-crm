@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "test": "node --test --test-concurrency=1 tests/sdi.test.js tests/sdi-produzione.test.js tests/safe-zip-reader.test.js tests/sdi-massive.test.js"
+    "test": "node --test --test-concurrency=1 tests/sdi.test.js tests/sdi-produzione.test.js tests/safe-zip-reader.test.js tests/sdi-massive.test.js tests/sdi-historical-sync.test.js"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
