@@ -33,6 +33,7 @@ const DEFAULT_SETTINGS = {
   'sdi.inbound.client_cert_policy': 'log',
   'sdi.inbound.client_dn_match': 'Sistema Interscambio Fattura PA',
   // Firma CAdES-BES richiesta dalle Specifiche tecniche par. 2.1 per le FPA12.
+  // disabled | local (firma automatica) | external (download, firma fuori, upload)
   'sdi.signature.mode': 'disabled',
   // when_required = firma solo le FPA12 (obbligatorie); always = firma tutto.
   'sdi.signature.apply': 'when_required',

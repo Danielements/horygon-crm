@@ -228,6 +228,40 @@ function extractCmsContent(der) {
   return readOctetString(buffer, eContentWrapper.contentStart);
 }
 
+// Estrae i certificati inclusi nel CMS: servono per mostrare chi ha firmato e
+// per verificare scadenza e emittente senza dipendere da servizi esterni.
+function extractCmsCertificates(der) {
+  const buffer = Buffer.isBuffer(der) ? der : Buffer.from(der);
+  const contentInfo = readTlv(buffer, 0);
+  let offset = contentInfo.contentStart;
+  offset += readTlv(buffer, offset).totalLength; // contentType
+  const explicit = readTlv(buffer, offset);
+  const signedData = readTlv(buffer, explicit.contentStart);
+
+  let inner = signedData.contentStart;
+  const end = signedData.contentStart + signedData.length;
+  inner += readTlv(buffer, inner).totalLength; // version
+  inner += readTlv(buffer, inner).totalLength; // digestAlgorithms
+  inner += readTlv(buffer, inner).totalLength; // encapContentInfo
+  if (inner >= end) return [];
+
+  const candidate = readTlv(buffer, inner);
+  // I certificati sono in [0] IMPLICIT, opzionale.
+  if (candidate.tag !== 0xa0) return [];
+
+  const certificates = [];
+  let cursor = candidate.contentStart;
+  const limit = candidate.contentStart + candidate.length;
+  while (cursor < limit) {
+    const cert = readTlv(buffer, cursor);
+    if (cert.tag === TAG.sequence) {
+      certificates.push(Buffer.from(buffer.subarray(cursor, cursor + cert.totalLength)));
+    }
+    cursor += cert.totalLength;
+  }
+  return certificates;
+}
+
 function readOctetString(buffer, offset) {
   const node = readTlv(buffer, offset);
   if (node.tag === TAG.octetString) {
@@ -351,6 +385,7 @@ function sha256(buffer) {
 module.exports = {
   OID,
   certificateDer,
+  extractCmsCertificates,
   extractCmsContent,
   readCertificateFields,
   signCadesBes

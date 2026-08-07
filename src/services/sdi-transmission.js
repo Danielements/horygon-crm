@@ -45,6 +45,15 @@ async function transmitGeneratedFlow(flowId, options = {}) {
   if (!flow) throw new Error('Flusso SDI non trovato');
   if (!flow.xml_path) throw new Error('Flusso SDI senza XML generato');
 
+  // Un documento che attende la firma esterna non e' trasmissibile in nessun
+  // ambiente: SdI lo scarterebbe con 00102 e il nome file resterebbe bruciato.
+  if (flow.stato === 'firma_richiesta') {
+    throw new Error(
+      `Il flusso SDI ${flow.id} attende il file firmato: scaricare l'XML, firmarlo `
+      + 'e ricaricare il .p7m prima di trasmettere'
+    );
+  }
+
   const mode = String(options.mode || flow.modalita || 'test').trim();
 
   // I guardrail di ambiente vanno valutati prima di toccare il file: un flusso

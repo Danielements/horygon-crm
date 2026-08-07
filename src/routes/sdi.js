@@ -9,6 +9,7 @@ const { writeSystemLog } = require('../services/system-log');
 const { generateOutboundXmlForInvoice } = require('../services/sdi-fatturapa');
 const { transmitInvoiceToSdi, transmitInvoiceToSdiTest } = require('../services/sdi-transmission');
 const { getSignatureStatus } = require('../services/sdi-signature');
+const { attachSignedFile, getDocumentToSign } = require('../services/sdi-firma-esterna');
 const { peekOutboundSequence } = require('../services/sdi-progressivo');
 const { getSetting } = require('../services/google');
 const { sendEsitoCommittenteToSdiTest } = require('../services/sdi-esito-committente');
@@ -24,6 +25,10 @@ const xmlTextParser = express.raw({
   type: ['application/xml', 'text/xml', 'application/soap+xml', 'multipart/related', 'text/plain'],
   limit: '30mb'
 });
+
+// Il .p7m e' binario: si accetta qualunque content-type entro il limite SdI di
+// 5 MB, con un margine per l'overhead della firma.
+const signedFileParser = express.raw({ type: () => true, limit: '10mb' });
 
 router.get('/ws/inbound', (req, res) => {
   if ('wsdl' in (req.query || {})) {
@@ -267,6 +272,63 @@ router.post('/fatture/:id/esito-committente-test', requirePermesso('fatture', 'e
       stack: error.stack || null
     });
     res.status(400).json({ error: error.message });
+  }
+});
+
+// --- ciclo di firma esterna ----------------------------------------------
+// Per i dispositivi di firma qualificata remota con PIN e OTP, che non hanno
+// API server-to-server: il CRM prepara l'XML, l'operatore lo firma fuori, e il
+// .p7m rientra qui per la verifica.
+
+router.get('/flussi/:id/xml-da-firmare', requirePermesso('fatture', 'read'), (req, res) => {
+  try {
+    const document = getDocumentToSign(Number(req.params.id));
+    res
+      .set('Content-Type', 'application/xml; charset=utf-8')
+      .set('Content-Disposition', `attachment; filename="${document.filename}"`)
+      .send(document.buffer);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+router.post('/flussi/:id/firma', requirePermesso('fatture', 'edit'), signedFileParser, (req, res) => {
+  const flowId = Number(req.params.id);
+  try {
+    const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body || '');
+    const result = attachSignedFile({
+      flowId,
+      signedBuffer: buffer,
+      filename: String(req.query.filename || req.headers['x-filename'] || '').trim() || null,
+      utenteId: req.user.id
+    });
+    writeAudit({
+      utente_id: req.user.id,
+      azione: 'sdi.firma.caricata',
+      entita_tipo: 'fattura',
+      entita_id: null,
+      dettagli: { flowId, filename: result.filename, firmatario: result.signer?.subject || null }
+    });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    writeSystemLog({
+      livello: 'error',
+      origine: 'sdi.firma',
+      route: `/api/sdi/flussi/${flowId}/firma`,
+      metodo: 'POST',
+      utente_id: req.user?.id,
+      messaggio: error.message,
+      dettagli: { flowId, codice: error.code || null }
+    });
+    // Il disallineamento fra firmato e generato e' un rifiuto esplicito, non
+    // un errore generico: va distinto perche' significa che si sta firmando un
+    // documento diverso da quello prodotto dal CRM.
+    res.status(error.code === 'SIGNED_DOCUMENT_MISMATCH' ? 409 : 400).json({
+      error: error.message,
+      code: error.code || null,
+      attesoSha256: error.atteso || null,
+      trovatoSha256: error.trovato || null
+    });
   }
 });
 

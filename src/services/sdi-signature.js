@@ -27,8 +27,21 @@ function getSignatureConfig() {
   };
 }
 
+// I dispositivi di firma qualificata remota con PIN e OTP (per esempio FirmaOK
+// di Poste) non espongono API server-to-server: la chiave resta al certificatore
+// e ogni firma va autorizzata a mano. In quel caso il CRM non firma, ma prepara
+// il documento e attende il .p7m di ritorno.
 function getSignatureStatus() {
   const config = getSignatureConfig();
+  if (config.mode === 'external') {
+    return {
+      mode: 'external',
+      available: true,
+      external: true,
+      reason: null,
+      certificate: null
+    };
+  }
   if (config.mode !== 'local') {
     return {
       mode: config.mode,
@@ -88,6 +101,18 @@ function applySdiSignature(xml, { format, force = false } = {}) {
       buffer: Buffer.from(String(xml), 'utf8'),
       extension: '.xml',
       meta: { signed: false, required: false, reason: 'Firma non richiesta per questo formato' }
+    };
+  }
+
+  // Firma esterna: il documento esce non firmato e il flusso resta in attesa
+  // del .p7m, che verra' verificato al rientro.
+  if (status.external) {
+    return {
+      signed: false,
+      pending: required,
+      buffer: Buffer.from(String(xml), 'utf8'),
+      extension: '.xml',
+      meta: { signed: false, required, modalita: 'esterna' }
     };
   }
 

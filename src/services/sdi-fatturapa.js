@@ -284,7 +284,9 @@ function saveOutboundXml(invoice, customer, xml, payload, validation, options = 
     mode,
     'fattura',
     filename,
-    `xml_generato_${mode}`,
+    // Con la firma esterna il flusso resta in attesa del .p7m: non e' ancora
+    // trasmissibile, e la trasmissione lo verifica.
+    applied.pending ? 'firma_richiesta' : `xml_generato_${mode}`,
     relativePath,
     transmittedSha256,
     JSON.stringify({
@@ -309,13 +311,14 @@ function saveOutboundXml(invoice, customer, xml, payload, validation, options = 
     UPDATE fatture
     SET xml_path = ?, stato_sdi = ?
     WHERE id = ?
-  `).run(relativePath, `xml_generato_${mode}`, invoice.id);
+  `).run(relativePath, applied.pending ? 'firma_richiesta' : `xml_generato_${mode}`, invoice.id);
 
   return {
     flowId: flow.lastInsertRowid,
     filename,
     mode,
     signed: applied.signed,
+    firmaRichiesta: Boolean(applied.pending),
     signature: applied.meta,
     xmlPath: relativePath,
     unsignedXmlPath: xmlRelativePath,
