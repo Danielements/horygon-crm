@@ -51,18 +51,19 @@ per dati fatture e liquidazioni periodiche IVA: accreditato ma **non implementat
 
 ## 2. Blocchi al go-live
 
-Ne restano due. Il primo non dipende dal codice.
+Ne resta uno solo, ed e' operativo.
 
-1. **Certificato di firma qualificata.** Serve un **sigillo elettronico
-   qualificato** con firma automatizzabile, non una firma digitale personale su
-   smart card, che richiede presenza fisica a ogni operazione. Blocca due cose:
-   le fatture **FPA12**, che il CRM ferma prima dell'invio invece di farle
-   scartare con `00102`, e le **richieste SMTS**, che le Istruzioni v1.5
-   impongono siano firmate dal titolare della partita IVA. Finche' manca, lo
-   Scarico Fatture appena attivato non e' utilizzabile.
-2. **Cutover della ricezione** dal codice destinatario Pass.go a quello HORYGON.
+1. **Cutover della ricezione** dal codice destinatario Pass.go a quello HORYGON.
    E' l'ultimo passo: da quel momento le fatture passive reali arrivano
    sull'endpoint, indipendentemente da `sdi.mode`, che governa solo l'uscita.
+
+La **firma qualificata** non e' piu' un blocco: HORYGON dispone di FirmaOK di
+Poste, firma remota con PIN e OTP che produce un `.p7m` CAdES, tecnologicamente
+adeguato sia per le FPA12 sia per le richieste SMTS. Non essendoci API
+server-to-server, il CRM governa il ciclo di firma esterna descritto al §3.
+
+Manca ancora **l'interfaccia** di quel ciclo: le rotte esistono, i pulsanti no.
+Finche' non c'e', il ciclo di firma e' usabile solo via API.
 
 Gia' risolti il 07.08.2026: passaggio del canale in produzione, attivazione dei
 Servizi Massivi, indice univoco sui nomi file, pubblicazione della porta del
@@ -106,6 +107,48 @@ I pre-controlli implementati, con le tolleranze dichiarate dall'Elenco:
 **Una validazione locale positiva significa che il file e' pronto per essere
 inviato**, non che SdI lo accettera': restano fuori portata i controlli che
 richiedono Anagrafe Tributaria o IndicePA (00300-00324, 00311, 00312).
+
+### Firma delle FPA12 — ciclo esterno, verificato
+
+`sdi.signature.mode` ammette tre valori: `disabled`, `local` (firma automatica,
+richiede una chiave sul server) e **`external`**, che e' il caso HORYGON.
+
+Con `external` una FPA12 nasce nello stato `firma_richiesta` e il flusso attende
+il file firmato:
+
+```text
+XML generato -> scarica -> firma con FirmaOK (PIN + OTP) -> ricarica .p7m
+   -> verifica -> pronto per l'invio -> SdIRiceviFile
+```
+
+| Rotta | |
+|---|---|
+| `GET /api/sdi/flussi/:id/xml-da-firmare` | scarica l'XML, propone gia' il nome `..._ABC01.xml.p7m` |
+| `POST /api/sdi/flussi/:id/firma` | ricarica il `.p7m` e lo verifica |
+
+A SdI si invia **il `.p7m`**, non la firma separata: il contenitore CAdES
+include XML, firma e certificato del firmatario, e viaggia nel campo `File`
+dell'MTOM come qualunque altro allegato.
+
+La verifica al rientro confronta lo **SHA-256 dell'XML estratto dal P7M** con
+quello che il CRM aveva generato. Serve a impedire lo scenario in cui si scarica
+un documento, se ne firma un altro e lo si ricarica: il CRM lo assocerebbe alla
+fattura sbagliata. In caso di disallineamento risponde `SIGNED_DOCUMENT_MISMATCH`,
+lascia il flusso in attesa, **non scrive nulla** e registra il rifiuto in audit.
+
+Vengono inoltre estratti soggetto, emittente e validita' del certificato
+firmatario, e la scadenza blocca l'accettazione: e' il controllo SdI `00100`, il
+piu' banale da evitare. **Revoca e affidabilita' della CA non sono verificabili
+in locale** e restano in capo a SdI, che lo dichiara nella risposta.
+
+Un flusso in attesa di firma **non e' trasmissibile in nessun ambiente**: il
+controllo precede quelli di ambiente, perche' e' una proprieta' del documento.
+
+Le **FPR12 e FSM10 non richiedono firma** e proseguono con l'invio diretto.
+
+Il ciclo non e' un ripiego permanente: se in futuro servira' l'automazione
+completa, occorre un **sigillo elettronico qualificato con API**, che e' un
+prodotto e un contratto diversi dalla firma remota personale.
 
 ### Ricezione fatture passive — verificato
 
@@ -271,8 +314,8 @@ Fatto il 07.08.2026:
 
 Da fare, in quest'ordine:
 
-5. Configurare il certificato di firma qualificata e impostare
-   `sdi.signature.mode = local`.
+5. Impostare `sdi.signature.mode = external` e collaudare il ciclo di firma su
+   una FPA12: scarica, firma con FirmaOK, ricarica, verifica.
 6. **Backup del database**, a container fermo o con checkpoint esplicito.
 7. Esportare lo storico dal cassetto fiscale e importarlo, prima in **dry-run**.
 8. Verificare numeri, totali e direzioni dello storico importato.
@@ -298,6 +341,10 @@ silenzio e poi mette in impossibilita' di recapito.
 
 ## 10. Cosa resta aperto
 
+- **interfaccia del ciclo di firma esterna**: rotte pronte, pulsanti da fare.
+  Stato firma, scarica, carica, esito con firmatario, poi invia;
+- **firma esterna per le richieste SMTS**: `sdi-massive-request.js` prevede oggi
+  solo la firma locale, va aggiunto il ramo esterno che riusa gli stessi mattoni;
 - import automatico delle passive firmate `.p7m` dal canale realtime;
 - orchestratore che lega archivio ZIP, estrazione e import documento per
   documento, con report e dry-run end-to-end;
