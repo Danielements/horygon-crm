@@ -181,6 +181,73 @@ function readCertificateFields(der) {
   return { serialNumber: Buffer.from(serialNumber), issuer: Buffer.from(issuer) };
 }
 
+// Estrae il contenuto incapsulato da un CMS SignedData (file .p7m).
+//
+// Percorso: ContentInfo -> [0] -> SignedData -> encapContentInfo -> [0] ->
+// OCTET STRING. L'OCTET STRING puo' essere primitivo (0x04) oppure costruito
+// (0x24) e spezzato in segmenti, che vanno riuniti.
+//
+// L'originale firmato non va mai sostituito da quello estratto: questa
+// funzione serve a leggere il contenuto, non a rimpiazzare il file fiscale.
+function extractCmsContent(der) {
+  const buffer = Buffer.isBuffer(der) ? der : Buffer.from(der);
+  const contentInfo = readTlv(buffer, 0);
+  if (contentInfo.tag !== TAG.sequence) throw new Error('File P7M non valido: ContentInfo assente');
+
+  let offset = contentInfo.contentStart;
+  const contentType = readTlv(buffer, offset);
+  if (contentType.tag !== TAG.oid) throw new Error('File P7M non valido: contentType assente');
+  offset += contentType.totalLength;
+
+  const explicit = readTlv(buffer, offset);
+  if (explicit.tag !== 0xa0) throw new Error('File P7M non valido: contenuto SignedData assente');
+
+  const signedData = readTlv(buffer, explicit.contentStart);
+  if (signedData.tag !== TAG.sequence) throw new Error('File P7M non valido: SignedData assente');
+
+  let inner = signedData.contentStart;
+  const end = signedData.contentStart + signedData.length;
+  const version = readTlv(buffer, inner);
+  inner += version.totalLength;
+  const digestAlgorithms = readTlv(buffer, inner);
+  inner += digestAlgorithms.totalLength;
+  if (inner >= end) throw new Error('File P7M non valido: encapContentInfo assente');
+
+  const encap = readTlv(buffer, inner);
+  if (encap.tag !== TAG.sequence) throw new Error('File P7M non valido: encapContentInfo malformato');
+
+  let encapOffset = encap.contentStart;
+  const eContentType = readTlv(buffer, encapOffset);
+  encapOffset += eContentType.totalLength;
+  if (encapOffset >= encap.contentStart + encap.length) {
+    throw new Error('File P7M senza contenuto incapsulato (firma detached)');
+  }
+
+  const eContentWrapper = readTlv(buffer, encapOffset);
+  if (eContentWrapper.tag !== 0xa0) throw new Error('File P7M non valido: eContent assente');
+  return readOctetString(buffer, eContentWrapper.contentStart);
+}
+
+function readOctetString(buffer, offset) {
+  const node = readTlv(buffer, offset);
+  if (node.tag === TAG.octetString) {
+    return Buffer.from(buffer.subarray(node.contentStart, node.contentStart + node.length));
+  }
+  // OCTET STRING costruito: concatena i segmenti primitivi contenuti.
+  if (node.tag === (TAG.octetString | 0x20)) {
+    const parts = [];
+    let cursor = node.contentStart;
+    const limit = node.contentStart + node.length;
+    while (cursor < limit) {
+      const segment = readTlv(buffer, cursor);
+      parts.push(buffer.subarray(segment.contentStart, segment.contentStart + segment.length));
+      cursor += segment.totalLength;
+    }
+    return Buffer.concat(parts);
+  }
+  throw new Error('File P7M non valido: contenuto incapsulato non e una OCTET STRING');
+}
+
 function readTlv(buffer, offset) {
   if (offset + 2 > buffer.length) throw new Error('Struttura DER troncata');
   const tag = buffer[offset];
@@ -284,6 +351,7 @@ function sha256(buffer) {
 module.exports = {
   OID,
   certificateDer,
+  extractCmsContent,
   readCertificateFields,
   signCadesBes
 };
