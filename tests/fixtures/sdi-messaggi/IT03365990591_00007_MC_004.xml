@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?><ns3:RicevutaImpossibilitaRecapito xmlns:ns3="http://ivaservizi.agenziaentrate.gov.it/docs/xsd/fattura/messaggi/v1.0" xmlns:ns2="http://www.w3.org/2000/09/xmldsig#" versione="1.0">
+    <IdentificativoSdI>32477481</IdentificativoSdI>
+    <NomeFile>IT03365990591_00007.xml</NomeFile>
+    <Hash>cc8c052052137620a874f3f893b7239dd7e7381212b8f42b686fed322458efd1</Hash>
+    <DataOraRicezione>2026-08-06T16:15:16.000+02:00</DataOraRicezione>
+    <DataMessaADisposizione>2026-08-07</DataMessaADisposizione>
+    <Descrizione>La fattura è disponibile in consultazione nell'area riservata a partire dalla 'Data Messa a Disposizione'. Non è stato possibile recapitare la fattura/e al destinatario per indisponibilità dell'indirizzo telematico di ricezione o perché tale indirizzo non è stato indicato in fattura (Codice Destinatario: 0000000).</Descrizione>
+    <MessageId>412198745</MessageId>
+    <Note/>
+<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#" Id="Signature1"><ds:SignedInfo><ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/><ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/><ds:Reference Id="reference-document" URI=""><ds:Transforms><ds:Transform Algorithm="http://www.w3.org/2002/06/xmldsig-filter2"><XPath xmlns="http://www.w3.org/2002/06/xmldsig-filter2" Filter="subtract">/descendant::ds:Signature</XPath></ds:Transform></ds:Transforms><ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/><ds:DigestValue>4rggnD6qoRlV7+vr91FBk/ygBXWWx2h6hd+1JXc7aIE=</ds:DigestValue></ds:Reference><ds:Reference Id="reference-signedpropeties" Type="http://uri.etsi.org/01903#SignedProperties" URI="#SignedProperties_1"><ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/><ds:DigestValue>9r14WGxg/CfcmwCICwfeCLJijsCLtYsPQByYCkXjpT8=</ds:DigestValue></ds:Reference><ds:Reference Id="reference-keyinfo" URI="#KeyInfoId"><ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/><ds:DigestValue>zG3Ik0Pz3iTsHXHdaF6Ozbn6AjS+2Z9qKs5t68xLEZ8=</ds:DigestValue></ds:Reference></ds:SignedInfo><ds:SignatureValue Id="SignatureValue1">Oz/y3/NF/dc1QyMVEX69zCMuRqm93NRUlOXWNvsrFUNzPrJZB5tcmDsFI3BNmIAV85BpewBa7FX7&#13;
+YnDU500hcjo1CCLtGIVdeqgcGzoktu4saArB33bX7m3tbGCOtv4rNFT+GK5XAGWxJ2X5hyNumEYR&#13;
+y8Cjyme75SkQjCgyX292EpdTZBGdY9y6HFNq4LPlOGfLGWhHGYkOz8rJuacAbNKZvYyRzYxAGS+r&#13;
+pC78GIJ95HVI3Hgi+G5SyU08BINR5iMYEYl+QQ8dI+QHOL8RCEeJKkGMXfUdbVjViW/W/7ebHOzE&#13;
+xLWlOXQKSOecNcKbRqDpEKzH7P2iFqArF7Tt2g==</ds:SignatureValue><ds:KeyInfo Id="KeyInfoId"><ds:X509Data><ds:X509Certificate>MIIFMDCCAxigAwIBAgIIGXuBMiCHXpAwDQYJKoZIhvcNAQELBQAwVTELMAkGA1UEBhMCSVQxHjAc&#13;
+BgNVBAoMFUFnZW56aWEgZGVsbGUgRW50cmF0ZTEmMCQGA1UEAwwdQ0EgQWdlbnppYSBkZWxsZSBF&#13;
+bnRyYXRlIFRlc3QwHhcNMjQwMjE2MTM0ODM0WhcNMjcwMjE2MTM0ODMzWjB0MQswCQYDVQQGEwJJ&#13;
+VDEeMBwGA1UECgwVQWdlbnppYSBkZWxsZSBFbnRyYXRlMRswGQYDVQQLDBJTZXJ2aXppIFRlbGVt&#13;
+YXRpY2kxKDAmBgNVBAMMH1Npc3RlbWEgSW50ZXJzY2FtYmlvIEZhdHR1cmEgUEEwggEiMA0GCSqG&#13;
+SIb3DQEBAQUAA4IBDwAwggEKAoIBAQDxjDFQMrsA5pEU5oJ4nR3+4lGausJRQ9RVrGn4CNK/HgNk&#13;
+uxnJmUJOEoBDCdhfDfcBcfDF3y7otU0BkDIzt6RpLKQhoRToEq/eQGHiADTRmK3RAB0r7akukDcZ&#13;
+P859atLuJViHfhAaJS1s8D2wcYxoouZB305MxnB+DnpSg2+GIuLvNkA1l1fn0+KgZnjvjd/ujeBP&#13;
+v47Trw5SvwIcI64wy2c1wWb7pAoNQt7buvlSkIj4rpKFP3gGgAsEeOzZP6awOxAk+15dEPDpeAyr&#13;
+t6ojAnt7HF7HfUa32ct+0byjDJ+vx1ltZ3umT67SWhouQyZD2Nd406uROv6UYsUhylxvAgMBAAGj&#13;
+geQwgeEwHwYDVR0jBBgwFoAUcDVCjm5uQ9+S+bP9Mj5QMSmjH0YwgY4GA1UdHwSBhjCBgzCBgKB+&#13;
+oHyGemxkYXA6Ly9jYWRzLmZpbmFuemUuaXQvQ049Q0ElMjBBZ2VuemlhJTIwZGVsbGUlMjBFbnRy&#13;
+YXRlJTIwVGVzdCxPPUFnZW56aWElMjBkZWxsZSUyMEVudHJhdGUsQz1JVD9jZXJ0aWZpY2F0ZVJl&#13;
+dm9jYXRpb25MaXN0MB0GA1UdDgQWBBSU94+vGhAncaTtLnRMxfNbQ1hr0TAOBgNVHQ8BAf8EBAMC&#13;
+BkAwDQYJKoZIhvcNAQELBQADggIBAFvar9CWWILli2HqQ/gsMJsVSgv4iJcSPZr5COmYW/zISvci&#13;
+EeLlhCNjjLCUIbZxwip6AumV57IOQv36v0+FBR0KMZCzCfe+/3XBGddiuA8uYwIitEt8+eyhq78X&#13;
+oI0hzaFtLx9KRq1lHzNGrX1JNv6u4yU3E7L+4dAWh9JK/ZRo6avj36FapL4n6iumWmf+NQfuheU+&#13;
+Cches/arlgSj8ITFCKwdH8s/y/EG1UfeUANswv2R0LDbwFDTRtxNTZSyflGKh5/B2cNj70SpcKMT&#13;
+aTE9T5gV7qPNNjC2OXjjSewZ86KWmQ31J1ts/FZX+c39Uml/LrbwYyHy3RtLbSCzKIb+kqSRetvI&#13;
+eQG90cXZbAr8zeHZo8mdiM1+JjYJ6vDoLycQFtxd6WcGLV82h4iJ3u7LExURkXnBwXzVO6/3rylJ&#13;
+iNXteW6WTTcBGNcR/9CAWuWXrx2aZ5LikazDN/QG+6qu2Z1DJOXnPslVdFxEsmF8pidM7MWi+7jz&#13;
+byl4ozs1Co2s9dmO+1VjX8PSaOrMZPeSI3cFsU7VBpaXAH5TV2rAH1GP4v5wagGGAmVY/PkMGaH5&#13;
+Uw3+HrPbmJv7lPe1L2Ug//TjQfXRyk/m3Q1ezurYkOry01JLQWAQL45TTpdLMh3KKSE1R43yVzxD&#13;
+xvTeDGiNOQR3c3I4rw2ZZTyzNJM5</ds:X509Certificate></ds:X509Data></ds:KeyInfo><ds:Object><xades:QualifyingProperties xmlns:xades="http://uri.etsi.org/01903/v1.3.2#" Target="#Signature1"><xades:SignedProperties Id="SignedProperties_1"><xades:SignedSignatureProperties><xades:SigningTime>2026-08-06T14:37:21Z</xades:SigningTime></xades:SignedSignatureProperties></xades:SignedProperties></xades:QualifyingProperties></ds:Object></ds:Signature></ns3:RicevutaImpossibilitaRecapito>

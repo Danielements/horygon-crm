@@ -27,8 +27,32 @@ const CAMPIONI = [
   { file: 'IT03365990591_00011_EC_001.xml', root: 'NotificaEsitoCommittente', tipo: 'NOTIFICA_ESITO_COMMITTENTE', stato: null, flusso: 'PA' },
   { file: 'IT03365990591_7D00E_NS_001.xml', root: 'RicevutaScarto', tipo: 'RICEVUTA_SCARTO', stato: 'scarto', flusso: 'B2B' },
   { file: 'IT03365990591_G000E_MC_004.xml', root: 'RicevutaImpossibilitaRecapito', tipo: 'RICEVUTA_IMPOSSIBILITA_RECAPITO', stato: 'UNDELIVERABLE', flusso: 'B2B' },
-  { file: 'IT03365990591_G000E_MT_001.xml', root: 'FileMetadati', tipo: 'METADATI_INVIO_FILE', stato: 'metadati_invio', flusso: 'B2B' }
+  { file: 'IT03365990591_G000E_MT_001.xml', root: 'FileMetadati', tipo: 'METADATI_INVIO_FILE', stato: 'metadati_invio', flusso: 'B2B' },
+  { file: 'IT03365990591_8H008_RC_002.xml', root: 'RicevutaConsegna', tipo: 'RICEVUTA_CONSEGNA', stato: 'consegnata', flusso: 'B2B' },
+  { file: 'IT03365990591_8H008_MT_001.xml', root: 'FileMetadati', tipo: 'METADATI_INVIO_FILE', stato: 'metadati_invio', flusso: 'B2B' }
 ];
+
+// Lo stesso documento ha tracciati diversi sui due flussi: sul B2B la ricevuta
+// di consegna porta l'Hash del file e il Destinatario senza descrizione, sulla
+// PA e' il contrario. Il parser deve reggere entrambi senza inventare campi.
+test('le varianti PA e B2B della ricevuta di consegna vengono lette entrambe', () => {
+  const pa = parseSdiNotificationXml(read('IT03365990591_00011_RC_004.xml'));
+  assert.equal(pa.statoNormalizzato, 'consegnata');
+  assert.equal(pa.destinatarioCodice, 'ESOJKL');
+  assert.equal(pa.destinatarioDescrizione, 'PA Simulata - Sogei');
+  assert.equal(pa.hash, null, 'la ricevuta PA non porta Hash');
+
+  const b2b = parseSdiNotificationXml(read('IT03365990591_8H008_RC_002.xml'));
+  assert.equal(b2b.statoNormalizzato, 'consegnata');
+  assert.equal(b2b.destinatarioCodice, 'UMZGLCP');
+  assert.equal(b2b.destinatarioDescrizione, null, 'la ricevuta B2B non porta descrizione');
+  assert.equal(b2b.hash, 'd733ec62aec90c82d7a215a60d297b464185698d08c7fb6c390e556998f7a707');
+
+  // Entrambe hanno <Destinatario><Codice>: era il caso che generava il falso
+  // codice di errore su una consegna riuscita.
+  assert.equal(pa.codiceErrore, null);
+  assert.equal(b2b.codiceErrore, null);
+});
 
 test('ogni messaggio reale viene classificato con il tipo corretto', () => {
   CAMPIONI.forEach(({ file, tipo }) => {
@@ -96,6 +120,20 @@ test('i metadati portano codice destinatario, formato e tentativi di invio', () 
   assert.equal(b2b.codiceDestinatario, 'XS00001');
   assert.equal(b2b.formato, 'FPR12');
   assert.equal(b2b.tentativiInvio, '1');
+});
+
+test('il suffisso del nome file non determina il tipo di documento', () => {
+  // Il suffisso _MC_ vale sia per NotificaMancataConsegna (flusso PA) sia per
+  // RicevutaImpossibilitaRecapito (flusso B2B): la classificazione deve venire
+  // dalla radice del documento, mai dal nome del file.
+  const xml = read('IT03365990591_00007_MC_004.xml');
+  const parsed = parseSdiNotificationXml(xml, { originalFilename: 'IT03365990591_00007_MC_004.xml' });
+  assert.equal(parsed.rootElement, 'RicevutaImpossibilitaRecapito');
+  assert.equal(parsed.subtype, 'B2X_IMPOSSIBILITA_RECAPITO');
+  assert.equal(parsed.statoNormalizzato, 'UNDELIVERABLE');
+  assert.equal(parsed.dataMessaADisposizione, '2026-08-07');
+  assert.equal(parsed.codiceErrore, null);
+  assert.equal(classifyDocument(Buffer.from(xml, 'utf8')).type, 'RICEVUTA_IMPOSSIBILITA_RECAPITO');
 });
 
 test('l esito committente che produciamo coincide con quello accettato dal SdI', () => {

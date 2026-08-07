@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<ns3:FileMetadati xmlns:ns2="http://www.w3.org/2000/09/xmldsig#" xmlns:ns3="http://ivaservizi.agenziaentrate.gov.it/docs/xsd/fattura/messaggi/v1.0" versione="1.0">
+    <IdentificativoSdI>32477911</IdentificativoSdI>
+    <NomeFile>IT03365990591_8H008.xml</NomeFile>
+    <Hash>d733ec62aec90c82d7a215a60d297b464185698d08c7fb6c390e556998f7a707</Hash>
+    <CodiceDestinatario>UMZGLCP</CodiceDestinatario>
+    <Formato>FPR12</Formato>
+    <TentativiInvio>1</TentativiInvio>
+    <MessageId>412312891</MessageId>
+</ns3:FileMetadati>
