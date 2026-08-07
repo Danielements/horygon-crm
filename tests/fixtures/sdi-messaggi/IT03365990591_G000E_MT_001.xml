@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<ns3:FileMetadati xmlns:ns2="http://www.w3.org/2000/09/xmldsig#" xmlns:ns3="http://ivaservizi.agenziaentrate.gov.it/docs/xsd/fattura/messaggi/v1.0" versione="1.0">
+    <IdentificativoSdI>32478019</IdentificativoSdI>
+    <NomeFile>IT03365990591_G000E.xml</NomeFile>
+    <Hash>62c80fd4c4af8f8e4a6c04e533bd8247145bc6c17ab6982e36bc7bc04a5522f4</Hash>
+    <CodiceDestinatario>XS00001</CodiceDestinatario>
+    <Formato>FPR12</Formato>
+    <TentativiInvio>1</TentativiInvio>
+    <MessageId>412326927</MessageId>
+</ns3:FileMetadati>

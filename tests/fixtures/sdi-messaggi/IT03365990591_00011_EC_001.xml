@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<types:NotificaEsitoCommittente xmlns:types="http://www.fatturapa.gov.it/sdi/messaggi/v1.0" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" versione="1.0">
+  <IdentificativoSdI>32477881</IdentificativoSdI>
+  <RiferimentoFattura>
+    <NumeroFattura>ESOJKL-00011-1</NumeroFattura>
+    <AnnoFattura>2017</AnnoFattura>
+    <PosizioneFattura>1</PosizioneFattura>
+  </RiferimentoFattura>
+  <Esito>EC01</Esito>
+  <MessageIdCommittente>H0000012461174</MessageIdCommittente>
+</types:NotificaEsitoCommittente>

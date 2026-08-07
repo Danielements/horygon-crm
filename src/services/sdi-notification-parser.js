@@ -1,6 +1,9 @@
 const crypto = require('crypto');
 const { XMLParser } = require('fast-xml-parser');
 
+// Il SdI usa nomi diversi per lo stesso concetto a seconda del flusso: sul
+// flusso PA i metadati sono MetadatiInvioFile, sul flusso B2B/B2C FileMetadati.
+// Analogamente NotificaScarto (PA) e RicevutaScarto (B2B) sono lo stesso esito.
 const NOTIFICATION_MAP = {
   NotificaScarto: 'scarto',
   RicevutaScarto: 'scarto',
@@ -10,7 +13,8 @@ const NOTIFICATION_MAP = {
   NotificaEsito: 'esito',
   NotificaDecorrenzaTermini: 'decorrenza_termini',
   AttestazioneTrasmissioneFattura: 'attestazione_trasmissione',
-  MetadatiInvioFile: 'metadati_invio'
+  MetadatiInvioFile: 'metadati_invio',
+  FileMetadati: 'metadati_invio'
 };
 
 const DELIVERY_FAILURE_ROOTS = {
@@ -60,8 +64,12 @@ function parseSdiNotificationXml(xml, options = {}) {
     messageIdCommittente: firstValue(esitoCommittente, ['MessageIdCommittente']),
     messageId: firstValue(root, ['MessageId', 'MessageID']),
     note: firstValue(root, ['Note']),
-    destinatarioCodice: firstValue(destinatario, ['Codice']),
+    destinatarioCodice: firstValue(destinatario, ['Codice']) || firstValue(root, ['CodiceDestinatario']),
     destinatarioDescrizione: firstValue(destinatario, ['Descrizione']),
+    // Presenti nei file di metadati (MetadatiInvioFile / FileMetadati).
+    codiceDestinatario: firstValue(root, ['CodiceDestinatario']),
+    formato: firstValue(root, ['Formato']),
+    tentativiInvio: firstValue(root, ['TentativiInvio']),
     hashFileOriginale: firstValue(root, ['HashFileOriginale', 'Hash']),
     codiceErrore: errors[0]?.codice || null,
     descrizioneErrore: errors[0]?.descrizione || null,
@@ -112,15 +120,46 @@ function escapeRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Gli errori vivono esclusivamente dentro elementi <Errore>, normalmente
+// raccolti in <ListaErrori>. Cercare Codice e Descrizione ovunque nell'albero
+// e' sbagliato: su una RicevutaConsegna riuscita si finirebbe per leggere
+// <Destinatario><Codice>ESOJKL</Codice> come se fosse un codice di errore.
 function collectErrorEntries(node) {
   const entries = [];
-  walk(node, (candidate) => {
-    if (!candidate || typeof candidate !== 'object') return;
-    const codice = firstValue(candidate, ['Codice', 'CodiceErrore']);
-    const descrizione = firstValue(candidate, ['Descrizione', 'DescrizioneErrore']);
-    if (codice || descrizione) entries.push({ codice: codice || null, descrizione: descrizione || null });
+  walkNamed(node, 'Errore', (errore) => {
+    const codice = directValue(errore, ['Codice', 'CodiceErrore']);
+    const descrizione = directValue(errore, ['Descrizione', 'DescrizioneErrore']);
+    const suggerimento = directValue(errore, ['Suggerimento']);
+    if (codice || descrizione) {
+      entries.push({ codice: codice || null, descrizione: descrizione || null, suggerimento: suggerimento || null });
+    }
   });
   return uniqueErrorEntries(entries);
+}
+
+// Visita l'albero cercando gli elementi con un nome preciso.
+function walkNamed(node, name, visitor) {
+  if (node == null || typeof node !== 'object') return;
+  if (Array.isArray(node)) return node.forEach((item) => walkNamed(item, name, visitor));
+  Object.entries(node).forEach(([key, value]) => {
+    if (key === name) {
+      (Array.isArray(value) ? value : [value]).forEach((item) => {
+        if (item && typeof item === 'object') visitor(item);
+      });
+      return;
+    }
+    walkNamed(value, name, visitor);
+  });
+}
+
+// Legge un valore solo fra i figli diretti, senza scendere nell'albero.
+function directValue(node, candidates) {
+  if (!node || typeof node !== 'object') return null;
+  for (const key of candidates) {
+    const value = node[key];
+    if (value !== undefined && value !== null && typeof value !== 'object') return String(value).trim();
+  }
+  return null;
 }
 
 function walk(node, visitor) {

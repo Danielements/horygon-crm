@@ -19,7 +19,10 @@ const DOCUMENT_TYPES = {
   ScartoEsitoCommittente: 'SCARTO_ESITO_COMMITTENTE',
   NotificaDecorrenzaTermini: 'NOTIFICA_DECORRENZA_TERMINI',
   AttestazioneTrasmissioneFattura: 'ATTESTAZIONE_TRASMISSIONE',
-  MetadatiInvioFile: 'METADATI_INVIO_FILE'
+  // Stesso documento con due nomi: MetadatiInvioFile sul flusso PA,
+  // FileMetadati sul flusso B2B/B2C.
+  MetadatiInvioFile: 'METADATI_INVIO_FILE',
+  FileMetadati: 'METADATI_INVIO_FILE'
 };
 
 const INVOICE_TYPES = new Set(['FATTURA', 'FATTURA_SEMPLIFICATA']);
