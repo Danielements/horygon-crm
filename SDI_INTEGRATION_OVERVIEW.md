@@ -12,8 +12,17 @@ da test automatici o e' stato confermato sul campo con SdI. Dove c'e' scritto
 
 ## 1. Stato del canale
 
-Canale Web Service SDICoop per HORYGON S.R.L. (`IT03365990591`), accreditato in
-ambiente TEST con test di interoperabilita' superati.
+Canale Web Service SDICoop per HORYGON S.R.L. (`IT03365990591`), **passato in
+produzione il 07.08.2026**: il Sistema di Accreditamento lo ha dichiarato
+pienamente operativo. Non esiste piu' un ambiente di prova per questo canale:
+ogni file inviato a SdI e' un documento fiscale.
+
+Lo stesso giorno sono stati attivati i **Servizi Massivi** per l'identificativo
+fiscale: Scarico Corrispettivi, Scarico Documenti IVA, **Scarico Fatture**,
+Servizio Bollo.
+
+I certificati non sono stati sostituiti al passaggio in produzione: restano
+quelli emessi il 06.08.2026, validi fino al 05.08.2029.
 
 Endpoint accreditato, confermato dall'Accordo di Servizio:
 
@@ -42,24 +51,27 @@ per dati fatture e liquidazioni periodiche IVA: accreditato ma **non implementat
 
 ## 2. Blocchi al go-live
 
-In ordine di impatto. Nessuno di questi dipende dal codice del CRM.
+Ne restano due. Il primo non dipende dal codice.
 
-1. **Passaggio del canale in produzione.** Va accettato l'Accordo di Servizio e
-   richiesta l'attivazione sul Sistema di Accreditamento. Sblocca in cascata:
-   comparsa di HORYGON nell'elenco provider, censimento canale, richieste SMTS e
-   invio di fatture reali.
-2. **Certificato di firma qualificata.** Serve un **sigillo elettronico
+1. **Certificato di firma qualificata.** Serve un **sigillo elettronico
    qualificato** con firma automatizzabile, non una firma digitale personale su
-   smart card, che richiede presenza fisica a ogni operazione. Senza, le fatture
-   FPA12 non partono: il CRM le blocca prima dell'invio invece di farle scartare
-   con `00102`.
-3. **Censimento canale** su *Fatture e Corrispettivi -> Consultazione ->
-   Censimento canali per forniture massive*. Necessario solo per i Servizi
-   Massivi, non per la fatturazione ordinaria. Finche' manca, ogni richiesta
-   massiva risponde `ER02 - utente non abilitato`.
-4. **mTLS sul vhost SdI.** `sdi.horygon.it` presenta il certificato server
-   emesso dall'Agenzia ma **non verifica il certificato client di SdI**. Chiunque
-   raggiunga l'endpoint puo' iniettare notifiche e fatture passive. Vedi §7.
+   smart card, che richiede presenza fisica a ogni operazione. Blocca due cose:
+   le fatture **FPA12**, che il CRM ferma prima dell'invio invece di farle
+   scartare con `00102`, e le **richieste SMTS**, che le Istruzioni v1.5
+   impongono siano firmate dal titolare della partita IVA. Finche' manca, lo
+   Scarico Fatture appena attivato non e' utilizzabile.
+2. **Cutover della ricezione** dal codice destinatario Pass.go a quello HORYGON.
+   E' l'ultimo passo: da quel momento le fatture passive reali arrivano
+   sull'endpoint, indipendentemente da `sdi.mode`, che governa solo l'uscita.
+
+Gia' risolti il 07.08.2026: passaggio del canale in produzione, attivazione dei
+Servizi Massivi, indice univoco sui nomi file, pubblicazione della porta del
+container solo su loopback, e mTLS sul vhost SdI su **entrambi** gli strati
+(`ssl_verify_client on` in nginx e `sdi.inbound.client_cert_policy = enforce`
+nell'applicazione). La catena del certificato client di SdI e' stata verificata
+offline contro `ca.pem` prima di chiudere.
+
+Fatture **B2B e B2C** sono quindi gia' emettibili: non richiedono firma.
 
 ## 3. Cosa fa il CRM oggi
 
@@ -249,28 +261,40 @@ certificato foglia, che scade e viene ruotato senza preavviso.
 
 ## 9. Sequenza di go-live
 
-1. Accettare l'Accordo di Servizio e richiedere il passaggio in produzione.
-2. Verificare che HORYGON compaia nell'elenco provider accreditati.
-3. Verificare se l'attivazione consegna **nuovi** certificati e, in tal caso,
-   sostituirli in `/root/sdi-certs/prod/`.
-4. Attivare l'mTLS su `sdi.horygon.it`, prima `optional` poi `on`.
+Fatto il 07.08.2026:
+
+1. ~~Accettare l'Accordo di Servizio e richiedere il passaggio in produzione.~~
+2. ~~Verificare la consegna di nuovi certificati.~~ Nessun certificato nuovo.
+3. ~~Attivare l'mTLS su `sdi.horygon.it`.~~ `on` in nginx piu' `enforce`
+   nell'applicazione, con verifica offline della catena prima di chiudere.
+4. ~~Rendere strutturale l'indice univoco sui nomi file.~~
+
+Da fare, in quest'ordine:
+
 5. Configurare il certificato di firma qualificata e impostare
    `sdi.signature.mode = local`.
 6. **Backup del database**, a container fermo o con checkpoint esplicito.
 7. Esportare lo storico dal cassetto fiscale e importarlo, prima in **dry-run**.
 8. Verificare numeri, totali e direzioni dello storico importato.
 9. Azzerare i dati di test con `scripts/reset-sdi-invoice-data.js`, prima in
-   dry-run. Sblocca anche l'indice univoco sui nomi file.
+   dry-run.
 10. Ricostruire la numerazione fiscale corrente.
-11. Impostare `sdi.mode = production` e `production_send_policy = MANUAL_CONFIRMATION`.
+11. Impostare `sdi.mode = production`, lasciando
+    `production_send_policy = MANUAL_CONFIRMATION`.
 12. Emettere la prima fattura reale con conferma esplicita e verificare la
-    ricevuta.
+    ricevuta. In produzione non esiste un invio di prova: la prima fattura e'
+    gia' un documento fiscale.
 13. Cutover della ricezione da Pass.go al codice destinatario HORYGON.
 14. Ricevere e verificare la prima fattura passiva reale.
 15. Attivare la riconciliazione periodica settimanale.
 
 I punti 6, 7 e 9 in quest'ordine: importare lo storico **prima** di azzerare i
 dati di test, altrimenti si perde il termine di confronto.
+
+Se dopo il punto 13 le fatture passive non arrivano, la prima cosa da riportare
+indietro e' l'mTLS, riportando `ssl_verify_client` a `optional` e ricaricando
+nginx: le consegne fallite non generano un errore visibile, SdI ritenta in
+silenzio e poi mette in impossibilita' di recapito.
 
 ## 10. Cosa resta aperto
 
