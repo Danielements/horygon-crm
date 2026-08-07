@@ -47,7 +47,16 @@ const DEFAULT_SETTINGS = {
   'sdi.payment.modalita': 'MP05',
   'sdi.payment.iban': '',
   'sdi.payment.bic': '',
-  'sdi.payment.istituto': ''
+  'sdi.payment.istituto': '',
+  // Servizi Massivi (SMTS). Endpoint dal WSDL ufficiale ServiziScaricoMassivo_v1.0;
+  // nessun endpoint di test e' documentato nelle istruzioni v1.5.
+  'sdi.massive.endpoint': 'https://servizi.fatturapa.it/sm-scarico-file',
+  'sdi.massive.enabled': '0',
+  // Firma qualificata della richiesta massiva: credenziali distinte da quelle
+  // mTLS del canale SDICoop (Istruzioni SMTS v1.5 par. 1).
+  'sdi.massive.signature.mode': 'disabled',
+  'sdi.massive.signature.certificate_path': sdiPath('massive', 'signer.pem'),
+  'sdi.massive.signature.key_path': sdiPath('massive', 'signer.key')
 };
 
 function ensureSdiSettingsSeed() {
