@@ -3543,6 +3543,8 @@ async function testEsitoCommittenteSdi(id, esito) {
 
 let storicoJobs = [];
 let storicoFirmaJobId = null;
+let storicoStato = null;
+let storicoJobAperto = null;
 
 // Cosa puo' fare l'operatore adesso, per ogni stato del job.
 const STORICO_PASSI = {
@@ -3566,8 +3568,18 @@ async function loadStoricoSdi() {
       api('GET', '/sdi/storico/jobs')
     ]);
     storicoJobs = jobs || [];
+    storicoStato = stato || null;
     renderStoricoStato(stato);
     renderStoricoJobs();
+    // Se il dettaglio e' aperto va riletto, non solo ridisegnato: dopo un passo
+    // i dati che mostra sono cambiati.
+    const modale = document.getElementById('modal-storico-job');
+    if (storicoJobAperto?.job?.id && modale && modale.style.display === 'block') {
+      storicoJobAperto = await api('GET', `/sdi/storico/jobs/${storicoJobAperto.job.id}`);
+      renderStoricoJobModal(storicoJobAperto);
+    } else if (modale && modale.style.display !== 'block') {
+      storicoJobAperto = null;
+    }
   } catch (e) {
     toast(e.message || 'Errore lettura storico SdI', 'error');
   }
@@ -3607,7 +3619,7 @@ function renderStoricoJobs() {
       : job.request_type === 'INCOMING' ? 'Passive'
       : job.request_type === 'AVAILABLE_TO_RECIPIENT' ? 'A disposizione' : job.request_type;
     return `<tr>
-      <td><strong>${job.id}</strong></td>
+      <td><a href="#" onclick="event.preventDefault();openStoricoJobModal(${job.id})" title="Dettaglio e istruzioni"><strong>${job.id}</strong></a></td>
       <td>${escapeHtml(direzione)}</td>
       <td>${escapeHtml(formatDateIt(job.date_from) || job.date_from)} &rarr; ${escapeHtml(formatDateIt(job.date_to) || job.date_to)}</td>
       <td>${renderStoricoStatoBadge(job)}</td>
@@ -3652,6 +3664,105 @@ function renderStoricoStatoBadge(job) {
     ? `<div style="font-size:11px;color:var(--text-muted)">${10 - Number(job.esito_calls || 0)} interrogazioni rimaste</div>`
     : '';
   return `<span class="badge ${cls}">${escapeHtml(label)}</span>${extra}`;
+}
+
+// Dettaglio di una richiesta: e' qui che l'operatore capisce cosa deve fare.
+// La riga della tabella dice qual e' il passo, questa schermata dice come.
+async function openStoricoJobModal(jobId) {
+  try {
+    storicoJobAperto = await api('GET', `/sdi/storico/jobs/${jobId}`);
+    renderStoricoJobModal(storicoJobAperto);
+    openModal('modal-storico-job');
+  } catch (e) {
+    toast(e.message || 'Errore lettura richiesta', 'error');
+  }
+}
+
+function renderStoricoJobModal(data) {
+  const box = document.getElementById('storico-job-body');
+  if (!box || !data?.job) return;
+  const job = data.job;
+  const firma = data.firma || {};
+  const preparata = Boolean(job.request_xml_sha256);
+  const firmata = ['SIGNED', 'SUBMITTED', 'PROCESSING', 'READY', 'DOWNLOADING', 'IMPORTING', 'COMPLETED', 'PARTIAL'].includes(job.status);
+  const direzione = job.request_type === 'OUTGOING' ? 'Fatture emesse'
+    : job.request_type === 'INCOMING' ? 'Fatture ricevute'
+    : job.request_type === 'AVAILABLE_TO_RECIPIENT' ? 'Messe a disposizione' : job.request_type;
+
+  // Passo 1: preparare. Passo 2: firmare fuori. Passo 3: inoltrare.
+  const passoFirma = job.status === 'CREATED' ? (preparata ? `
+    <div style="${SDI_FIRMA_AVVISO_STYLE};margin:12px 0">
+      <strong>La richiesta e' pronta e attende la firma qualificata.</strong>
+      <ol style="margin:8px 0 0 18px;padding:0">
+        <li>Scarica il file XML qui sotto: e' la <em>richiesta</em>, non una fattura.</li>
+        <li>Aprilo con FirmaOK di Poste.</li>
+        <li>Scegli la firma <strong>CAdES</strong>, quella che produce un <code>.p7m</code>.</li>
+        <li>Firma con PIN e OTP.</li>
+        <li>Ricarica qui il file <code>${escapeHtml(job.request_filename || 'richiesta.xml')}.p7m</code> ottenuto.</li>
+      </ol>
+      <div style="margin-top:10px;font-size:12px;color:var(--text-muted)">
+        Non modificare il file fra scarico e firma: il CRM confronta l'XML estratto dal
+        <code>.p7m</code> con quello che ha generato, e rifiuta un documento diverso.
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+        <button class="btn btn-accent" onclick="scaricaRichiestaDaFirmare(${job.id})">Scarica XML da firmare</button>
+        <button class="btn btn-outline" onclick="chiediRichiestaFirmata(${job.id})">Carica .p7m</button>
+      </div>
+    </div>` : `
+    <div style="margin:12px 0">
+      <button class="btn btn-accent" onclick="passoStoricoSdi(${job.id},'prepara')">Prepara la richiesta</button>
+    </div>`) : '';
+
+  const verifica = firmata ? `
+    <div style="background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:12px;margin:12px 0;font-size:13px">
+      <div><strong>Firma:</strong> verificata</div>
+      <div><strong>Documento:</strong> corrispondente a quello generato dal CRM</div>
+      <div><strong>Firmatario:</strong> ${escapeHtml(formatDnFirma(firma.firmatario))}</div>
+      <div><strong>Emittente:</strong> ${escapeHtml(formatDnFirma(firma.emittente))}</div>
+      <div><strong>Certificato valido fino al:</strong> ${escapeHtml(firma.valido_fino || '-')}</div>
+      <div><strong>Verificato il:</strong> ${escapeHtml(firma.verificato_il || '-')}</div>
+    </div>` : '';
+
+  const inoltro = job.status === 'SIGNED' ? `
+    <div style="margin:12px 0">
+      <button class="btn btn-accent" onclick="passoStoricoSdi(${job.id},'inoltra')">Inoltra a SdI</button>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:6px">
+        Da qui in poi il resto puo' andare da solo: esito, scarico e import non richiedono altre firme.
+      </div>
+    </div>` : '';
+
+  const avanzamento = job.remote_request_id ? `
+    <div style="font-size:13px;margin:12px 0">
+      <div><strong>IdRichiesta:</strong> ${escapeHtml(job.remote_request_id)}</div>
+      ${job.expires_at ? `<div><strong>Archivi disponibili fino al:</strong> ${escapeHtml(job.expires_at)}</div>` : ''}
+      <div><strong>Interrogazioni di esito usate:</strong> ${Number(job.esito_calls || 0)} di 10</div>
+      <div><strong>Archivi:</strong> ${job.archives_count || 0} · <strong>Documenti:</strong> ${job.documents_imported || 0} importati su ${job.documents_found || 0}${job.duplicates ? `, ${job.duplicates} duplicati` : ''}</div>
+    </div>` : '';
+
+  box.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px">
+      ${sdiFirmaCard('Richiesta', escapeHtml(direzione))}
+      ${sdiFirmaCard('Periodo', `${escapeHtml(formatDateIt(job.date_from) || job.date_from)}<br>&rarr; ${escapeHtml(formatDateIt(job.date_to) || job.date_to)}`)}
+      ${sdiFirmaCard('P.IVA richiesta', escapeHtml(storicoStato?.partitaIva || '-'))}
+      ${sdiFirmaCard('Stato', renderStoricoStatoBadge(job))}
+    </div>
+    ${preparata ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">
+      File: <code>${escapeHtml(job.request_filename || '-')}</code> · SHA-256 <code>${escapeHtml(String(job.request_xml_sha256 || '').slice(0, 16))}...</code>
+    </div>` : ''}
+    ${passoFirma}
+    ${verifica}
+    ${inoltro}
+    ${avanzamento}
+    ${(data.archives || []).length ? `<h4 style="margin:14px 0 8px">Archivi</h4>
+      <div class="table-wrapper" style="max-height:200px;overflow:auto">
+        <table class="data-table"><thead><tr><th>Nome</th><th>Dimensione</th><th>Stato</th></tr></thead>
+        <tbody>${data.archives.map(a => `<tr>
+          <td>${escapeHtml(a.remote_filename || '-')}</td>
+          <td>${a.size ? `${Math.round(a.size / 1024)} KB` : '-'}</td>
+          <td>${escapeHtml(a.status || '-')}</td>
+        </tr>`).join('')}</tbody></table>
+      </div>` : ''}
+    ${job.errors ? `<div style="${SDI_FIRMA_AVVISO_STYLE};margin-top:12px">${escapeHtml(String(job.errors).slice(0, 400))}</div>` : ''}`;
 }
 
 async function pianificaStoricoSdi() {
