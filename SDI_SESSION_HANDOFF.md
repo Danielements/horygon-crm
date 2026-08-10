@@ -31,8 +31,13 @@ HORYGON S.R.L., `03365990591`, WebService, Scarico Fatture.
 mTLS verso `servizi.fatturapa.it`, la SOAPAction come stringa nuda, l'involucro
 `RichiestaServiziMassivi` e la firma CAdES di FirmaOK.
 
-Restano da provare contro il servizio reale `esitoRichiesta` e `scaricoFile`,
-piu' l'import degli archivi veri.
+La prima richiesta e' stata rifiutata con `00200`: l'involucro aveva i figli nel
+namespace sbagliato, e la firma spesa e' andata persa. Da li' e' nata la
+validazione XSD prima della firma. La seconda, il 10.08.2026 alle 22:07, e'
+stata accettata e `esitoRichiesta` ha risposto `ST01 IN ELABORAZIONE`.
+
+Restano da provare contro il servizio reale la risposta `ST03` con il file di
+esito, `scaricoFile` e l'import degli archivi veri.
 
 Fatto il 09.08.2026: **interfaccia del ciclo di firma esterna** (punto 1 dei
 lavori aperti). Badge di stato SdI sulla riga della fattura, pulsante
