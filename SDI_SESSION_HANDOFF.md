@@ -23,9 +23,16 @@ gli `IdFile`) e `sdi-backfill.js` (orchestratore), ramo di firma esterna in
 `scripts/sdi-fiscal-config.js`.
 
 Il censimento del canale per le forniture massive **e' attivo**: provider
-HORYGON S.R.L., `03365990591`, WebService, Scarico Fatture. Il backfill non ha
-piu' prerequisiti esterni, ma **non e' ancora stato provato contro l'endpoint
-reale**.
+HORYGON S.R.L., `03365990591`, WebService, Scarico Fatture.
+
+**Il 10.08.2026 la prima richiesta massiva reale e' stata accettata**:
+`inoltroRichiesta` sul job 1 (passive, 01.03-31.05) ha restituito
+`IdRichiesta 359870495`. Quindi sono confermati sul campo, oltre alle fixture:
+mTLS verso `servizi.fatturapa.it`, la SOAPAction come stringa nuda, l'involucro
+`RichiestaServiziMassivi` e la firma CAdES di FirmaOK.
+
+Restano da provare contro il servizio reale `esitoRichiesta` e `scaricoFile`,
+piu' l'import degli archivi veri.
 
 Fatto il 09.08.2026: **interfaccia del ciclo di firma esterna** (punto 1 dei
 lavori aperti). Badge di stato SdI sulla riga della fattura, pulsante
