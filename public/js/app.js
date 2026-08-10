@@ -3707,6 +3707,12 @@ function renderStoricoJobModal(data) {
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
         <button class="btn btn-accent" onclick="scaricaRichiestaDaFirmare(${job.id})">Scarica XML da firmare</button>
         <button class="btn btn-outline" onclick="chiediRichiestaFirmata(${job.id})">Carica .p7m</button>
+        <button class="btn btn-outline" onclick="passoStoricoSdi(${job.id},'prepara')" title="Rigenera il documento: serve se ne hai scaricato uno prodotto da una versione precedente">Rigenera la richiesta</button>
+      </div>
+      <div style="margin-top:8px;font-size:12px;color:var(--text-muted)">
+        Controllo rapido sul file scaricato: deve cominciare con <code>&lt;FileRichiesta</code>.
+        Se comincia con <code>&lt;InputMassivo</code> e' stato prodotto da una versione precedente:
+        rigeneralo e riscaricalo prima di firmare.
       </div>
     </div>` : `
     <div style="margin:12px 0">
