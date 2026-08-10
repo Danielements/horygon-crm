@@ -11,6 +11,8 @@ const { signCadesBes, extractCmsCertificates } = require('../src/services/sdi-ca
 const {
   attachSignedFile,
   getDocumentToSign,
+  getSignatureStateForInvoice,
+  isTransmittableState,
   verifySignedFile,
   STATO_FIRMA_RICHIESTA,
   STATO_FIRMA_VERIFICATA
@@ -173,6 +175,83 @@ test('non si puo caricare due volte il file firmato', (t) => {
   attachSignedFile({ flowId, signedBuffer: sign(XML, m) });
   assert.throws(() => attachSignedFile({ flowId, signedBuffer: sign(XML, m) }), /gia un file firmato/);
   cleanup();
+});
+
+// Aggiunge un secondo flusso alla stessa fattura, come accade quando l'XML
+// viene generato due volte: ogni generazione consuma un progressivo e lascia un
+// documento distinto da firmare.
+function seedExtraPendingFlow(fatturaId, xml = XML) {
+  const dir = path.join(ROOT, 'uploads', 'sdi-outbound', 'test-firma');
+  fs.mkdirSync(dir, { recursive: true });
+  const hash = sha256(Buffer.from(xml, 'utf8'));
+  const file = path.join(dir, `${hash}_IT03365990591_F0002.xml`);
+  fs.writeFileSync(file, xml, 'utf8');
+  const relative = `/${path.relative(ROOT, file).replace(/\\/g, '/')}`;
+  return Number(db.prepare(`
+    INSERT INTO fatture_sdi_flussi
+      (fattura_id, direzione, modalita, tipo_messaggio, nome_file, stato, xml_path,
+       sdi_xml_sha256, sdi_xml_immutabile_path)
+    VALUES (?, 'outbound', 'production', 'fattura', ?, ?, ?, ?, ?)
+  `).run(fatturaId, `IT03365990591_G${Date.now().toString(36).slice(-4).toUpperCase()}.xml`,
+    STATO_FIRMA_RICHIESTA, relative, hash, relative).lastInsertRowid);
+}
+
+test('lo stato della firma descrive il flusso in attesa e il nome file atteso', () => {
+  cleanup();
+  const { flowId, fatturaId, xmlSha256 } = seedFlow();
+  const state = getSignatureStateForInvoice(fatturaId);
+
+  assert.equal(state.fatturaId, fatturaId);
+  assert.equal(state.flusso.id, flowId);
+  assert.equal(state.flusso.attendeFirma, true);
+  assert.equal(state.flusso.firmato, false);
+  assert.equal(state.flusso.trasmissibile, false, 'in attesa di firma non e trasmissibile');
+  assert.equal(state.flusso.xmlSha256, xmlSha256);
+  assert.match(state.flusso.nomeFileFirmato, /\.xml\.p7m$/);
+  assert.deepEqual(state.altriInAttesaDiFirma, []);
+  cleanup();
+});
+
+test('dopo il caricamento lo stato espone firmatario e trasmissibilita', (t) => {
+  const m = material();
+  if (!m) return t.skip('openssl non disponibile');
+  cleanup();
+  const { flowId, fatturaId } = seedFlow();
+  attachSignedFile({ flowId, signedBuffer: sign(XML, m) });
+
+  const state = getSignatureStateForInvoice(fatturaId);
+  assert.equal(state.statoSdi, STATO_FIRMA_VERIFICATA);
+  assert.equal(state.flusso.firmato, true);
+  assert.equal(state.flusso.attendeFirma, false);
+  assert.equal(state.flusso.trasmissibile, true);
+  assert.equal(state.flusso.firmaApplicata, 'CAdES-BES');
+  assert.match(state.flusso.firmatario, /FURFARI DANIELE/);
+  assert.ok(state.flusso.validoFino, 'la scadenza del certificato va mostrata a chi firma');
+  cleanup();
+});
+
+test('una seconda generazione lascia un flusso in attesa che non viene nascosto', () => {
+  cleanup();
+  const { flowId, fatturaId } = seedFlow();
+  const secondo = seedExtraPendingFlow(fatturaId);
+
+  const state = getSignatureStateForInvoice(fatturaId);
+  assert.equal(state.flusso.id, secondo, 'il corrente e l ultimo generato');
+  assert.equal(state.altriInAttesaDiFirma.length, 1);
+  assert.equal(state.altriInAttesaDiFirma[0].id, flowId, 'il precedente resta visibile e firmabile');
+  cleanup();
+});
+
+test('gli stati trasmissibili escludono il gia inviato e l attesa di firma', () => {
+  assert.equal(isTransmittableState(STATO_FIRMA_VERIFICATA), true);
+  assert.equal(isTransmittableState('xml_generato_production'), true);
+  // EI02 e' un servizio momentaneamente non disponibile: nulla e stato preso in
+  // carico, quindi lo stesso file puo essere ritrasmesso.
+  assert.equal(isTransmittableState('invio_da_ritentare_production'), true);
+  assert.equal(isTransmittableState(STATO_FIRMA_RICHIESTA), false);
+  // Il nome file e gia consumato: SdI lo rifiuterebbe con 00002.
+  assert.equal(isTransmittableState('inviato_production'), false);
+  assert.equal(isTransmittableState('errore_invio_production'), false);
 });
 
 test('i certificati inclusi nel p7m sono estraibili', (t) => {

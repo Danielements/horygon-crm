@@ -40,6 +40,77 @@ function getFlow(flowId) {
   return flow;
 }
 
+// Stato del ciclo di firma per una fattura, nella forma che serve a chi deve
+// decidere cosa fare: scaricare, caricare il firmato, o trasmettere.
+//
+// Il flusso "corrente" e' l'ultimo generato, cioe' quello che si rispecchia in
+// fatture.stato_sdi. Gli altri flussi ancora in attesa vengono elencati a parte:
+// una doppia generazione lascia due documenti da firmare, e ignorarli
+// significherebbe mostrarne uno solo e lasciare l'altro appeso senza traccia.
+function getSignatureStateForInvoice(fatturaId) {
+  const invoice = db.prepare('SELECT id, numero, tipo, stato_sdi FROM fatture WHERE id = ?').get(fatturaId);
+  if (!invoice) throw new Error(`Fattura ${fatturaId} non trovata`);
+
+  const flows = db.prepare(`
+    SELECT id, nome_file, stato, modalita, sdi_formato, sdi_xml_sha256, firma_applicata, firma_meta,
+           identificativo_sdi, esito_codice, esito_descrizione, creato_il, inviato_il, ultimo_evento_il
+    FROM fatture_sdi_flussi
+    WHERE fattura_id = ? AND COALESCE(direzione, 'outbound') = 'outbound'
+    ORDER BY id DESC
+  `).all(invoice.id).map(describeFlowForSignature);
+
+  return {
+    fatturaId: invoice.id,
+    numero: invoice.numero,
+    tipo: invoice.tipo,
+    statoSdi: invoice.stato_sdi || null,
+    flusso: flows[0] || null,
+    altriInAttesaDiFirma: flows.slice(1).filter((flow) => flow.attendeFirma)
+  };
+}
+
+function describeFlowForSignature(flow) {
+  const meta = parseJson(flow.firma_meta);
+  const stato = String(flow.stato || '');
+  return {
+    id: flow.id,
+    nomeFile: flow.nome_file,
+    // Il nome che SdI si aspetta dopo la firma: e' lo stesso che propone
+    // getDocumentToSign, ripetuto qui perche' l'interfaccia lo mostra prima
+    // ancora di scaricare il documento.
+    nomeFileFirmato: `${String(flow.nome_file || '').replace(/\.p7m$/i, '')}.p7m`,
+    stato,
+    modalita: flow.modalita || 'test',
+    formato: flow.sdi_formato || null,
+    xmlSha256: flow.sdi_xml_sha256 || null,
+    firmaApplicata: flow.firma_applicata || null,
+    firmatario: meta.firmatario || null,
+    emittente: meta.emittente || null,
+    validoFino: meta.valido_fino || null,
+    verificatoIl: meta.verificato_il || null,
+    identificativoSdi: flow.identificativo_sdi || null,
+    esitoCodice: flow.esito_codice || null,
+    esitoDescrizione: flow.esito_descrizione || null,
+    creatoIl: flow.creato_il || null,
+    inviatoIl: flow.inviato_il || null,
+    ultimoEventoIl: flow.ultimo_evento_il || null,
+    attendeFirma: stato === STATO_FIRMA_RICHIESTA,
+    firmato: stato === STATO_FIRMA_VERIFICATA,
+    trasmissibile: isTransmittableState(stato)
+  };
+}
+
+// Quali stati ammettono una trasmissione del file gia' generato. Un flusso gia'
+// inviato non rientra: il nome file e' consumato e SdI lo rifiuterebbe con
+// 00002. Il "da ritentare" si', perche' nasce da EI02, cioe' da un servizio
+// momentaneamente non disponibile che non ha preso in carico nulla.
+function isTransmittableState(stato) {
+  const value = String(stato || '');
+  return value === STATO_FIRMA_VERIFICATA
+    || /^xml_generato_/.test(value)
+    || /^invio_da_ritentare_/.test(value);
+}
+
 // Restituisce l'XML da portare al dispositivo di firma.
 function getDocumentToSign(flowId) {
   const flow = getFlow(flowId);
@@ -244,5 +315,7 @@ module.exports = {
   SignedDocumentMismatchError,
   attachSignedFile,
   getDocumentToSign,
+  getSignatureStateForInvoice,
+  isTransmittableState,
   verifySignedFile
 };

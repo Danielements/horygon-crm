@@ -1586,6 +1586,18 @@
   </div>
 </div>
 
+<!-- MODAL CICLO DI FIRMA SDI -->
+<div id="modal-sdi-firma" class="modal">
+  <div class="modal-box" style="max-width:820px">
+    <div class="modal-title">&#128278; Firma qualificata e invio a SdI</div>
+    <div id="sdi-firma-body"></div>
+    <input type="file" id="sdi-firma-input" accept=".p7m" style="display:none" onchange="caricaP7mFirmato(this)">
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAllModals()">Chiudi</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL IMPORT XML FATTURA -->
 <div id="modal-import-xml" class="modal">
   <div class="modal-box">

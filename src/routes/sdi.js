@@ -7,9 +7,9 @@ const { authMiddleware, requirePermesso } = require('../middleware/auth');
 const { writeAudit } = require('../services/audit');
 const { writeSystemLog } = require('../services/system-log');
 const { generateOutboundXmlForInvoice } = require('../services/sdi-fatturapa');
-const { transmitInvoiceToSdi, transmitInvoiceToSdiTest } = require('../services/sdi-transmission');
+const { transmitGeneratedFlow, transmitInvoiceToSdi, transmitInvoiceToSdiTest } = require('../services/sdi-transmission');
 const { getSignatureStatus } = require('../services/sdi-signature');
-const { attachSignedFile, getDocumentToSign } = require('../services/sdi-firma-esterna');
+const { attachSignedFile, getDocumentToSign, getSignatureStateForInvoice } = require('../services/sdi-firma-esterna');
 const { peekOutboundSequence } = require('../services/sdi-progressivo');
 const { getSetting } = require('../services/google');
 const { sendEsitoCommittenteToSdiTest } = require('../services/sdi-esito-committente');
@@ -332,6 +332,89 @@ router.post('/flussi/:id/firma', requirePermesso('fatture', 'edit'), signedFileP
   }
 });
 
+// Stato del ciclo di firma per una fattura: e' quello che l'interfaccia legge
+// per sapere se mostrare "scarica", "carica il firmato" o "invia".
+router.get('/fatture/:id/firma', requirePermesso('fatture', 'read'), (req, res) => {
+  try {
+    const state = getSignatureStateForInvoice(Number(req.params.id));
+    res.json({
+      ...state,
+      modalitaFirma: getSignatureStatus().mode,
+      modoCanale: normalizeMode(getSetting('sdi.mode', 'test')),
+      productionSendPolicy: getProductionSendPolicy()
+    });
+  } catch (error) {
+    // La fattura assente e' un 404; una configurazione di canale illeggibile no,
+    // altrimenti l'interfaccia mostrerebbe "fattura non trovata" per un problema
+    // che sta altrove.
+    res.status(/non trovata/i.test(error.message) ? 404 : 400).json({ error: error.message });
+  }
+});
+
+// Trasmette un flusso gia' generato, senza rigenerarlo.
+//
+// Serve al ciclo di firma esterna: il file da inviare e' il .p7m appena
+// verificato, e passare da /fatture/:id/send lo rigenererebbe non firmato,
+// consumando un progressivo a ogni tentativo. La modalita' non e' scegliibile
+// qui perche' e' una proprieta' del flusso, fissata quando sono stati allocati
+// nome file e progressivo.
+router.post('/flussi/:id/invia', requirePermesso('fatture', 'edit'), async (req, res) => {
+  const flowId = Number(req.params.id);
+  const route = `/api/sdi/flussi/${flowId}/invia`;
+  try {
+    const flow = db.prepare('SELECT id, fattura_id, modalita, stato FROM fatture_sdi_flussi WHERE id = ?').get(flowId);
+    if (!flow) throw new Error(`Flusso SDI ${flowId} non trovato`);
+    const mode = normalizeMode(flow.modalita || 'test');
+    assertProductionSendAllowed(mode, req.body);
+
+    const transmission = await transmitGeneratedFlow(flowId, { mode });
+
+    writeAudit({
+      utente_id: req.user.id,
+      azione: mode === 'production' ? 'sdi.flusso.send_production' : 'sdi.flusso.send_test',
+      entita_tipo: 'fattura',
+      entita_id: flow.fattura_id || null,
+      dettagli: {
+        flowId,
+        mode,
+        statoPrecedente: flow.stato,
+        endpoint: transmission.endpoint,
+        statusCode: transmission.statusCode,
+        identificativoSdi: transmission.identificativoSdi,
+        errore: transmission.errore,
+        success: transmission.success
+      }
+    });
+    writeSystemLog({
+      livello: transmission.success ? 'info' : 'error',
+      origine: 'sdi.send',
+      route,
+      metodo: 'POST',
+      utente_id: req.user.id,
+      messaggio: transmission.success
+        ? `Flusso ${flowId} trasmesso a SDI ${mode.toUpperCase()}: ${transmission.identificativoSdi || flowId}`
+        : `Invio SDI ${mode.toUpperCase()} del flusso ${flowId} non riuscito: ${transmission.erroreDescrizione || transmission.statusCode}`,
+      dettagli: { flowId, mode, transmission }
+    });
+    res.status(transmission.success ? 200 : 502).json({ ok: transmission.success, flowId, mode, transmission });
+  } catch (error) {
+    writeSystemLog({
+      livello: 'error',
+      origine: 'sdi.send',
+      route,
+      metodo: 'POST',
+      utente_id: req.user?.id,
+      messaggio: error.message,
+      stack: error.stack || null,
+      dettagli: { flowId }
+    });
+    res.status(error.needsConfirmation ? 409 : 400).json({
+      error: error.message,
+      needsConfirmation: Boolean(error.needsConfirmation)
+    });
+  }
+});
+
 // Stato operativo del canale: modalita, policy di invio, firma e progressivi.
 router.get('/status', requirePermesso('fatture', 'read'), (req, res) => {
   const mode = normalizeMode(getSetting('sdi.mode', 'test'));
@@ -357,17 +440,7 @@ router.post('/fatture/:id/send', requirePermesso('fatture', 'edit'), async (req,
   const requestedMode = normalizeMode(req.body?.mode || 'test');
   const route = `/api/sdi/fatture/${req.params.id}/send`;
   try {
-    if (requestedMode === 'production') {
-      const configuredMode = normalizeMode(getSetting('sdi.mode', 'test'));
-      if (configuredMode !== 'production') {
-        throw new Error('Invio in produzione non disponibile: sdi.mode e impostato su "test"');
-      }
-      if (getProductionSendPolicy() === 'MANUAL_CONFIRMATION' && req.body?.confirm !== true) {
-        const error = new Error('Invio in produzione richiede conferma esplicita (confirm=true)');
-        error.needsConfirmation = true;
-        throw error;
-      }
-    }
+    assertProductionSendAllowed(requestedMode, req.body);
 
     const result = await transmitInvoiceToSdi(req.params.id, {
       mode: requestedMode,
@@ -469,6 +542,22 @@ function normalizeMode(value) {
   const mode = String(value || 'test').trim().toLowerCase();
   if (mode !== 'test' && mode !== 'production') throw new Error(`Modalita SDI non valida: ${value}`);
   return mode;
+}
+
+// Guardrail di produzione, condiviso da tutte le rotte di invio: in produzione
+// non esiste un invio di prova, quindi la conferma esplicita per singolo
+// documento e' l'unico punto in cui l'operatore puo' ancora fermarsi.
+function assertProductionSendAllowed(requestedMode, body) {
+  if (requestedMode !== 'production') return;
+  const configuredMode = normalizeMode(getSetting('sdi.mode', 'test'));
+  if (configuredMode !== 'production') {
+    throw new Error('Invio in produzione non disponibile: sdi.mode e impostato su "test"');
+  }
+  if (getProductionSendPolicy() === 'MANUAL_CONFIRMATION' && body?.confirm !== true) {
+    const error = new Error('Invio in produzione richiede conferma esplicita (confirm=true)');
+    error.needsConfirmation = true;
+    throw error;
+  }
 }
 
 function getProductionSendPolicy() {

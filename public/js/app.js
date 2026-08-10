@@ -3431,6 +3431,20 @@ function formatIvaValue(value) {
   return `EUR ${n.toFixed(2)}`;
 }
 
+// Lo stato SdI e' un'informazione diversa dallo stato di pagamento: una fattura
+// puo' essere "emessa" in contabilita' e ferma in attesa di firma verso SdI.
+function renderStatoSdiBadge(f) {
+  const stato = String(f.stato_sdi || '');
+  if (!stato) return '';
+  const etichette = {
+    firma_richiesta: ['Attende firma', 'badge-scaduta'],
+    firma_verificata: ['Firmata', 'badge-fornitore']
+  };
+  const [label, cls] = etichette[stato]
+    || [stato.replace(/_/g, ' '), /^inviato_/.test(stato) ? 'badge-pagata' : 'badge-cliente'];
+  return `<span class="badge ${cls}" style="margin-left:4px" title="Stato SdI: ${escapeHtml(stato)}">${escapeHtml(label)}</span>`;
+}
+
 function renderFattureRows(targetId, rows) {
   const body = document.getElementById(targetId);
   if (!body) return;
@@ -3440,13 +3454,14 @@ function renderFattureRows(targetId, rows) {
     <td>${f.ragione_sociale||'-'}</td><td>${f.data||'-'}</td>
     <td>${f.totale ? 'EUR '+Number(f.totale).toFixed(2) : '-'}</td>
     <td>${formatIvaValue(f.iva)}</td>
-    <td><span class="badge badge-${f.stato}">${f.stato}</span></td>
+    <td><span class="badge badge-${f.stato}">${f.stato}</span>${renderStatoSdiBadge(f)}</td>
     <td><select class="btn btn-outline btn-sm" onchange="cambiaStatoFattura(${f.id},this.value)">
       ${['ricevuta','pagata','scaduta','annullata'].map(s=>`<option value="${s}"${f.stato===s?' selected':''}>${s}</option>`).join('')}
     </select></td>
     <td><div style="display:flex;gap:6px;flex-wrap:wrap">
       <button class="btn btn-outline btn-sm" onclick="previewFattura(${f.id})" title="Anteprima fattura">&#128065;</button>
       ${f.xml_path ? `<button class="btn btn-outline btn-sm" onclick="openFatturaXml(${f.id})" title="Apri XML">XML</button>` : ''}
+      ${f.tipo === 'emessa' && f.stato_sdi ? `<button class="btn ${f.stato_sdi === 'firma_richiesta' ? 'btn-accent' : 'btn-outline'} btn-sm" onclick="openSdiFirmaModal(${f.id})" title="Ciclo di firma e invio a SdI">&#128278; Firma / Invio</button>` : ''}
       ${f.tipo === 'emessa' ? `<button class="btn btn-outline btn-sm" onclick="testSendFatturaSdi(${f.id})">Genera XML TEST</button><button class="btn btn-accent btn-sm" onclick="testTransmitFatturaSdi(${f.id})">Invia a SdI TEST</button>` : ''}
       ${f.tipo === 'ricevuta' ? `<button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC01')">Accetta SdI TEST</button><button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC02')">Rifiuta SdI TEST</button>` : ''}
     </div></td></tr>`).join('');
@@ -3513,6 +3528,244 @@ async function testEsitoCommittenteSdi(id, esito) {
     }
   } catch (e) {
     toast(e.message || 'Errore invio esito committente SdI TEST', 'error');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CICLO DI FIRMA ESTERNA SDI
+// ---------------------------------------------------------------------------
+// Per la firma qualificata remota con PIN e OTP (FirmaOK di Poste) non esiste
+// una API server-to-server: il CRM prepara l'XML, l'operatore lo firma fuori e
+// ricarica qui il .p7m, che viene verificato prima di diventare trasmissibile.
+
+let sdiFirmaState = null;
+let sdiFirmaFlowId = null;
+
+const SDI_FIRMA_AVVISO_STYLE = 'border:1px solid var(--warning);border-radius:6px;padding:12px;font-size:13px;color:var(--text)';
+
+function sdiFirmaCard(label, value) {
+  return `<div style="background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:10px">
+    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase">${label}</div>
+    <div style="font-weight:700;margin-top:4px">${value}</div>
+  </div>`;
+}
+
+async function openSdiFirmaModal(fatturaId) {
+  try {
+    sdiFirmaState = await api('GET', `/sdi/fatture/${fatturaId}/firma`);
+    sdiFirmaFlowId = sdiFirmaState?.flusso?.id || null;
+    renderSdiFirmaBody();
+    openModal('modal-sdi-firma');
+  } catch (e) {
+    toast(e.message || 'Errore lettura stato firma SdI', 'error');
+  }
+}
+
+function sdiFirmaFlussi() {
+  const state = sdiFirmaState || {};
+  return [state.flusso, ...(state.altriInAttesaDiFirma || [])].filter(Boolean);
+}
+
+function selezionaFlussoFirma(flowId) {
+  sdiFirmaFlowId = Number(flowId);
+  renderSdiFirmaBody();
+}
+
+function renderSdiFirmaBody() {
+  const body = document.getElementById('sdi-firma-body');
+  if (!body) return;
+  const state = sdiFirmaState || {};
+  const flussi = sdiFirmaFlussi();
+  const flow = flussi.find(f => f.id === sdiFirmaFlowId) || flussi[0] || null;
+
+  if (!flow) {
+    body.innerHTML = `
+      <p>Nessun flusso SdI generato per la fattura <strong>${escapeHtml(state.numero || '-')}</strong>.</p>
+      <p style="color:var(--text-muted);font-size:13px">Genera prima l'XML: solo allora il documento puo' essere firmato e trasmesso.</p>`;
+    return;
+  }
+
+  // Il progressivo e' gia' consumato: una seconda generazione lascia due
+  // documenti da firmare, e vanno mostrati entrambi invece di nasconderne uno.
+  const selettore = flussi.length > 1 ? `
+    <div style="${SDI_FIRMA_AVVISO_STYLE};margin-bottom:12px">
+      Ci sono ${flussi.length} flussi per questa fattura: ognuno ha un nome file e un progressivo diversi,
+      e va firmato o abbandonato singolarmente.
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+        ${flussi.map(f => `<button class="btn btn-sm ${f.id === flow.id ? 'btn-accent' : 'btn-outline'}"
+          onclick="selezionaFlussoFirma(${f.id})">${escapeHtml(f.nomeFile || ('#' + f.id))}</button>`).join('')}
+      </div>
+    </div>` : '';
+
+  const ambiente = flow.modalita === 'production'
+    ? '<span class="badge badge-scaduta">PRODUZIONE</span>'
+    : '<span class="badge badge-cliente">TEST</span>';
+
+  const firmatario = flow.firmato ? `
+    <div style="background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:12px;margin:12px 0;font-size:13px">
+      <div><strong>Firmatario:</strong> ${escapeHtml(formatDnFirma(flow.firmatario))}</div>
+      <div><strong>Emittente:</strong> ${escapeHtml(formatDnFirma(flow.emittente))}</div>
+      <div><strong>Certificato valido fino al:</strong> ${escapeHtml(flow.validoFino || '-')}</div>
+      <div><strong>Verificato il:</strong> ${escapeHtml(flow.verificatoIl || '-')}</div>
+      <div style="color:var(--text-muted);margin-top:6px">
+        Revoca del certificato e affidabilita' della CA non sono verificabili in locale: restano in capo a SdI.
+      </div>
+    </div>` : '';
+
+  const esito = flow.identificativoSdi || flow.esitoDescrizione ? `
+    <div style="font-size:13px;margin:10px 0">
+      ${flow.identificativoSdi ? `<div><strong>IdentificativoSdI:</strong> ${escapeHtml(flow.identificativoSdi)}</div>` : ''}
+      ${flow.esitoDescrizione ? `<div><strong>Esito:</strong> ${escapeHtml(flow.esitoDescrizione)}</div>` : ''}
+      ${flow.inviatoIl ? `<div><strong>Inviato il:</strong> ${escapeHtml(flow.inviatoIl)}</div>` : ''}
+    </div>` : '';
+
+  const azioni = [];
+  if (flow.attendeFirma) {
+    azioni.push(`<button class="btn btn-accent" onclick="scaricaXmlDaFirmare(${flow.id})">1. Scarica XML da firmare</button>`);
+    azioni.push(`<button class="btn btn-outline" onclick="chiediP7mFirmato(${flow.id})">2. Carica il .p7m firmato</button>`);
+  }
+  if (flow.trasmissibile) {
+    azioni.push(`<button class="btn ${flow.modalita === 'production' ? 'btn-danger' : 'btn-accent'}"
+      onclick="inviaFlussoSdi(${flow.id})">Invia a SdI ${flow.modalita === 'production' ? 'PRODUZIONE' : 'TEST'}</button>`);
+  }
+
+  body.innerHTML = `
+    ${selettore}
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px">
+      ${sdiFirmaCard('Fattura', escapeHtml(state.numero || '-'))}
+      ${sdiFirmaCard('Formato', escapeHtml(flow.formato || '-'))}
+      ${sdiFirmaCard('Ambiente', ambiente)}
+      ${sdiFirmaCard('Stato', escapeHtml(descriviStatoFirma(flow)))}
+    </div>
+    <div style="font-size:13px;margin-bottom:10px">
+      <div><strong>Nome file:</strong> ${escapeHtml(flow.nomeFile || '-')}</div>
+      ${flow.attendeFirma ? `<div><strong>Nome atteso dopo la firma:</strong> ${escapeHtml(flow.nomeFileFirmato || '-')}</div>` : ''}
+    </div>
+    ${flow.attendeFirma ? `
+      <div style="${SDI_FIRMA_AVVISO_STYLE};margin-bottom:12px">
+        Il documento attende la firma qualificata e non e' trasmissibile in nessun ambiente.
+        Firma il file con FirmaOK (PIN + OTP) senza modificarlo: il CRM confronta l'XML estratto dal .p7m
+        con quello generato e rifiuta un documento diverso.
+      </div>` : ''}
+    ${firmatario}
+    ${esito}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">${azioni.join('')}</div>`;
+}
+
+// Il subject di un certificato arriva su piu' righe (C=IT\nO=...\nCN=...):
+// in HTML collasserebbe in una riga sola poco leggibile.
+function formatDnFirma(dn) {
+  const value = String(dn || '').trim();
+  if (!value) return '-';
+  return value.split(/[\r\n]+/).map(part => part.trim()).filter(Boolean).join(' · ');
+}
+
+function descriviStatoFirma(flow) {
+  if (flow.attendeFirma) return 'Attende firma';
+  if (flow.firmato) return 'Firmato e verificato';
+  if (/^inviato_/.test(flow.stato || '')) return 'Inviato a SdI';
+  if (/^invio_da_ritentare_/.test(flow.stato || '')) return 'Da ritentare';
+  if (/^errore_invio_/.test(flow.stato || '')) return 'Errore invio';
+  return flow.stato || '-';
+}
+
+// Il download passa da fetch perche' il token JWT sta in localStorage e non
+// viaggia su una navigazione diretta: un window.open tornerebbe 401.
+async function scaricaXmlDaFirmare(flowId) {
+  try {
+    const res = await fetch(`/api/sdi/flussi/${flowId}/xml-da-firmare`, {
+      headers: { 'Authorization': `Bearer ${TOKEN}` },
+      cache: 'no-store'
+    });
+    if (res.status === 401) { logout(); return; }
+    if (!res.ok) {
+      const raw = await res.text();
+      let message = `Errore HTTP ${res.status}`;
+      try { message = JSON.parse(raw).error || message; } catch {}
+      throw new Error(message);
+    }
+    const disposition = res.headers.get('content-disposition') || '';
+    const match = disposition.match(/filename="?([^";]+)"?/i);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = match ? match[1] : `flusso-${flowId}.xml`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    toast('XML scaricato: firmalo con FirmaOK e ricaricalo qui', 'success');
+  } catch (e) {
+    toast(e.message || 'Errore download XML da firmare', 'error');
+  }
+}
+
+function chiediP7mFirmato(flowId) {
+  sdiFirmaFlowId = Number(flowId);
+  const input = document.getElementById('sdi-firma-input');
+  if (!input) return;
+  input.value = '';
+  input.click();
+}
+
+async function caricaP7mFirmato(input) {
+  const file = input.files && input.files[0];
+  if (!file || !sdiFirmaFlowId) return;
+  try {
+    // Il .p7m e' binario e la rotta lo accetta come corpo grezzo: niente
+    // FormData, che aggiungerebbe l'involucro multipart al contenuto firmato.
+    const res = await fetch(`/api/sdi/flussi/${sdiFirmaFlowId}/firma?filename=${encodeURIComponent(file.name)}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/octet-stream' },
+      body: file
+    });
+    if (res.status === 401) { logout(); return; }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (data.code === 'SIGNED_DOCUMENT_MISMATCH') {
+        toast('Il file firmato non corrisponde all\'XML generato: e\' stato firmato un altro documento', 'error');
+      } else {
+        toast(data.error || `Errore HTTP ${res.status}`, 'error');
+      }
+      return;
+    }
+    toast(`Firma verificata: ${data.signer?.subject || 'firmatario non leggibile'}`, 'success');
+    await ricaricaStatoFirma();
+  } catch (e) {
+    toast(e.message || 'Errore caricamento file firmato', 'error');
+  } finally {
+    input.value = '';
+  }
+}
+
+async function inviaFlussoSdi(flowId) {
+  const flow = sdiFirmaFlussi().find(f => f.id === Number(flowId));
+  const produzione = flow?.modalita === 'production';
+  const domanda = produzione
+    ? `Inviare il file ${flow?.nomeFile || flowId} a SdI in PRODUZIONE?\n\n`
+      + 'In produzione non esiste un invio di prova: questo e\' un documento fiscale a tutti gli effetti.'
+    : `Inviare il file ${flow?.nomeFile || flowId} a SdI in ambiente TEST?`;
+  if (!confirm(domanda)) return;
+  try {
+    // La conferma esplicita richiesta dalla policy MANUAL_CONFIRMATION e' il
+    // dialogo appena accettato dall'operatore.
+    const result = await api('POST', `/sdi/flussi/${flowId}/invia`, { confirm: true });
+    const sdiId = result?.transmission?.identificativoSdi;
+    toast(sdiId ? `Trasmesso a SdI: ${sdiId}` : 'Trasmesso a SdI', 'success');
+    await ricaricaStatoFirma();
+  } catch (e) {
+    toast(e.message || 'Errore invio a SdI', 'error');
+  }
+}
+
+async function ricaricaStatoFirma() {
+  if (!sdiFirmaState?.fatturaId) return;
+  sdiFirmaState = await api('GET', `/sdi/fatture/${sdiFirmaState.fatturaId}/firma`);
+  renderSdiFirmaBody();
+  const active = document.querySelector('.section.active')?.id?.replace('section-', '') || 'fatture-attive';
+  if (['fatture-attive', 'fatture-passive', 'fatture-fuori-campo'].includes(active)) {
+    loadFattureBySection(active);
   }
 }
 
