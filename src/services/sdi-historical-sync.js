@@ -24,10 +24,14 @@ const TRANSITIONS = {
   SUBMITTED: ['PROCESSING', 'READY', 'FAILED', 'EXPIRED'],
   PROCESSING: ['PROCESSING', 'READY', 'FAILED', 'EXPIRED'],
   READY: ['DOWNLOADING', 'FAILED', 'EXPIRED'],
-  DOWNLOADING: ['DOWNLOADING', 'IMPORTING', 'PARTIAL', 'FAILED'],
+  DOWNLOADING: ['DOWNLOADING', 'IMPORTING', 'PARTIAL', 'FAILED', 'EXPIRED'],
   IMPORTING: ['IMPORTING', 'COMPLETED', 'PARTIAL', 'FAILED'],
   COMPLETED: [],
-  PARTIAL: [],
+  // PARTIAL non e' un fallimento: e' una passata finita con qualcosa rimasto
+  // indietro. Un backfill che non si puo' riprendere costringerebbe a rifare
+  // la richiesta da capo, cioe' a spendere un'altra firma qualificata per dati
+  // che sono gia' stati scaricati. Si riparte da dove ci si era fermati.
+  PARTIAL: ['DOWNLOADING', 'IMPORTING'],
   FAILED: [],
   EXPIRED: []
 };
@@ -212,6 +216,7 @@ function transitionJob(jobId, nextStatus, patch = {}) {
     documents_imported: patch.documentsImported,
     duplicates: patch.duplicates,
     unmatched: patch.unmatched,
+    esito_calls: patch.esitoCalls,
     errors: patch.errors === undefined ? undefined : JSON.stringify(patch.errors)
   };
   Object.entries(columns).forEach(([column, value]) => {
@@ -230,6 +235,27 @@ function transitionJob(jobId, nextStatus, patch = {}) {
 
   db.prepare(`UPDATE sdi_historical_sync_job SET ${fields.join(', ')} WHERE id = ?`).run(...values);
   return getJob(jobId);
+}
+
+// Riapertura amministrativa di un job concluso, per ri-elaborare archivi gia'
+// scaricati senza rifare la richiesta a SdI.
+//
+// Non passa da transitionJob di proposito: la regola "da uno stato terminale
+// non si esce" protegge il flusso normale e resta valida. Questa e' un'altra
+// cosa, un'azione esplicita di chi sa cosa sta facendo, e lascia traccia.
+function reopenJobForReimport(jobId, { utenteId = null, motivo = null } = {}) {
+  const job = getJob(jobId);
+  if (!job) throw new Error(`Job ${jobId} non trovato`);
+  if (!['COMPLETED', 'PARTIAL', 'IMPORTING', 'DOWNLOADING'].includes(job.status)) {
+    throw new Error(`Il job ${jobId} non e ri-elaborabile dallo stato ${job.status}`);
+  }
+  db.prepare("UPDATE sdi_historical_sync_job SET status = 'DOWNLOADING', completed_at = NULL, aggiornato_il = datetime('now') WHERE id = ?")
+    .run(job.id);
+  audit('SDI_HISTORICAL_JOB_REOPENED', {
+    tenantId: job.tenant_id, jobId: job.id, utenteId,
+    dettagli: { statoPrecedente: job.status, motivo }
+  });
+  return getJob(job.id);
 }
 
 function registerArchive({ tenantId, jobId, remoteArchiveId, remoteFilename, size, sha256, localPath }) {
@@ -317,7 +343,9 @@ module.exports = {
   getJob,
   planBackfill,
   recordItem,
+  refreshJobCounters,
   registerArchive,
+  reopenJobForReimport,
   resolveTenantVatNumber,
   summarizeJob,
   transitionJob

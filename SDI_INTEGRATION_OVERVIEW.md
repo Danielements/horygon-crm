@@ -1,6 +1,6 @@
 # Integrazione SdI nel CRM HORYGON
 
-Ultimo aggiornamento: 2026-08-07
+Ultimo aggiornamento: 2026-08-09
 
 Questo documento e' il riferimento operativo per il passaggio in produzione del
 canale SdI. Descrive cosa il CRM fa davvero oggi, cosa manca, e in quale ordine
@@ -20,6 +20,11 @@ ogni file inviato a SdI e' un documento fiscale.
 Lo stesso giorno sono stati attivati i **Servizi Massivi** per l'identificativo
 fiscale: Scarico Corrispettivi, Scarico Documenti IVA, **Scarico Fatture**,
 Servizio Bollo.
+
+Il **censimento del canale per le forniture massive** e' attivo e confermato:
+provider HORYGON S.R.L., partita IVA `03365990591`, tipo **WebService**,
+servizio rilevante **Scarico Fatture**. E' il presupposto senza il quale SdI
+risponderebbe `ER02` a ogni richiesta massiva: non e' piu' un blocco.
 
 I certificati non sono stati sostituiti al passaggio in produzione: restano
 quelli emessi il 06.08.2026, validi fino al 05.08.2029.
@@ -62,8 +67,9 @@ Poste, firma remota con PIN e OTP che produce un `.p7m` CAdES, tecnologicamente
 adeguato sia per le FPA12 sia per le richieste SMTS. Non essendoci API
 server-to-server, il CRM governa il ciclo di firma esterna descritto al §3.
 
-Manca ancora **l'interfaccia** di quel ciclo: le rotte esistono, i pulsanti no.
-Finche' non c'e', il ciclo di firma e' usabile solo via API.
+L'**interfaccia** di quel ciclo e' stata fatta il 09.08.2026: stato della firma
+sulla riga della fattura, scarico dell'XML, caricamento del `.p7m`, esito della
+verifica con nome del firmatario e invio. Vedi §3.
 
 Gia' risolti il 07.08.2026: passaggio del canale in produzione, attivazione dei
 Servizi Massivi, indice univoco sui nomi file, pubblicazione della porta del
@@ -123,8 +129,30 @@ XML generato -> scarica -> firma con FirmaOK (PIN + OTP) -> ricarica .p7m
 
 | Rotta | |
 |---|---|
-| `GET /api/sdi/flussi/:id/xml-da-firmare` | scarica l'XML, propone gia' il nome `..._ABC01.xml.p7m` |
+| `GET /api/sdi/fatture/:id/firma` | stato del ciclo: flusso corrente, firmatario, cosa si puo' fare |
+| `GET /api/sdi/flussi/:id/xml-da-firmare` | scarica l'XML da portare al dispositivo di firma |
 | `POST /api/sdi/flussi/:id/firma` | ricarica il `.p7m` e lo verifica |
+| `POST /api/sdi/flussi/:id/invia` | trasmette il flusso gia' firmato, senza rigenerarlo |
+
+Il download propone il nome dell'XML, non quello del `.p7m`: il file scaricato
+e' XML, ed e' il dispositivo di firma che aggiunge il suffisso. Il nome atteso
+dopo la firma e' comunque mostrato nell'interfaccia, perche' e' quello che SdI
+si aspetta di ricevere.
+
+**`POST /api/sdi/flussi/:id/invia` non e' un doppione di
+`POST /api/sdi/fatture/:id/send`.** Quest'ultima rigenera sempre l'XML, quindi
+alloca un progressivo nuovo e crea un flusso nuovo: con la firma esterna
+riporterebbe la fattura in `firma_richiesta` a ogni tentativo, e il file appena
+firmato non verrebbe mai trasmesso. Per un documento gia' firmato si passa dal
+flusso, non dalla fattura. La modalita' non e' scegliibile nella richiesta: e'
+quella con cui il flusso e' nato, perche' nome file e progressivo sono stati
+allocati in quell'ambiente.
+
+L'interfaccia vive sulla riga della fattura, nelle sezioni contabili: un badge
+mostra lo stato SdI accanto a quello di pagamento, e il pulsante **Firma /
+Invio** apre il ciclo. Quando esistono piu' flussi per la stessa fattura — una
+doppia generazione ne lascia due, ognuno con il suo progressivo — vengono
+mostrati tutti: nasconderne uno significherebbe lasciarlo appeso senza traccia.
 
 A SdI si invia **il `.p7m`**, non la firma separata: il contenitore CAdES
 include XML, firma e certificato del firmatario, e viaggia nel campo `File`
@@ -149,6 +177,23 @@ Le **FPR12 e FSM10 non richiedono firma** e proseguono con l'invio diretto.
 Il ciclo non e' un ripiego permanente: se in futuro servira' l'automazione
 completa, occorre un **sigillo elettronico qualificato con API**, che e' un
 prodotto e un contratto diversi dalla firma remota personale.
+
+### Import documentale — controparte e scadenza
+
+Sulle fatture importate la controparte **dipende dalla direzione**: su una
+passiva e' il cedente, su una attiva e' il cessionario. Prendere sempre il
+cedente, come si faceva prima del 09.08.2026, significava registrare ogni
+fattura emessa con HORYGON stessa come cliente e agganciarla alla nostra
+anagrafica.
+
+La scadenza viene letta da `DatiPagamento`: con piu' rate si tiene la **prima
+in ordine di data**, e tutte finiscono comunque in `documento_meta`.
+
+Restano fuori dal parser, e per ora vivono solo nel file originale archiviato:
+`DatiOrdineAcquisto`, `DatiDDT`, `DatiContratto`, `DatiRitenuta`, `DatiBollo`,
+`DatiCassaPrevidenziale`, allegati. Le fatture **in lotto** (piu' di un
+`FatturaElettronicaBody`) non vengono importate: sono registrate con esito
+`LOTTO` e vanno scomposte a parte.
 
 ### Ricezione fatture passive — verificato
 
@@ -219,8 +264,60 @@ documenti nuovi. Lo storico si recupera in due modi.
 **Servizi Massivi (SMTS)** — `sm-scarico-file`, endpoint
 `servizi.fatturapa.it/sm-scarico-file`, operazioni `inoltroRichiesta`,
 `esitoRichiesta`, `scaricoFile`. Contratti ufficiali versionati in
-`resources/sdi/smts/`. Adapter implementato e testato su fixture; **non ancora
-provato contro l'endpoint reale**, perche' bloccato dai punti 1-3 del §2.
+`resources/sdi/smts/`. Adapter e orchestratore implementati e testati su
+fixture; **non ancora provati contro l'endpoint reale**.
+
+Il ciclo e' diviso in passi separati perche' non e' automatizzabile fino in
+fondo: in mezzo c'e' una firma qualificata con PIN e OTP.
+
+| Passo | Rotta |
+|---|---|
+| pianifica le finestre | `POST /api/sdi/storico/piano` |
+| prepara la richiesta | `POST /api/sdi/storico/jobs/:id/prepara` |
+| scarica la richiesta | `GET /api/sdi/storico/jobs/:id/richiesta-da-firmare` |
+| ricarica il `.p7m` | `POST /api/sdi/storico/jobs/:id/firma` |
+| inoltra | `POST /api/sdi/storico/jobs/:id/inoltra` |
+| interroga l'esito | `POST /api/sdi/storico/jobs/:id/esito` |
+| scarica gli archivi | `POST /api/sdi/storico/jobs/:id/scarica` |
+| importa | `POST /api/sdi/storico/jobs/:id/importa` |
+| rileggi quanto gia' scaricato | `POST /api/sdi/storico/jobs/:id/riprocessa` |
+
+`GET /api/sdi/storico/stato` dice in anticipo cosa manca ancora per partire.
+
+Tre cose apprese dalla specifica del formato file v1.5, che non erano nel
+codice:
+
+- **l'elenco degli archivi non e' nella risposta SOAP.** `esitoRichiesta`
+  restituisce un `EsitoFile`, ed e' li' dentro che stanno gli `IdFile` da
+  passare a `scaricoFile`, insieme a `DataFineDisponibilita`, che e' la
+  scadenza oltre la quale non si scarica piu' niente;
+- **ogni file-fattura viaggia con un file di metadati** che riporta `idfile`,
+  cioe' l'IdentificativoSdI, `hashfile` e `dataaccoglienza`. Dal nome del
+  file-fattura quell'identificativo non si ricava, e senza di esso il livello
+  di deduplicazione piu' forte resterebbe inutilizzato. Il CRM riconosce quei
+  file dal contenuto e li abbina alla fattura **per hash**, non per nome;
+- gli archivi hanno una `TipoElementi`: un archivio per richiesta contiene una
+  sola tipologia, e il backfill fatture scarica solo `Fatt`.
+
+Manca `ScaricoRichiesteEsito_v1.0.xsd`, che non e' pubblicato insieme al WSDL:
+il parser segue la tabella della specifica.
+
+Tre vincoli del servizio sono applicati sul job, non solo in memoria:
+
+- le **dieci interrogazioni di esito** per richiesta sono contate sul job.
+  Fra l'inoltro e la disponibilita' degli archivi passano ore, e un contatore
+  tenuto solo nel client si azzererebbe al primo riavvio del container;
+- oltre **`DataFineDisponibilita`** non si scarica piu' nulla: il job passa a
+  `EXPIRED` e lo dice, invece di consumare tentativi contro archivi che non
+  esistono piu'. Da li' serve una richiesta nuova, quindi un'altra firma;
+- un job **`PARTIAL` si riprende** da dove si era fermato: gli archivi gia'
+  importati restano `PROCESSED`. Un backfill non ripartibile costringerebbe a
+  rifare la richiesta, cioe' a spendere una firma per dati gia' scaricati.
+
+La firma della richiesta massiva segue lo stesso ciclo esterno delle FPA12
+(`sdi.massive.signature.mode = external`), con lo stesso controllo: il
+contenuto estratto dal `.p7m` deve coincidere con la richiesta registrata,
+altrimenti si interrogherebbe un periodo diverso da quello del job.
 
 Attenzione a tre cose delle Istruzioni SMTS v1.5:
 
@@ -315,12 +412,18 @@ Fatto il 07.08.2026:
 Da fare, in quest'ordine:
 
 5. Impostare `sdi.signature.mode = external` e collaudare il ciclo di firma su
-   una FPA12: scarica, firma con FirmaOK, ricarica, verifica.
+   una FPA12 dall'interfaccia: scarica, firma con FirmaOK, ricarica, verifica,
+   invia. E' il primo passo che tocca il canale reale.
 6. **Backup del database**, a container fermo o con checkpoint esplicito.
-7. Esportare lo storico dal cassetto fiscale e importarlo, prima in **dry-run**.
-8. Verificare numeri, totali e direzioni dello storico importato.
-9. Azzerare i dati di test con `scripts/reset-sdi-invoice-data.js`, prima in
-   dry-run.
+7. Azzerare i dati di test con `scripts/reset-sdi-invoice-data.js`, prima in
+   dry-run e **senza `--reset-progressivo`**: i progressivi gia' arrivati a SdI
+   restano bruciati per sempre.
+8. **Scaricare** lo storico dai Servizi Massivi (`/api/sdi/storico`), oppure
+   esportarlo dal cassetto fiscale. Per marzo-oggi bastano **due finestre da
+   tre mesi** per direzione (01.03-31.05 e 01.06-oggi): il tracciato non ne
+   ammette di piu' larghe, e ogni finestra costa una firma qualificata a mano.
+9. **Importare**, prima in dry-run, poi davvero. Verificare numeri, totali,
+   direzioni e controparti.
 10. Ricostruire la numerazione fiscale corrente.
 11. Impostare `sdi.mode = production`, lasciando
     `production_send_policy = MANUAL_CONFIRMATION`.
@@ -331,8 +434,17 @@ Da fare, in quest'ordine:
 14. Ricevere e verificare la prima fattura passiva reale.
 15. Attivare la riconciliazione periodica settimanale.
 
-I punti 6, 7 e 9 in quest'ordine: importare lo storico **prima** di azzerare i
-dati di test, altrimenti si perde il termine di confronto.
+**Azzerare prima di importare, non dopo.** `reset-sdi-invoice-data.js` fa
+`DELETE FROM fatture` senza filtri: lanciato dopo l'import cancellerebbe anche
+lo storico appena acquisito. E a rovescio, importando per primi, la
+deduplicazione riconoscerebbe una fattura di test come gia' presente e la
+**arricchirebbe** invece di importare quella vera, lasciando la riga di test
+travestita da documento reale.
+
+Scarico e import sono due passi distinti di proposito: il download costa una
+firma e scade con `DataFineDisponibilita`, il parsing e' gratis e ripetibile.
+Se il parser migliora, `POST /api/sdi/storico/jobs/:id/riprocessa` rilegge gli
+archivi gia' in casa senza chiedere niente a SdI.
 
 Se dopo il punto 13 le fatture passive non arrivano, la prima cosa da riportare
 indietro e' l'mTLS, riportando `ssl_verify_client` a `optional` e ricaricando
@@ -341,13 +453,10 @@ silenzio e poi mette in impossibilita' di recapito.
 
 ## 10. Cosa resta aperto
 
-- **interfaccia del ciclo di firma esterna**: rotte pronte, pulsanti da fare.
-  Stato firma, scarica, carica, esito con firmatario, poi invia;
-- **firma esterna per le richieste SMTS**: `sdi-massive-request.js` prevede oggi
-  solo la firma locale, va aggiunto il ramo esterno che riusa gli stessi mattoni;
 - import automatico delle passive firmate `.p7m` dal canale realtime;
-- orchestratore che lega archivio ZIP, estrazione e import documento per
-  documento, con report e dry-run end-to-end;
+- **collaudo del backfill contro l'endpoint reale**: adapter e orchestratore
+  girano su fixture, il censimento c'e', ma nessuna richiesta e' ancora partita;
+- interfaccia del backfill: le rotte ci sono, i pulsanti no;
 - client di quadratura e reinoltro, in attesa dei tre WSDL;
 - `SDITrasmissioneFile` per dati fattura e liquidazioni IVA, accreditato ma non
   implementato;

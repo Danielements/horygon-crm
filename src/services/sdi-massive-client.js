@@ -1,5 +1,6 @@
 const { XMLParser } = require('fast-xml-parser');
 const { getSetting } = require('./google');
+const { parseEsitoRichiestaFile, selectInvoiceArchives } = require('./sdi-massive-esito');
 
 // Adapter per il web service sm-scarico-file dei Servizi Massivi SdI.
 //
@@ -104,6 +105,24 @@ class SdiMassiveServicesClient {
     this.assertNoError(parsed, 'esitoRichiesta');
     const stato = firstText(parsed, 'Stato');
     const esitoFile = firstNode(parsed, 'EsitoFile');
+    const allegato = esitoFile
+      ? { nomeFile: firstText(esitoFile, 'NomeFile'), buffer: decodeBase64(firstText(esitoFile, 'File')) }
+      : null;
+
+    // L'elenco degli archivi non sta nella risposta SOAP ma dentro EsitoFile:
+    // senza leggerlo non si conoscono gli IdFile da passare a scaricoFile.
+    // Un esito illeggibile non fa fallire l'interrogazione, che e' contingentata
+    // a dieci chiamate: viene riportato e chi chiama decide.
+    let esito = null;
+    let esitoErrore = null;
+    if (allegato?.buffer?.length) {
+      try {
+        esito = parseEsitoRichiestaFile(allegato.buffer);
+      } catch (error) {
+        esitoErrore = error.message;
+      }
+    }
+
     return {
       stato,
       statoDescrizione: STATI[stato] || null,
@@ -112,9 +131,12 @@ class SdiMassiveServicesClient {
       ready: stato === 'ST03',
       tipo: firstText(parsed, 'Tipo') || null,
       dataOraProduzioneFile: firstText(parsed, 'DataOraProduzioneFile') || null,
-      esitoFile: esitoFile
-        ? { nomeFile: firstText(esitoFile, 'NomeFile'), buffer: decodeBase64(firstText(esitoFile, 'File')) }
-        : null,
+      esitoFile: allegato,
+      esito,
+      esitoErrore,
+      archivi: esito ? esito.archivi : [],
+      archiviFatture: esito ? selectInvoiceArchives(esito) : [],
+      dataFineDisponibilita: esito ? esito.dataFineDisponibilita : null,
       callsUsed: used + 1,
       callsRemaining: LIMITS.maxEsitoCallsPerRequest - (used + 1)
     };

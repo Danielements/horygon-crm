@@ -1,0 +1,653 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const crypto = require('crypto');
+const { execFileSync } = require('child_process');
+
+const db = require('../src/db/database');
+const { signCadesBes } = require('../src/services/sdi-cades');
+const { parseEsitoRichiestaFile, selectInvoiceArchives } = require('../src/services/sdi-massive-esito');
+const { SdiMassiveServicesClient, TYPES_NS } = require('../src/services/sdi-massive-client');
+const { getMassiveSigningStatus } = require('../src/services/sdi-massive-request');
+const { createJob, generateWindows, getJob } = require('../src/services/sdi-historical-sync');
+const {
+  MAX_ESITO_CALLS,
+  attachSignedRequest,
+  downloadArchives,
+  getRequestToSign,
+  importArchives,
+  isExpired,
+  matchCompanionMetadata,
+  pollRequest,
+  prepareRequest,
+  readCompanionMetadata,
+  reprocessArchives,
+  submitRequest
+} = require('../src/services/sdi-backfill');
+
+const ROOT = path.resolve(__dirname, '..');
+const TENANT = 9301;
+const PIVA = '03365990591';
+const sha256 = (b) => crypto.createHash('sha256').update(b).digest('hex');
+
+// --- fixture sul tracciato ufficiale --------------------------------------
+// Il file di esito segue "Formato dei file utilizzati dai Servizi Massivi"
+// v1.5 par. 1.2. Lo schema ScaricoRichiesteEsito_v1.0.xsd non e' pubblicato
+// insieme al WSDL, quindi la fixture riproduce la tabella della specifica.
+
+function esitoXml({ idRichiesta = 'REQ-1', archivi = [], errori = [], numeroArchivi = null } = {}) {
+  return '<?xml version="1.0" encoding="UTF-8"?>'
+    + '<EsitoRichiesta versione="1.0">'
+    + `<IdRichiesta>${idRichiesta}</IdRichiesta>`
+    + `<Piva>${PIVA}</Piva>`
+    + '<DataFineDisponibilita>2026-09-15</DataFineDisponibilita>'
+    + `<NumeroArchivi>${numeroArchivi === null ? archivi.length : numeroArchivi}</NumeroArchivi>`
+    + `<NumeroErrori>${errori.length}</NumeroErrori>`
+    + '<Esito>'
+    + (archivi.length
+      ? `<ElencoArchivi>${archivi.map((a) => '<Archivio>'
+        + `<IdFile>${a.idFile}</IdFile><NomeFile>${a.nomeFile}</NomeFile>`
+        + `<DimensioneFile>${a.dimensione || 1024}</DimensioneFile>`
+        + `<TipoElementi>${a.tipo || 'Fatt'}</TipoElementi>`
+        + `<NumeroElementi>${a.elementi || 1}</NumeroElementi></Archivio>`).join('')}</ElencoArchivi>`
+      : '')
+    + (errori.length
+      ? `<ElencoErrori>${errori.map((e) => `<Errore><Codice>${e.codice}</Codice><Descrizione>${e.descrizione}</Descrizione></Errore>`).join('')}</ElencoErrori>`
+      : '')
+    + '</Esito></EsitoRichiesta>';
+}
+
+function envelope(element, body) {
+  return '<?xml version="1.0"?>'
+    + '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">'
+    + `<soapenv:Body><ns:${element} xmlns:ns="${TYPES_NS}">${body}</ns:${element}></soapenv:Body>`
+    + '</soapenv:Envelope>';
+}
+
+function clientWith(responses) {
+  const queue = [...responses];
+  const calls = [];
+  const transport = async (request) => {
+    calls.push(request);
+    const next = queue.length > 1 ? queue.shift() : queue[0];
+    return { statusCode: next.statusCode || 200, body: next.body };
+  };
+  const client = new SdiMassiveServicesClient({ transport, endpoint: 'https://esempio.invalid/sm-scarico-file' });
+  client.calls = calls;
+  return client;
+}
+
+function invoiceXml({ numero, cedente = PIVA, cessionario = '01043931003' }) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<p:FatturaElettronica versione="FPR12" xmlns:p="http://ivaservizi.agenziaentrate.gov.it/docs/xsd/fatture/v1.2">
+<FatturaElettronicaHeader><DatiTrasmissione><IdTrasmittente><IdPaese>IT</IdPaese><IdCodice>${cedente}</IdCodice></IdTrasmittente><ProgressivoInvio>H0001</ProgressivoInvio><FormatoTrasmissione>FPR12</FormatoTrasmissione><CodiceDestinatario>0000000</CodiceDestinatario></DatiTrasmissione>
+<CedentePrestatore><DatiAnagrafici><IdFiscaleIVA><IdPaese>IT</IdPaese><IdCodice>${cedente}</IdCodice></IdFiscaleIVA><Anagrafica><Denominazione>Fornitore</Denominazione></Anagrafica></DatiAnagrafici></CedentePrestatore>
+<CessionarioCommittente><DatiAnagrafici><IdFiscaleIVA><IdPaese>IT</IdPaese><IdCodice>${cessionario}</IdCodice></IdFiscaleIVA><Anagrafica><Denominazione>Cliente</Denominazione></Anagrafica></DatiAnagrafici></CessionarioCommittente>
+</FatturaElettronicaHeader>
+<FatturaElettronicaBody><DatiGenerali><DatiGeneraliDocumento><TipoDocumento>TD01</TipoDocumento><Divisa>EUR</Divisa><Data>2026-03-15</Data><Numero>${numero}</Numero><ImportoTotaleDocumento>122.00</ImportoTotaleDocumento></DatiGeneraliDocumento></DatiGenerali>
+<DatiBeniServizi><DettaglioLinee><NumeroLinea>1</NumeroLinea><Descrizione>Servizio</Descrizione><PrezzoUnitario>100.00</PrezzoUnitario><PrezzoTotale>100.00</PrezzoTotale><AliquotaIVA>22.00</AliquotaIVA></DettaglioLinee>
+<DatiRiepilogo><AliquotaIVA>22.00</AliquotaIVA><ImponibileImporto>100.00</ImponibileImporto><Imposta>22.00</Imposta></DatiRiepilogo></DatiBeniServizi></FatturaElettronicaBody>
+</p:FatturaElettronica>`;
+}
+
+function metadataXml({ idfile, hashfile }) {
+  return '<?xml version="1.0" encoding="UTF-8"?>'
+    + `<FileMetadati><idfile>${idfile}</idfile><hashfile>${hashfile}</hashfile>`
+    + '<dataaccoglienza>2026-03-15</dataaccoglienza></FileMetadati>';
+}
+
+function zipWith(files) {
+  // ZIP store-only, scritto a mano: evita di dipendere da un archiviatore
+  // esterno e resta leggibile da SafeZipReader come un archivio qualunque.
+  const zlib = require('zlib');
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  files.forEach(({ name, content }) => {
+    const data = Buffer.from(content, 'utf8');
+    const nameBuf = Buffer.from(name, 'utf8');
+    const crc = zlib.crc32 ? zlib.crc32(data) : crc32(data);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0, 6);
+    local.writeUInt16LE(0, 8);
+    local.writeUInt32LE(crc >>> 0, 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(nameBuf.length, 26);
+    chunks.push(local, nameBuf, data);
+
+    const header = Buffer.alloc(46);
+    header.writeUInt32LE(0x02014b50, 0);
+    header.writeUInt16LE(20, 4);
+    header.writeUInt16LE(20, 6);
+    header.writeUInt32LE(crc >>> 0, 16);
+    header.writeUInt32LE(data.length, 20);
+    header.writeUInt32LE(data.length, 24);
+    header.writeUInt16LE(nameBuf.length, 28);
+    header.writeUInt32LE(offset, 42);
+    central.push(header, nameBuf);
+    offset += local.length + nameBuf.length + data.length;
+  });
+
+  const centralBuf = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(files.length, 8);
+  end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(centralBuf.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([Buffer.concat(chunks), centralBuf, end]);
+}
+
+function crc32(buf) {
+  let c = ~0;
+  for (let i = 0; i < buf.length; i++) {
+    c ^= buf[i];
+    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
+  }
+  return ~c;
+}
+
+function seedFiscalConfig() {
+  // sdi_fiscal_configuration.tenant_id ha una FK su tenants: il tenant di prova
+  // va creato, non solo referenziato.
+  db.prepare("INSERT OR IGNORE INTO tenants (id, codice, ragione_sociale) VALUES (?, ?, ?)")
+    .run(TENANT, `TEST${TENANT}`, 'Tenant di prova backfill');
+  db.prepare(`
+    INSERT INTO sdi_fiscal_configuration
+      (tenant_id, vat_number, tax_code, massive_services_enabled, massive_services_provider_enabled)
+    VALUES (?,?,?,1,1)
+    ON CONFLICT(tenant_id) DO UPDATE SET
+      vat_number = excluded.vat_number, tax_code = excluded.tax_code,
+      massive_services_enabled = 1, massive_services_provider_enabled = 1
+  `).run(TENANT, PIVA, PIVA);
+}
+
+function cleanup() {
+  db.prepare('DELETE FROM sdi_historical_sync_item WHERE tenant_id = ?').run(TENANT);
+  db.prepare('DELETE FROM sdi_historical_sync_archive WHERE tenant_id = ?').run(TENANT);
+  db.prepare('DELETE FROM sdi_historical_sync_job WHERE tenant_id = ?').run(TENANT);
+  db.prepare('DELETE FROM fatture_righe WHERE tenant_id = ?').run(TENANT);
+  db.prepare('DELETE FROM fatture_iva_riepilogo WHERE tenant_id = ?').run(TENANT);
+  db.prepare('DELETE FROM fatture WHERE tenant_id = ?').run(TENANT);
+  db.prepare('DELETE FROM sdi_fiscal_configuration WHERE tenant_id = ?').run(TENANT);
+  db.prepare('DELETE FROM tenants WHERE id = ?').run(TENANT);
+  db.prepare("DELETE FROM audit_log WHERE azione LIKE 'SDI_HISTORICAL_%'").run();
+}
+
+function material() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'massiva-'));
+  const keyPath = path.join(dir, 'k.key');
+  const certPath = path.join(dir, 'c.pem');
+  try {
+    execFileSync('openssl', ['genrsa', '-out', keyPath, '2048'], { stdio: 'ignore' });
+    execFileSync('openssl', ['req', '-x509', '-key', keyPath, '-out', certPath, '-days', '30',
+      '-subj', '/C=IT/O=Poste Italiane/CN=FURFARI DANIELE'],
+    { stdio: 'ignore', env: Object.assign({}, process.env, { MSYS_NO_PATHCONV: '1' }) });
+  } catch {
+    return null;
+  }
+  return { keyPath, certPath };
+}
+
+function sign(content, m) {
+  return signCadesBes({
+    content: Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8'),
+    certificatePem: fs.readFileSync(m.certPath),
+    privateKeyPem: fs.readFileSync(m.keyPath)
+  });
+}
+
+// --- lettura del file di esito --------------------------------------------
+
+test('il file di esito espone gli IdFile necessari a scaricoFile', () => {
+  const esito = parseEsitoRichiestaFile(Buffer.from(esitoXml({
+    idRichiesta: 'REQ-77',
+    archivi: [
+      { idFile: '101', nomeFile: 'archivio1.zip', elementi: 40 },
+      { idFile: '102', nomeFile: 'archivio2.zip', elementi: 12 }
+    ]
+  }), 'utf8'));
+
+  assert.equal(esito.idRichiesta, 'REQ-77');
+  assert.equal(esito.dataFineDisponibilita, '2026-09-15');
+  assert.equal(esito.archivi.length, 2);
+  assert.deepEqual(esito.archivi.map((a) => a.idFile), ['101', '102']);
+  assert.equal(esito.archivi[0].numeroElementi, 40);
+  assert.equal(esito.conteggioCoerente, true);
+});
+
+test('un solo archivio non diventa una lista di caratteri', () => {
+  // fast-xml-parser restituisce un oggetto e non un array quando l'elemento
+  // ricorre una volta sola: e' l'errore classico su questi tracciati.
+  const esito = parseEsitoRichiestaFile(Buffer.from(esitoXml({ archivi: [{ idFile: '55', nomeFile: 'solo.zip' }] }), 'utf8'));
+  assert.equal(esito.archivi.length, 1);
+  assert.equal(esito.archivi[0].idFile, '55');
+});
+
+test('gli archivi non fatture restano fuori dal backfill fatture', () => {
+  const esito = parseEsitoRichiestaFile(Buffer.from(esitoXml({
+    archivi: [
+      { idFile: '1', nomeFile: 'fatture.zip', tipo: 'Fatt' },
+      { idFile: '2', nomeFile: 'corrispettivi.zip', tipo: 'Corr' },
+      { idFile: '3', nomeFile: 'registri.zip', tipo: 'IVA_REGI' }
+    ]
+  }), 'utf8'));
+  assert.equal(esito.archivi.length, 3);
+  const fatture = selectInvoiceArchives(esito);
+  assert.deepEqual(fatture.map((a) => a.idFile), ['1']);
+  assert.equal(esito.archivi[1].tipoElementiDescrizione, 'corrispettivi');
+});
+
+test('un conteggio archivi incoerente viene segnalato invece di passare inosservato', () => {
+  const esito = parseEsitoRichiestaFile(Buffer.from(esitoXml({
+    archivi: [{ idFile: '1', nomeFile: 'uno.zip' }],
+    numeroArchivi: 3
+  }), 'utf8'));
+  assert.equal(esito.conteggioCoerente, false);
+});
+
+test('gli errori dell esito vengono estratti', () => {
+  const esito = parseEsitoRichiestaFile(Buffer.from(esitoXml({
+    errori: [{ codice: '00201', descrizione: 'Intervallo temporale indicato troppo ampio' }]
+  }), 'utf8'));
+  assert.equal(esito.errori.length, 1);
+  assert.equal(esito.errori[0].codice, '00201');
+});
+
+test('un esito che e uno ZIP viene rifiutato con un messaggio chiaro', () => {
+  assert.throws(() => parseEsitoRichiestaFile(Buffer.from([0x50, 0x4b, 0x03, 0x04])), /archivio ZIP/);
+});
+
+// --- il client restituisce gli archivi gia' pronti ------------------------
+
+test('esitoRichiesta espone gli archivi letti dal file di esito', async () => {
+  const esito = Buffer.from(esitoXml({ archivi: [{ idFile: '900', nomeFile: 'fatture.zip' }] }), 'utf8');
+  const client = clientWith([{
+    body: envelope('EsitoRichiestaResponse',
+      '<Stato>ST03</Stato><EsitoFile><NomeFile>esito.xml</NomeFile>'
+      + `<File>${esito.toString('base64')}</File></EsitoFile>`)
+  }]);
+  const status = await client.getRequestStatus('REQ-1');
+  assert.equal(status.ready, true);
+  assert.equal(status.archiviFatture.length, 1);
+  assert.equal(status.archiviFatture[0].idFile, '900');
+  assert.equal(status.dataFineDisponibilita, '2026-09-15');
+});
+
+test('un esito illeggibile non fa perdere l interrogazione', async () => {
+  // Le interrogazioni sono dieci in tutto: un file di esito malformato non deve
+  // trasformarsi in un errore che costringe a bruciarne un'altra.
+  const client = clientWith([{
+    body: envelope('EsitoRichiestaResponse',
+      '<Stato>ST03</Stato><EsitoFile><NomeFile>esito.xml</NomeFile>'
+      + `<File>${Buffer.from('<rotto>', 'utf8').toString('base64')}</File></EsitoFile>`)
+  }]);
+  const status = await client.getRequestStatus('REQ-2');
+  assert.equal(status.ready, true);
+  assert.ok(status.esitoErrore, 'il problema va riportato');
+  assert.deepEqual(status.archiviFatture, []);
+});
+
+// --- metadati che accompagnano i file-fattura -----------------------------
+
+test('il file di metadati viene riconosciuto dal contenuto e abbinato per hash', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'meta-'));
+  const fattura = invoiceXml({ numero: '2026/900' });
+  const facturaBuffer = Buffer.from(fattura, 'utf8');
+  const hash = sha256(facturaBuffer);
+
+  const metaPath = path.join(dir, 'IT03365990591_00001.xml_MT.xml');
+  fs.writeFileSync(metaPath, metadataXml({ idfile: '3344556677', hashfile: hash }), 'utf8');
+  const meta = readCompanionMetadata(metaPath);
+  assert.ok(meta, 'il metadato va riconosciuto senza conoscere il suffisso del nome');
+  assert.equal(meta.idfile, '3344556677');
+
+  const abbinato = matchCompanionMetadata({
+    file: { name: 'IT03365990591_00001.xml', sha256: hash },
+    buffer: facturaBuffer,
+    metadati: [{ ...meta, file: { name: 'IT03365990591_00001.xml_MT.xml' } }]
+  });
+  assert.equal(abbinato.idfile, '3344556677');
+});
+
+test('una fattura non viene scambiata per un file di metadati', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'meta-'));
+  const fatturaPath = path.join(dir, 'IT03365990591_00002.xml');
+  fs.writeFileSync(fatturaPath, invoiceXml({ numero: '2026/901' }), 'utf8');
+  assert.equal(readCompanionMetadata(fatturaPath), null);
+});
+
+// --- ciclo completo del job -----------------------------------------------
+
+test('senza configurazione fiscale il job non parte', () => {
+  cleanup();
+  const job = createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
+  assert.throws(() => prepareRequest({ tenantId: TENANT, jobId: job.id }), /Configurazione fiscale mancante/);
+  cleanup();
+});
+
+test('la richiesta preparata attende la firma esterna e non e inoltrabile', (t) => {
+  const signing = getMassiveSigningStatus();
+  if (signing.available && !signing.external) return t.skip('firma massiva locale configurata su questa macchina');
+  cleanup();
+  seedFiscalConfig();
+  const job = createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
+
+  const prepared = prepareRequest({ tenantId: TENANT, jobId: job.id });
+  assert.equal(getJob(job.id).status, 'CREATED', 'senza firma il job non avanza');
+  assert.ok(prepared.xmlSha256);
+  assert.match(prepared.signedFilename, /\.p7m$/);
+
+  const document = getRequestToSign(job.id, TENANT);
+  const xml = document.buffer.toString('utf8');
+  assert.match(xml, /<FattureRicevute>/);
+  assert.match(xml, new RegExp(`<Piva>${PIVA}</Piva>`));
+  assert.match(xml, /<Da>2026-03-01<\/Da><A>2026-05-31<\/A>/);
+  assert.equal(sha256(document.buffer), prepared.xmlSha256);
+  cleanup();
+});
+
+test('una richiesta firmata diversa da quella preparata viene rifiutata', (t) => {
+  const m = material();
+  if (!m) return t.skip('openssl non disponibile');
+  cleanup();
+  seedFiscalConfig();
+  const job = createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
+  prepareRequest({ tenantId: TENANT, jobId: job.id });
+
+  // Firmare un periodo diverso da quello registrato significherebbe scaricare
+  // mesi che nessuno ha chiesto, e accorgersene solo dagli archivi.
+  assert.throws(
+    () => attachSignedRequest({ jobId: job.id, tenantId: TENANT, signedBuffer: sign('<InputMassivo>altro</InputMassivo>', m) }),
+    (error) => error.code === 'SIGNED_DOCUMENT_MISMATCH'
+  );
+  assert.equal(getJob(job.id).status, 'CREATED');
+  cleanup();
+});
+
+test('il ciclo completo porta il job dalla firma all import', async (t) => {
+  const m = material();
+  if (!m) return t.skip('openssl non disponibile');
+  cleanup();
+  seedFiscalConfig();
+
+  const job = createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
+  const prepared = prepareRequest({ tenantId: TENANT, jobId: job.id });
+
+  // 1. firma esterna
+  const document = getRequestToSign(job.id, TENANT);
+  const signed = attachSignedRequest({
+    jobId: job.id, tenantId: TENANT, signedBuffer: sign(document.buffer, m), filename: 'richiesta.xml.p7m'
+  });
+  assert.equal(signed.status, 'SIGNED');
+  assert.match(signed.signer.subject, /FURFARI DANIELE/);
+  assert.equal(prepared.needsExternalSignature, true);
+
+  // 2. inoltro
+  const fattura = invoiceXml({ numero: '2026/950', cedente: '01043931003', cessionario: PIVA });
+  const fatturaBuffer = Buffer.from(fattura, 'utf8');
+  const archivio = zipWith([
+    { name: 'IT01043931003_00099.xml', content: fattura },
+    { name: 'IT01043931003_00099.xml_MT.xml', content: metadataXml({ idfile: '5566778899', hashfile: sha256(fatturaBuffer) }) }
+  ]);
+  const esito = Buffer.from(esitoXml({ idRichiesta: 'REQ-XYZ', archivi: [{ idFile: '4242', nomeFile: 'fatture.zip' }] }), 'utf8');
+
+  const client = clientWith([
+    { body: envelope('InoltroRichiestaResponse', '<IdRichiesta>REQ-XYZ</IdRichiesta><DataOraRicezione>2026-08-09T10:00:00</DataOraRicezione>') },
+    { body: envelope('EsitoRichiestaResponse', `<Stato>ST03</Stato><EsitoFile><NomeFile>esito.xml</NomeFile><File>${esito.toString('base64')}</File></EsitoFile>`) },
+    { body: envelope('ScaricoFileResponse', `<ArchivioFile><NomeFile>fatture.zip</NomeFile><File>${archivio.toString('base64')}</File></ArchivioFile>`) }
+  ]);
+
+  const submitted = await submitRequest({ jobId: job.id, tenantId: TENANT, client });
+  assert.equal(submitted.idRichiesta, 'REQ-XYZ');
+
+  // 3. esito
+  const polled = await pollRequest({ jobId: job.id, tenantId: TENANT, client });
+  assert.equal(polled.status, 'READY');
+  assert.equal(polled.archivi.length, 1);
+  assert.equal(getJob(job.id).expires_at, '2026-09-15');
+
+  // 4. scarico
+  const downloaded = await downloadArchives({ jobId: job.id, tenantId: TENANT, client, archivi: polled.archivi });
+  assert.equal(downloaded.scaricati.length, 1);
+  assert.equal(downloaded.falliti.length, 0);
+
+  // 5. import in dry-run: non scrive nulla e non chiude il job
+  const simulato = await importArchives({ jobId: job.id, tenantId: TENANT, dryRun: true });
+  assert.equal(simulato.dryRun, true);
+  assert.equal(getJob(job.id).status, 'IMPORTING', 'una simulazione non deve chiudere il job');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM fatture WHERE tenant_id = ?').get(TENANT).n, 0);
+
+  // 6. import vero
+  const importato = await importArchives({ jobId: job.id, tenantId: TENANT, dryRun: false });
+  assert.equal(importato.status, 'COMPLETED');
+
+  const fatture = db.prepare('SELECT * FROM fatture WHERE tenant_id = ?').all(TENANT);
+  assert.equal(fatture.length, 1);
+  assert.equal(fatture[0].numero, '2026/950');
+  assert.equal(fatture[0].direzione, 'passiva', 'la direzione deve arrivare dagli identificativi del tenant');
+  // L'identificativo SdI non e' ricavabile dal nome del file-fattura: arriva
+  // dal file di metadati che lo accompagna nell'archivio.
+  assert.equal(fatture[0].sdi_id, '5566778899');
+  assert.equal(fatture[0].sdi_send_allowed, 0, 'una fattura storica non e ritrasmettibile');
+  cleanup();
+});
+
+test('lo scarico delle fatture messe a disposizione richiede una conferma esplicita', async () => {
+  cleanup();
+  seedFiscalConfig();
+  const job = createJob({ tenantId: TENANT, requestType: 'AVAILABLE_TO_RECIPIENT', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
+  db.prepare("UPDATE sdi_historical_sync_job SET status = 'READY', remote_request_id = 'REQ-MD' WHERE id = ?").run(job.id);
+
+  await assert.rejects(
+    () => downloadArchives({ jobId: job.id, tenantId: TENANT, client: clientWith([{ body: '<x/>' }]), archivi: [{ idFile: '1' }] }),
+    /presa visione/
+  );
+  cleanup();
+});
+
+test('un job di un altro tenant non e raggiungibile', () => {
+  cleanup();
+  seedFiscalConfig();
+  const job = createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
+  assert.throws(() => getRequestToSign(job.id, TENANT + 1), /non trovato/);
+  cleanup();
+});
+
+// --- limiti e scadenze ----------------------------------------------------
+
+test('le dieci interrogazioni di esito sopravvivono al riavvio', async () => {
+  cleanup();
+  seedFiscalConfig();
+  const job = createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
+  db.prepare("UPDATE sdi_historical_sync_job SET status = 'SUBMITTED', remote_request_id = 'REQ-L' WHERE id = ?").run(job.id);
+
+  const inElaborazione = { body: envelope('EsitoRichiestaResponse', '<Stato>ST01</Stato>') };
+  // Client nuovo a ogni giro: e' quello che succede quando il container
+  // riparte mentre la richiesta e' ancora in elaborazione.
+  for (let i = 0; i < MAX_ESITO_CALLS; i++) {
+    const esito = await pollRequest({ jobId: job.id, tenantId: TENANT, client: clientWith([inElaborazione]) });
+    assert.equal(esito.status, 'PROCESSING');
+    assert.equal(esito.interrogazioniRimaste, MAX_ESITO_CALLS - 1 - i);
+  }
+
+  await assert.rejects(
+    () => pollRequest({ jobId: job.id, tenantId: TENANT, client: clientWith([inElaborazione]) }),
+    (error) => error.code === 'ESITO_LIMIT'
+  );
+  assert.equal(getJob(job.id).esito_calls, MAX_ESITO_CALLS);
+  cleanup();
+});
+
+test('la disponibilita vale per tutto l ultimo giorno', () => {
+  assert.equal(isExpired('2026-09-15', new Date('2026-09-15T23:00:00Z')), false);
+  assert.equal(isExpired('2026-09-15', new Date('2026-09-16T00:30:00Z')), true);
+  assert.equal(isExpired(null, new Date()), false, 'senza scadenza nota non si blocca nulla');
+});
+
+test('scaduta la disponibilita il job passa a EXPIRED invece di riprovare', async () => {
+  cleanup();
+  seedFiscalConfig();
+  const job = createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
+  db.prepare("UPDATE sdi_historical_sync_job SET status = 'READY', remote_request_id = 'REQ-S', expires_at = '2026-06-30' WHERE id = ?").run(job.id);
+
+  await assert.rejects(
+    () => downloadArchives({
+      jobId: job.id, tenantId: TENANT, client: clientWith([{ body: '<x/>' }]),
+      archivi: [{ idFile: '1' }], now: new Date('2026-08-09T10:00:00Z')
+    }),
+    (error) => error.code === 'ARCHIVI_SCADUTI'
+  );
+  assert.equal(getJob(job.id).status, 'EXPIRED');
+  cleanup();
+});
+
+test('un job parziale si riprende senza rifare la richiesta', async () => {
+  cleanup();
+  seedFiscalConfig();
+  const job = createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
+
+  // Una passata finita male lascia il job in PARTIAL con un archivio ancora da
+  // lavorare: rifare la richiesta costerebbe un'altra firma qualificata.
+  const fattura = invoiceXml({ numero: '2026/970', cedente: '01043931003', cessionario: PIVA });
+  const archivio = zipWith([{ name: 'IT01043931003_00170.xml', content: fattura }]);
+  const stored = path.join(ROOT, 'uploads', 'sdi-storico', String(TENANT), 'ripresa.zip');
+  fs.mkdirSync(path.dirname(stored), { recursive: true });
+  fs.writeFileSync(stored, archivio);
+
+  db.prepare(`
+    INSERT INTO sdi_historical_sync_archive (tenant_id, job_id, remote_archive_id, remote_filename, size, sha256, local_path, status)
+    VALUES (?,?,?,?,?,?,?, 'DOWNLOADED')
+  `).run(TENANT, job.id, '77', 'ripresa.zip', archivio.length, sha256(archivio),
+    `/${path.relative(ROOT, stored).split(path.sep).join('/')}`);
+
+  ['SIGNED', 'SUBMITTED', 'READY', 'DOWNLOADING', 'PARTIAL'].forEach((stato) => {
+    db.prepare('UPDATE sdi_historical_sync_job SET status = ? WHERE id = ?').run(stato, job.id);
+  });
+
+  const ripresa = await importArchives({ jobId: job.id, tenantId: TENANT, dryRun: false });
+  assert.equal(ripresa.status, 'COMPLETED');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM fatture WHERE tenant_id = ?').get(TENANT).n, 1);
+
+  fs.rmSync(path.join(ROOT, 'uploads', 'sdi-storico', String(TENANT)), { recursive: true, force: true });
+  cleanup();
+});
+
+// --- controparte, scadenza, ri-elaborazione -------------------------------
+
+test('su una fattura emessa la controparte e il cessionario, non noi', async () => {
+  cleanup();
+  seedFiscalConfig();
+  const job = createJob({ tenantId: TENANT, requestType: 'OUTGOING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
+
+  // Fattura emessa: il cedente siamo noi, il cliente e' il cessionario.
+  const fattura = invoiceXml({ numero: '2026/A1', cedente: PIVA, cessionario: '01043931003' });
+  const archivio = zipWith([{ name: 'IT03365990591_00300.xml', content: fattura }]);
+  const stored = path.join(ROOT, 'uploads', 'sdi-storico', String(TENANT), 'emesse.zip');
+  fs.mkdirSync(path.dirname(stored), { recursive: true });
+  fs.writeFileSync(stored, archivio);
+  db.prepare(`
+    INSERT INTO sdi_historical_sync_archive (tenant_id, job_id, remote_archive_id, remote_filename, size, sha256, local_path, status)
+    VALUES (?,?,?,?,?,?,?, 'DOWNLOADED')
+  `).run(TENANT, job.id, '90', 'emesse.zip', archivio.length, sha256(archivio),
+    `/${path.relative(ROOT, stored).split(path.sep).join('/')}`);
+  db.prepare("UPDATE sdi_historical_sync_job SET status = 'DOWNLOADING' WHERE id = ?").run(job.id);
+
+  await importArchives({ jobId: job.id, tenantId: TENANT, dryRun: false });
+
+  const fatt = db.prepare('SELECT * FROM fatture WHERE tenant_id = ?').get(TENANT);
+  assert.equal(fatt.direzione, 'attiva');
+  assert.equal(fatt.partita_iva, 'IT01043931003', 'la controparte e il cliente, non HORYGON');
+  assert.equal(fatt.cliente_fornitore_label, 'Cliente');
+
+  fs.rmSync(path.join(ROOT, 'uploads', 'sdi-storico', String(TENANT)), { recursive: true, force: true });
+  cleanup();
+});
+
+test('su una fattura ricevuta la controparte resta il cedente', () => {
+  const { parseFatturaPAXml } = require('../src/services/fattura-import');
+  const { determineDirection } = require('../src/services/sdi-document-classifier');
+  const xml = invoiceXml({ numero: '2026/P1', cedente: '01043931003', cessionario: PIVA });
+  const parsed = parseFatturaPAXml(xml);
+  const info = determineDirection(xml, { vatNumber: PIVA, taxCode: PIVA });
+  assert.equal(info.direction, 'INCOMING');
+  assert.equal(parsed.fornitore_piva, 'IT01043931003');
+  assert.equal(info.parties.cedente.denomination, 'Fornitore');
+});
+
+test('la scadenza viene letta da DatiPagamento e si tiene la prima', () => {
+  const { parseFatturaPAXml } = require('../src/services/fattura-import');
+  const base = invoiceXml({ numero: '2026/R1' });
+  const conRate = base.replace('</FatturaElettronicaBody>',
+    '<DatiPagamento><CondizioniPagamento>TP01</CondizioniPagamento>'
+    + '<DettaglioPagamento><ModalitaPagamento>MP05</ModalitaPagamento><DataScadenzaPagamento>2026-06-30</DataScadenzaPagamento><ImportoPagamento>61.00</ImportoPagamento></DettaglioPagamento>'
+    + '<DettaglioPagamento><ModalitaPagamento>MP05</ModalitaPagamento><DataScadenzaPagamento>2026-05-31</DataScadenzaPagamento><ImportoPagamento>61.00</ImportoPagamento></DettaglioPagamento>'
+    + '</DatiPagamento></FatturaElettronicaBody>');
+
+  const parsed = parseFatturaPAXml(conRate);
+  assert.equal(parsed.scadenza, '2026-05-31', 'la prima in ordine di data, non di apparizione');
+  assert.equal(parsed.documento_meta.pagamenti.length, 2, 'le altre rate non vanno perse');
+  assert.deepEqual(parsed.documento_meta.scadenze, ['2026-05-31', '2026-06-30']);
+
+  assert.equal(parseFatturaPAXml(base).scadenza, null, 'senza DatiPagamento non si inventa');
+});
+
+test('la ri-elaborazione rilegge gli archivi senza richiederli di nuovo a SdI', async () => {
+  cleanup();
+  seedFiscalConfig();
+  const job = createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
+
+  const fattura = invoiceXml({ numero: '2026/RP', cedente: '01043931003', cessionario: PIVA });
+  const archivio = zipWith([{ name: 'IT01043931003_00400.xml', content: fattura }]);
+  const stored = path.join(ROOT, 'uploads', 'sdi-storico', String(TENANT), 'riprocessa.zip');
+  fs.mkdirSync(path.dirname(stored), { recursive: true });
+  fs.writeFileSync(stored, archivio);
+  db.prepare(`
+    INSERT INTO sdi_historical_sync_archive (tenant_id, job_id, remote_archive_id, remote_filename, size, sha256, local_path, status)
+    VALUES (?,?,?,?,?,?,?, 'DOWNLOADED')
+  `).run(TENANT, job.id, '91', 'riprocessa.zip', archivio.length, sha256(archivio),
+    `/${path.relative(ROOT, stored).split(path.sep).join('/')}`);
+  db.prepare("UPDATE sdi_historical_sync_job SET status = 'DOWNLOADING' WHERE id = ?").run(job.id);
+
+  await importArchives({ jobId: job.id, tenantId: TENANT, dryRun: false });
+  const primaId = db.prepare('SELECT id FROM fatture WHERE tenant_id = ?').get(TENANT).id;
+  assert.equal(getJob(job.id).status, 'COMPLETED');
+
+  // Una fattura del CRM non deve essere toccata dalla ri-elaborazione.
+  const estranea = Number(db.prepare(
+    "INSERT INTO fatture (tenant_id, numero, tipo, data, source, note) VALUES (?, 'CRM-1', 'emessa', '2026-04-01', 'CRM', 'estranea')"
+  ).run(TENANT).lastInsertRowid);
+
+  const ripreso = reprocessArchives({ jobId: job.id, tenantId: TENANT, motivo: 'parser aggiornato' });
+  assert.equal(ripreso.fattureRimosse, 1);
+  assert.equal(ripreso.nuovoDownload, false);
+  assert.equal(ripreso.archiviDaRileggere, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM fatture WHERE id = ?').get(primaId).n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM fatture WHERE id = ?').get(estranea).n, 1, 'le fatture non storiche restano');
+
+  const rifatto = await importArchives({ jobId: job.id, tenantId: TENANT, dryRun: false });
+  assert.equal(rifatto.status, 'COMPLETED');
+  const seconda = db.prepare("SELECT * FROM fatture WHERE tenant_id = ? AND source = 'SDI_HISTORICAL_SYNC'").all(TENANT);
+  assert.equal(seconda.length, 1, 'reimportata una volta sola, non duplicata');
+  assert.notEqual(seconda[0].id, primaId, 'e una riga nuova, non quella vecchia arricchita');
+
+  fs.rmSync(path.join(ROOT, 'uploads', 'sdi-storico', String(TENANT)), { recursive: true, force: true });
+  cleanup();
+});
+
+// --- pianificazione marzo-oggi --------------------------------------------
+
+test('marzo-agosto sta in due finestre da tre mesi', () => {
+  // Il tracciato non ammette piu' di tre mesi per richiesta (controllo 00201).
+  // Finestre piu' larghe possibili significano meno firme qualificate da fare
+  // a mano: qui due invece delle sei mensili.
+  const windows = generateWindows('2026-03-01', '2026-08-09', { months: 3 });
+  assert.equal(windows.length, 2);
+  assert.deepEqual(windows[0], { from: '2026-03-01', to: '2026-05-31' });
+  assert.deepEqual(windows[1], { from: '2026-06-01', to: '2026-08-09' });
+});

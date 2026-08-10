@@ -106,6 +106,30 @@ function parseFatturaPAXml(xml) {
       riferimento_normativo: qtag('RiferimentoNormativo')
     });
   }
+  // DatiPagamento: una fattura puo' avere piu' rate, ognuna con la sua
+  // scadenza. La colonna scadenza e' una sola, quindi si tiene la prima in
+  // ordine di data, che e' quella che conta per lo scadenzario; le altre
+  // restano in documento_meta invece di andare perse.
+  const pagamenti = [];
+  for (const match of normalizedXml.matchAll(/<DettaglioPagamento>([\s\S]*?)<\/DettaglioPagamento>/gi)) {
+    const rowXml = match[1];
+    const ptag = (name) => {
+      const found = rowXml.match(new RegExp(`<${name}>([^<]*)</${name}>`, 'i'));
+      return found ? found[1].trim() : null;
+    };
+    const scadenza = ptag('DataScadenzaPagamento');
+    pagamenti.push({
+      data_scadenza: scadenza,
+      importo: parseDecimal(ptag('ImportoPagamento')),
+      modalita: ptag('ModalitaPagamento'),
+      iban: ptag('IBAN')
+    });
+  }
+  const scadenze = pagamenti
+    .map((row) => row.data_scadenza)
+    .filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')))
+    .sort();
+
   const imponibile = riepilogo_iva.length
     ? riepilogo_iva.reduce((sum, row) => sum + Number(row.imponibile || 0), 0)
     : righe.reduce((sum, row) => sum + Number(row.imponibile || 0), 0);
@@ -115,6 +139,7 @@ function parseFatturaPAXml(xml) {
   return {
     numero: tag('Numero'),
     data: tag('Data'),
+    scadenza: scadenze[0] || null,
     totale: totaleDocumento,
     imponibile,
     iva,
@@ -131,7 +156,9 @@ function parseFatturaPAXml(xml) {
       progressivo_invio: tag('ProgressivoInvio'),
       formato_trasmissione: tag('FormatoTrasmissione'),
       pec_destinatario: tag('PECDestinatario'),
-      codice_destinatario: tag('CodiceDestinatario')
+      codice_destinatario: tag('CodiceDestinatario'),
+      pagamenti: pagamenti.length ? pagamenti : undefined,
+      scadenze: scadenze.length > 1 ? scadenze : undefined
     }
   };
 }

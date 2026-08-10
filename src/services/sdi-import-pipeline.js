@@ -42,7 +42,12 @@ function importDocument({
   jobId = null,
   utenteId = null,
   dryRun = false,
-  tenantIdentifiers
+  tenantIdentifiers,
+  // Negli archivi dei Servizi Massivi ogni file-fattura viaggia con un file di
+  // metadati che riporta l'identificativo SdI (Formato File SMTS v1.5 par.
+  // 1.3.2). Dal solo nome del file-fattura quell'identificativo non si ricava:
+  // quando c'e' va passato, perche' e' la chiave di deduplicazione piu' forte.
+  identificativoSdi: identificativoSdiOverride = null
 }) {
   if (!SOURCES.has(source)) throw new Error(`Source non ammessa: ${source}`);
   const unwrapped = unwrapDocument(buffer, filename);
@@ -88,7 +93,7 @@ function importDocument({
   const parsed = parseFatturaPAXml(xmlText);
   const directionInfo = determineDirection(xmlText, tenantIdentifiers || {});
   const xmlSha256 = sha256(unwrapped.xml);
-  const identificativoSdi = extractIdentificativoSdi(filename);
+  const identificativoSdi = normalizeIdentificativoSdi(identificativoSdiOverride) || extractIdentificativoSdi(filename);
 
   const duplicate = findExisting({
     tenantId,
@@ -141,7 +146,8 @@ function importDocument({
   try {
     fatturaId = insertInvoice({
       tenantId, parsed, direction: directionInfo.direction, source,
-      identificativoSdi, originalSha256, xmlSha256, filename, stored
+      identificativoSdi, originalSha256, xmlSha256, filename, stored,
+      counterparty: resolveCounterparty(directionInfo)
     });
     db.exec('COMMIT');
   } catch (error) {
@@ -267,16 +273,46 @@ function persistOriginals({ tenantId, filename, unwrapped, originalSha256 }) {
   return { originalPath: relative(originalPath), xmlPath: relative(xmlPath) };
 }
 
-function insertInvoice({ tenantId, parsed, direction, source, identificativoSdi, originalSha256, xmlSha256, filename, stored }) {
+// La controparte di una fattura non e' sempre il cedente.
+//
+// Su una passiva il cedente e' il fornitore, e va bene. Su una attiva il
+// cedente siamo noi: prendere sempre quello significherebbe registrare tutte
+// le fatture emesse come se il cliente fossimo noi stessi, e agganciarle alla
+// nostra stessa anagrafica. Con direzione sconosciuta si resta sul cedente,
+// che e' il comportamento storico e l'unica scelta difendibile.
+function resolveCounterparty(directionInfo) {
+  const parties = directionInfo?.parties || {};
+  const party = directionInfo?.direction === 'OUTGOING' ? parties.cessionario : parties.cedente;
+  if (!party || (!party.vat && !party.fiscalCode && !party.denomination)) return null;
+  return {
+    piva: joinVatNumber(party.country, party.vat),
+    codiceFiscale: party.fiscalCode ? String(party.fiscalCode).toUpperCase() : null,
+    denominazione: party.denomination || null
+  };
+}
+
+function joinVatNumber(country, code) {
+  const cleanCountry = String(country || '').replace(/[^A-Za-z0-9]/g, '');
+  const cleanCode = String(code || '').replace(/[^A-Za-z0-9]/g, '');
+  if (!cleanCode) return null;
+  return cleanCountry ? `${cleanCountry}${cleanCode}` : cleanCode;
+}
+
+function insertInvoice({ tenantId, parsed, direction, source, identificativoSdi, originalSha256, xmlSha256, filename, stored, counterparty = null }) {
   const isOutgoing = direction === 'OUTGOING';
-  const anagraficaId = findAnagrafica(parsed.fornitore_piva);
+  const controparte = counterparty || {
+    piva: parsed.fornitore_piva,
+    codiceFiscale: parsed.fornitore_codice_fiscale,
+    denominazione: parsed.fornitore_nome
+  };
+  const anagraficaId = findAnagrafica(controparte.piva);
   const result = db.prepare(`
     INSERT INTO fatture (
-      tenant_id, numero, numero_documento, tipo, direzione, tipo_documento, anagrafica_id, data,
+      tenant_id, numero, numero_documento, tipo, direzione, tipo_documento, anagrafica_id, data, scadenza,
       imponibile, iva, totale, sdi_id, xml_path, stato, partita_iva, codice_fiscale,
       cliente_fornitore_label, tipo_esteso, documento_meta, hash_file, hash_documento,
       origine_importazione, source, sdi_send_allowed, original_filename, original_file_path, original_sha256
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     tenantId,
     parsed.numero, parsed.numero,
@@ -285,13 +321,14 @@ function insertInvoice({ tenantId, parsed, direction, source, identificativoSdi,
     parsed.tipo_documento || 'fattura',
     anagraficaId,
     parsed.data,
+    parsed.scadenza || null,
     parsed.imponibile, parsed.iva, parsed.totale,
     identificativoSdi || null,
     stored.xmlPath,
     'ricevuta',
-    parsed.fornitore_piva || null,
-    parsed.fornitore_codice_fiscale || null,
-    parsed.fornitore_nome || null,
+    controparte.piva || null,
+    controparte.codiceFiscale || null,
+    controparte.denominazione || null,
     parsed.tipo_esteso || null,
     JSON.stringify({ ...(parsed.documento_meta || {}), xml_sha256: xmlSha256, direction }),
     parsed.hash_file || xmlSha256,
@@ -340,6 +377,13 @@ function findAnagrafica(piva) {
 function extractIdentificativoSdi(filename) {
   const match = String(filename || '').match(/_(\d{6,12})_(?:RC|NS|MC|NE|DT|AT|MT|EC)_/i);
   return match ? match[1] : null;
+}
+
+// L'identificativo SdI e' numerico: un valore non conforme che arrivasse dai
+// metadati non deve finire in fatture.sdi_id, dove e' chiave di deduplicazione.
+function normalizeIdentificativoSdi(value) {
+  const clean = String(value || '').trim();
+  return /^\d{1,20}$/.test(clean) ? clean : null;
 }
 
 function relative(absolutePath) {

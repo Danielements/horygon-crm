@@ -131,8 +131,14 @@ function getMassiveSigningConfig() {
 
 function getMassiveSigningStatus() {
   const config = getMassiveSigningConfig();
+  // Firma esterna: la richiesta esce in chiaro, viene firmata fuori dal CRM con
+  // il dispositivo qualificato del titolare della partita IVA, e il .p7m rientra
+  // per la verifica. E' il caso di FirmaOK, che non ha API server-to-server.
+  if (config.mode === 'external') {
+    return { available: true, external: true, mode: 'external', reason: null };
+  }
   if (config.mode !== 'local') {
-    return { available: false, mode: config.mode, reason: `Firma richieste massive non configurata (sdi.massive.signature.mode=${config.mode})` };
+    return { available: false, external: false, mode: config.mode, reason: `Firma richieste massive non configurata (sdi.massive.signature.mode=${config.mode})` };
   }
   if (!fs.existsSync(config.certificatePath)) {
     return { available: false, mode: config.mode, reason: `Certificato di firma massiva non trovato: ${config.certificatePath}` };
@@ -143,8 +149,26 @@ function getMassiveSigningStatus() {
   return { available: true, mode: config.mode, reason: null };
 }
 
+// Verifica una richiesta massiva firmata fuori dal CRM.
+//
+// Riusa la verifica del ciclo di firma delle fatture: il confronto che conta e'
+// lo stesso, cioe' che il contenuto estratto dal P7M sia esattamente la
+// richiesta prodotta dal CRM. Firmare una richiesta diversa da quella
+// registrata significherebbe interrogare un periodo o una partita IVA diversi
+// da quelli del job, e accorgersene solo dagli archivi che tornano.
+function verifySignedMassiveRequest({ signedBuffer, expectedXmlSha256, now = new Date() }) {
+  const { verifySignedFile } = require('./sdi-firma-esterna');
+  return verifySignedFile({ signedBuffer, expectedXmlSha256, now });
+}
+
 function signMassiveRequest(xml) {
   const status = getMassiveSigningStatus();
+  if (status.external) {
+    throw new Error(
+      'La firma delle richieste massive e impostata su "external": la richiesta va scaricata, '
+      + 'firmata con il dispositivo qualificato e ricaricata, non firmata dal server'
+    );
+  }
   if (!status.available) {
     throw new Error(
       'La richiesta massiva deve essere firmata con firma qualificata '
@@ -189,5 +213,6 @@ module.exports = {
   buildMassiveRequestXml,
   getMassiveSigningConfig,
   getMassiveSigningStatus,
-  signMassiveRequest
+  signMassiveRequest,
+  verifySignedMassiveRequest
 };

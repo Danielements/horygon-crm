@@ -918,6 +918,24 @@ db.exec(`
 ["tenant_id INTEGER DEFAULT 1"].forEach(col => ensureColumn('fatture_sdi_flussi', col));
 ["tenant_id INTEGER DEFAULT 1"].forEach(col => ensureColumn('fatture_sdi_notifiche', col));
 
+// La richiesta massiva va firmata con firma qualificata (Istruzioni SMTS v1.5
+// par. 1). Con la firma esterna il file esce dal CRM e rientra firmato, quindi
+// il job deve ricordare cosa ha prodotto e cosa ha riaccettato.
+[
+  "request_filename TEXT",
+  "request_xml_path TEXT",
+  "request_xml_sha256 TEXT",
+  "request_signed_path TEXT",
+  "request_signed_sha256 TEXT",
+  "request_signature_meta TEXT",
+  "esito_file_path TEXT",
+  "presa_visione INTEGER DEFAULT 0",
+  // Le interrogazioni di esito sono dieci per richiesta e le conta SdI, non
+  // noi: il contatore in memoria del client si azzera a ogni riavvio, e fra
+  // l'inoltro e la disponibilita' degli archivi possono passare ore.
+  "esito_calls INTEGER DEFAULT 0"
+].forEach(col => ensureColumn('sdi_historical_sync_job', col));
+
 try {
   db.exec(`
     INSERT OR IGNORE INTO tenants (id, codice, ragione_sociale)

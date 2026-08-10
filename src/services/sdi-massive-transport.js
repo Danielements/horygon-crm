@@ -1,6 +1,7 @@
 const https = require('https');
 const { getSetting } = require('./google');
 const { postSoapToSdi } = require('./sdi-transmission');
+const { DEFAULT_ENDPOINT, SdiMassiveServicesClient } = require('./sdi-massive-client');
 
 // Trasporto reale verso sm-scarico-file.
 //
@@ -52,4 +53,29 @@ function probeMassiveEndpoint(timeoutMs = 5000) {
   });
 }
 
-module.exports = { createMassiveTransport, probeMassiveEndpoint };
+// Il client conta le interrogazioni di esito e i download per rispettare i
+// limiti SMTS (10 esiti per richiesta, 10 archivi ogni due minuti). Quel
+// conteggio vive nell'istanza: crearne una nuova a ogni chiamata HTTP
+// azzererebbe i contatori e il limite locale non proteggerebbe da nulla,
+// lasciando arrivare l'ER03 dal servizio. Quindi l'istanza e' una sola,
+// riusata finche' l'endpoint configurato non cambia.
+let cachedClient = null;
+
+function getMassiveClient({ mode = 'production' } = {}) {
+  const endpoint = String(getSetting('sdi.massive.endpoint', DEFAULT_ENDPOINT) || DEFAULT_ENDPOINT).trim();
+  if (cachedClient && cachedClient.endpoint === endpoint && cachedClient.mode === mode) {
+    return cachedClient.client;
+  }
+  const client = new SdiMassiveServicesClient({
+    transport: createMassiveTransport({ mode }),
+    endpoint
+  });
+  cachedClient = { endpoint, mode, client };
+  return client;
+}
+
+function resetMassiveClient() {
+  cachedClient = null;
+}
+
+module.exports = { createMassiveTransport, getMassiveClient, probeMassiveEndpoint, resetMassiveClient };

@@ -1,6 +1,6 @@
 # Passaggio di consegne — integrazione SdI
 
-Ultimo aggiornamento: 2026-08-07, fine sessione.
+Ultimo aggiornamento: 2026-08-09, fine sessione.
 
 Questo file serve a riprendere il lavoro in una sessione nuova senza rileggere
 tutto. Il riferimento completo resta `SDI_INTEGRATION_OVERVIEW.md`: qui c'e' solo
@@ -14,10 +14,32 @@ cio' che non e' deducibile dal repository.
 
 ## Stato del codice
 
-Branch `codex/sdi-diagnostics`, ultimo commit `2233465`. **145 test, tutti
-verdi** (`npm test`).
+Branch `codex/sdi-diagnostics`. **166 test, tutti verdi** (`npm test`).
 
-Moduli SdI aggiunti in questa sessione:
+Fatto il 09.08.2026, seconda parte: **backfill dello storico dai Servizi
+Massivi**. Nuovi `sdi-massive-esito.js` (lettura del file di esito, dove stanno
+gli `IdFile`) e `sdi-backfill.js` (orchestratore), ramo di firma esterna in
+`sdi-massive-request.js`, rotte in `src/routes/sdi-storico.js`, script
+`scripts/sdi-fiscal-config.js`.
+
+Il censimento del canale per le forniture massive **e' attivo**: provider
+HORYGON S.R.L., `03365990591`, WebService, Scarico Fatture. Il backfill non ha
+piu' prerequisiti esterni, ma **non e' ancora stato provato contro l'endpoint
+reale**.
+
+Fatto il 09.08.2026: **interfaccia del ciclo di firma esterna** (punto 1 dei
+lavori aperti). Badge di stato SdI sulla riga della fattura, pulsante
+**Firma / Invio**, scarico dell'XML, caricamento del `.p7m`, esito della verifica
+con firmatario ed emittente, invio.
+
+Nel farla e' emerso un problema strutturale che rendeva il ciclo inutilizzabile:
+`transmitInvoiceToSdi` rigenera **sempre** l'XML, quindi con firma esterna ogni
+invio creava un flusso nuovo in `firma_richiesta`, consumava un progressivo e
+non trasmetteva mai il file firmato. Risolto con
+`POST /api/sdi/flussi/:id/invia`, che trasmette un flusso gia' generato senza
+rigenerarlo, con gli stessi guardrail di produzione dell'altra rotta.
+
+Moduli SdI aggiunti nella sessione precedente:
 
 | File | |
 |---|---|
@@ -41,8 +63,8 @@ vedevano, quindi **vanno usati come riferimento quando si tocca il parsing**.
 
 ## Stato del deploy
 
-**Il VPS e' fermo al commit `11ebf49`.** Mancano gli ultimi due, cioe' tutto il
-ciclo di firma esterna:
+**Il VPS e' fermo al commit `11ebf49`.** Manca tutto il ciclo di firma esterna,
+backend e interfaccia:
 
 ```bash
 cd /opt/horygon-crm && git pull && docker compose up -d --build
@@ -55,28 +77,72 @@ porta del container su `127.0.0.1:8443`, indice univoco sui nomi file.
 `sdi.mode` e' ancora `test`: nessun invio reale e' possibile finche' non viene
 cambiato di proposito.
 
+## Scarico dello storico marzo-oggi
+
+Il censimento provider e' fatto. Resta la configurazione fiscale del tenant,
+che oggi **non esiste** e senza la quale ogni job si ferma alla prima chiamata:
+e' l'unico passo di preparazione rimasto.
+
+```bash
+docker compose exec app node scripts/sdi-fiscal-config.js --set --piva=03365990591 --cf=03365990591 --massivi --provider --confirm
+```
+
+Lo script gira in dry-run senza `--confirm` e chiude con
+`PRAGMA wal_checkpoint(TRUNCATE)`, quindi la scrittura sopravvive al rebuild.
+Poi `sdi.massive.signature.mode = external`.
+
+Il periodo si copre con **due finestre da tre mesi per direzione**: il tracciato
+non ne ammette di piu' larghe (controllo 00201), e finestre mensili
+moltiplicherebbero per tre le firme da fare a mano.
+
+| Direzione | Finestre | Firme |
+|---|---|---|
+| `INCOMING` (ricevute, per data di ricezione) | 01.03-31.05, 01.06-oggi | 2 |
+| `OUTGOING` (emesse, per data di emissione) | 01.03-31.05, 01.06-oggi | 2 |
+
+Quattro firme qualificate in tutto. `AVAILABLE_TO_RECIPIENT` **non va incluso**
+senza deciderlo: scaricare fatture messe a disposizione vale come presa visione
+fiscale, e la rotta lo rifiuta senza una conferma esplicita.
+
+**Azzerare i dati di test prima di importare**, non dopo: `reset-sdi-invoice-data.js`
+cancella tutte le fatture, e importando per primi la deduplicazione
+arricchirebbe le righe di test invece di inserire quelle vere. Mai
+`--reset-progressivo`: quei nomi file sono gia' arrivati a SdI.
+
+Per ogni job: `prepara`, scarica la richiesta, firmala con FirmaOK, ricarica il
+`.p7m`, `inoltra`, `esito` (**non in un ciclo stretto: sono dieci
+interrogazioni in tutto per richiesta**, contate sul job e non solo in
+memoria), `scarica`, `importa` prima con `{"dryRun": true}`.
+
+Scarico e import sono separati apposta: il download costa una firma e scade, il
+parsing no. Se il parser migliora, `riprocessa` rilegge gli archivi gia' in
+casa — cancella le fatture prodotte da quel job e rimette gli archivi in coda,
+senza richiedere nulla a SdI. Le fatture non storiche non vengono toccate.
+
+Se una passata si interrompe, il job resta `PARTIAL` e si riprende richiamando
+`importa` o `scarica`: gli archivi gia' lavorati non vengono ritoccati. Se
+invece e' passata `DataFineDisponibilita` il job va in `EXPIRED` e non c'e'
+niente da riprovare: serve una richiesta nuova, con una firma nuova.
+
+Da sapere prima di leggere i risultati: le fatture in **reverse charge sono
+escluse** da tutte le operazioni di download e non arriveranno mai. Un buco li'
+non e' un errore del backfill.
+
 ## Lavori aperti, in ordine
 
-1. **Interfaccia del ciclo di firma esterna.** Le rotte esistono
-   (`GET /api/sdi/flussi/:id/xml-da-firmare`, `POST /api/sdi/flussi/:id/firma`)
-   ma non c'e' UI: oggi il ciclo e' usabile solo via API. Serve: stato della
-   firma sulla fattura, pulsante di download, upload del `.p7m`, esito della
-   verifica con nome del firmatario, poi invio.
-2. **Firma esterna per le richieste SMTS.** `sdi-massive-request.js` prevede
-   solo `signMassiveRequest` in locale. Va aggiunto il ramo esterno, che riusa
-   gli stessi mattoni di `sdi-firma-esterna.js`. Senza, lo Scarico Fatture
-   attivato il 07.08 resta inutilizzabile.
-3. **Orchestratore del backfill**: archivio ZIP, estrazione, import documento per
-   documento, report e dry-run end-to-end. I mattoni ci sono tutti
-   (`SafeZipReader`, `sdi-import-pipeline`, `sdi-historical-sync`), manca la
-   funzione che li lega e la rotta.
-4. Import automatico delle passive firmate `.p7m` dal canale realtime: oggi
+1. **Collaudo del backfill contro l'endpoint reale**, una finestra sola per
+   cominciare, in dry-run sull'import. Non ci sono piu' prerequisiti esterni.
+2. Interfaccia del backfill: le rotte ci sono, i pulsanti no.
+3. Import automatico delle passive firmate `.p7m` dal canale realtime: oggi
    vengono archiviate ma non importate, e il CRM risponde comunque `ER01`.
-5. Client di quadratura e reinoltro: **bloccato**, mancano tre WSDL da recuperare
+4. Client di quadratura e reinoltro: **bloccato**, mancano tre WSDL da recuperare
    dal Sistema di Accreditamento
    (`SdIQuadraturaWSFlussoRicezioneReport_v1.0.wsdl`,
    `SdIQuadraturaWSFlussoTrasmissioneReport_v1.0.wsdl`,
    `SdIQuadraturaWSFlussoTrasmissioneReinoltro_v1.0.wsdl`).
+5. `ScaricoRichiesteEsito_v1.0.xsd`, non pubblicato insieme agli altri contratti
+   SMTS: il parser dell'esito segue la tabella della specifica, avere lo schema
+   permetterebbe di validarlo.
 6. Rate limiter globale su `/api` (`src/index.js`): copre anche il callback SdI,
    300 richieste al minuto per IP. Da escludere o alzare prima di volumi reali.
 
@@ -117,3 +183,6 @@ va mai azzerato in blocco — per i soli dati fattura c'e'
 `CRM_FEATURES.md`, `DemoFatturazione/`, piu' le modifiche non committate a
 `CODING_BASICS.md` e `SDI_INTEROPERABILITY_STATUS.md`, che sono lavoro
 precedente non mio.
+
+`.claude/launch.json` e' stato creato per avviare l'app in locale durante la
+verifica dell'interfaccia: e' comodita' di sviluppo, non serve al deploy.
