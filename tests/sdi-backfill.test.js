@@ -336,9 +336,18 @@ test('la richiesta da firmare e l involucro, non l InputMassivo nudo', () => {
     tipoRichiesta: 'FATT', nomeFile: '03365990591_TEST_1.xml', contenutoXml: input
   });
 
-  assert.match(involucro, new RegExp(`<FileRichiesta xmlns="${RICHIESTA_NS.replace(/[/.]/g, '\\$&')}" versione="1.0">`));
+  // I due tracciati si scrivono in modo opposto e vanno tenuti distinti:
+  // RichiestaServiziMassivi non dichiara elementFormDefault, quindi vale
+  // "unqualified" e solo la radice sta nel namespace. Mettere anche i figli
+  // dentro produce 00200 "File non conforme al tracciato".
+  assert.match(involucro, new RegExp(`<ns:FileRichiesta xmlns:ns="${RICHIESTA_NS.replace(/[/.]/g, '\\$&')}" versione="1.0">`));
+  assert.doesNotMatch(involucro, /<FileRichiesta xmlns=/, 'i figli non devono ereditare il namespace');
   assert.match(involucro, /<TipoRichiesta>FATT<\/TipoRichiesta>/);
   assert.match(involucro, /<NomeFile>03365990591_TEST_1\.xml<\/NomeFile>/);
+
+  // Il contenuto annidato segue invece InputMassivo, che e' "qualified".
+  const annidato = Buffer.from(involucro.match(/<File>([^<]+)<\/File>/)[1], 'base64').toString('utf8');
+  assert.match(annidato, /<InputMassivo xmlns="http:\/\/www\.sogei\.it\/InputPubblico">/);
 
   // L'InputMassivo deve essere dentro, in base-64, non in chiaro.
   assert.doesNotMatch(involucro, /<InputMassivo/, 'l InputMassivo non va in chiaro nell involucro');
@@ -364,14 +373,14 @@ test('l involucro rifiuta un TipoRichiesta fuori tracciato e un nome file non co
   );
 });
 
-test('il job prepara l involucro e ne calcola l hash da confrontare con la firma', () => {
+test('il job prepara l involucro e ne calcola l hash da confrontare con la firma', async () => {
   cleanup();
   seedFiscalConfig();
   const job = createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-06-01', dateTo: '2026-08-10' });
-  const prepared = prepareRequest({ tenantId: TENANT, jobId: job.id });
+  const prepared = await prepareRequest({ tenantId: TENANT, jobId: job.id });
 
   const documento = getRequestToSign(job.id, TENANT).buffer.toString('utf8');
-  assert.match(documento, /<FileRichiesta /, 'si firma l involucro');
+  assert.match(documento, /<ns:FileRichiesta /, 'si firma l involucro');
   assert.match(documento, /<TipoRichiesta>FATT<\/TipoRichiesta>/);
 
   // Il periodo richiesto resta verificabile: sta nell'InputMassivo annidato.
@@ -385,30 +394,70 @@ test('il job prepara l involucro e ne calcola l hash da confrontare con la firma
   cleanup();
 });
 
+test('la richiesta e valida contro gli XSD ufficiali, entrambi i livelli', async () => {
+  const {
+    buildMassiveRequestXml, buildRichiestaServiziMassiviXml, validateMassiveRequest
+  } = require('../src/services/sdi-massive-request');
+
+  for (const requestType of ['INCOMING', 'OUTGOING', 'AVAILABLE_TO_RECIPIENT']) {
+    const input = buildMassiveRequestXml({
+      requestType, vatNumbers: [PIVA], dateFrom: '2026-03-01', dateTo: '2026-05-31'
+    });
+    const involucro = buildRichiestaServiziMassiviXml({
+      tipoRichiesta: 'FATT', nomeFile: '03365990591_TEST_00001.xml', contenutoXml: input
+    });
+    const esito = await validateMassiveRequest({ involucro, contenutoXml: input });
+    assert.deepEqual(esito.schemi, ['InputMassivo_v1.5.xsd', 'RichiestaServiziMassivi_v1.0.xsd'], requestType);
+  }
+});
+
+test('un involucro con i figli nel namespace viene bloccato prima della firma', async () => {
+  const { buildMassiveRequestXml, validateMassiveRequest, RICHIESTA_NS } = require('../src/services/sdi-massive-request');
+  const input = buildMassiveRequestXml({
+    requestType: 'INCOMING', vatNumbers: [PIVA], dateFrom: '2026-03-01', dateTo: '2026-05-31'
+  });
+
+  // Esattamente la forma che SdI ha rifiutato con 00200 il 10.08.2026: xmlns di
+  // default sulla radice, che trascina i figli dentro il namespace mentre lo
+  // schema li vuole fuori. Il controllo locale deve intercettarla, altrimenti
+  // l'errore si scopre solo dopo aver speso una firma qualificata.
+  const sbagliato = '<?xml version="1.0" encoding="UTF-8"?>'
+    + `<FileRichiesta xmlns="${RICHIESTA_NS}" versione="1.0">`
+    + '<TipoRichiesta>FATT</TipoRichiesta>'
+    + '<NomeFile>03365990591_TEST_00001.xml</NomeFile>'
+    + `<File>${Buffer.from(input, 'utf8').toString('base64')}</File>`
+    + '</FileRichiesta>';
+
+  await assert.rejects(
+    () => validateMassiveRequest({ involucro: sbagliato, contenutoXml: input }),
+    (error) => error.code === 'RICHIESTA_NON_CONFORME'
+  );
+});
+
 // --- ciclo completo del job -----------------------------------------------
 
-test('senza configurazione fiscale il job non parte', () => {
+test('senza configurazione fiscale il job non parte', async () => {
   cleanup();
   const job = createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
-  assert.throws(() => prepareRequest({ tenantId: TENANT, jobId: job.id }), /Configurazione fiscale mancante/);
+  await assert.rejects(() => prepareRequest({ tenantId: TENANT, jobId: job.id }), /Configurazione fiscale mancante/);
   cleanup();
 });
 
-test('la richiesta preparata attende la firma esterna e non e inoltrabile', (t) => {
+test('la richiesta preparata attende la firma esterna e non e inoltrabile', async (t) => {
   const signing = getMassiveSigningStatus();
   if (signing.available && !signing.external) return t.skip('firma massiva locale configurata su questa macchina');
   cleanup();
   seedFiscalConfig();
   const job = createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
 
-  const prepared = prepareRequest({ tenantId: TENANT, jobId: job.id });
+  const prepared = await prepareRequest({ tenantId: TENANT, jobId: job.id });
   assert.equal(getJob(job.id).status, 'CREATED', 'senza firma il job non avanza');
   assert.ok(prepared.xmlSha256);
   assert.match(prepared.signedFilename, /\.p7m$/);
 
   const document = getRequestToSign(job.id, TENANT);
   const xml = document.buffer.toString('utf8');
-  assert.match(xml, /<FileRichiesta /, 'si firma l involucro, non l InputMassivo');
+  assert.match(xml, /<ns:FileRichiesta /, 'si firma l involucro, non l InputMassivo');
   const interno = Buffer.from(xml.match(/<File>([^<]+)<\/File>/)[1], 'base64').toString('utf8');
   assert.match(interno, /<FattureRicevute>/);
   assert.match(interno, new RegExp(`<Piva>${PIVA}</Piva>`));
@@ -417,13 +466,13 @@ test('la richiesta preparata attende la firma esterna e non e inoltrabile', (t) 
   cleanup();
 });
 
-test('una richiesta firmata diversa da quella preparata viene rifiutata', (t) => {
+test('una richiesta firmata diversa da quella preparata viene rifiutata', async (t) => {
   const m = material();
   if (!m) return t.skip('openssl non disponibile');
   cleanup();
   seedFiscalConfig();
   const job = createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
-  prepareRequest({ tenantId: TENANT, jobId: job.id });
+  await prepareRequest({ tenantId: TENANT, jobId: job.id });
 
   // Firmare un periodo diverso da quello registrato significherebbe scaricare
   // mesi che nessuno ha chiesto, e accorgersene solo dagli archivi.
@@ -442,7 +491,7 @@ test('il ciclo completo porta il job dalla firma all import', async (t) => {
   seedFiscalConfig();
 
   const job = createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
-  const prepared = prepareRequest({ tenantId: TENANT, jobId: job.id });
+  const prepared = await prepareRequest({ tenantId: TENANT, jobId: job.id });
 
   // 1. firma esterna
   const document = getRequestToSign(job.id, TENANT);

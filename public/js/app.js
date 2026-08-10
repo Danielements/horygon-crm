@@ -3636,6 +3636,7 @@ function renderStoricoJobs() {
         ${job.status === 'DOWNLOADING' || job.status === 'PARTIAL'
           ? `<button class="btn btn-outline btn-sm" onclick="passoStoricoSdi(${job.id},'importa',true)" title="Simula senza scrivere">Prova import</button>`
           : ''}
+        <button class="btn btn-outline btn-sm" onclick="eliminaJobStorico(${job.id})" title="Elimina il job. Le fatture gia importate restano.">&#128465;</button>
       </div></td>
     </tr>`;
   }).join('');
@@ -3768,7 +3769,16 @@ function renderStoricoJobModal(data) {
           <td>${escapeHtml(a.status || '-')}</td>
         </tr>`).join('')}</tbody></table>
       </div>` : ''}
-    ${job.errors ? `<div style="${SDI_FIRMA_AVVISO_STYLE};margin-top:12px">${escapeHtml(String(job.errors).slice(0, 400))}</div>` : ''}`;
+    ${job.errors ? `<div style="${SDI_FIRMA_AVVISO_STYLE};margin-top:12px">${escapeHtml(String(job.errors).slice(0, 400))}</div>` : ''}
+    ${['COMPLETED', 'FAILED', 'EXPIRED'].includes(job.status) ? '' : `
+      <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+        <button class="btn btn-outline btn-sm" onclick="abbandonaJobStorico(${job.id})"
+          title="Chiude il job senza via d'uscita e libera il periodo per una nuova richiesta">Abbandona questa richiesta</button>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:6px">
+          Serve quando SdI ha scartato la richiesta: quel percorso e' chiuso, e per rifare lo stesso
+          periodo occorre una richiesta nuova, quindi una firma nuova.
+        </div>
+      </div>`}`;
 }
 
 async function pianificaStoricoSdi() {
@@ -3817,6 +3827,35 @@ function descriviEsitoStorico(azione, result) {
     : `Import ${result?.status === 'COMPLETED' ? 'completato' : result?.status}`;
   if (azione === 'riprocessa') return `${result?.fattureRimosse || 0} fatture rimosse, archivi rimessi in coda`;
   return 'Fatto';
+}
+
+async function abbandonaJobStorico(jobId) {
+  const motivo = prompt('Perche\' abbandoni questa richiesta? (per l\'audit)', 'Richiesta scartata da SdI');
+  if (motivo === null) return;
+  try {
+    await api('POST', `/sdi/storico/jobs/${jobId}/abbandona`, { motivo });
+    toast('Richiesta abbandonata: il periodo torna pianificabile', 'success');
+    closeAllModals();
+    storicoJobAperto = null;
+    loadStoricoSdi();
+  } catch (e) {
+    toast(e.message || 'Errore', 'error');
+  }
+}
+
+async function eliminaJobStorico(jobId) {
+  if (!confirm(`Eliminare il job ${jobId}?\n\nSpariscono il job, i suoi archivi e il registro dei documenti.\nLe fatture gia' importate NON vengono toccate.`)) return;
+  try {
+    const result = await api('DELETE', `/sdi/storico/jobs/${jobId}`);
+    toast(result?.fattureConservate
+      ? `Job eliminato. ${result.fattureConservate} fatture importate restano nel CRM.`
+      : 'Job eliminato', 'success');
+    closeAllModals();
+    storicoJobAperto = null;
+    loadStoricoSdi();
+  } catch (e) {
+    toast(e.message || 'Errore eliminazione', 'error');
+  }
 }
 
 async function avanzaStoricoSdi() {

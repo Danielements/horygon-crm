@@ -11,6 +11,7 @@ const {
   buildRichiestaServiziMassiviXml,
   getMassiveSigningStatus,
   signMassiveRequest,
+  validateMassiveRequest,
   verifySignedMassiveRequest
 } = require('./sdi-massive-request');
 const {
@@ -47,7 +48,7 @@ const ARCHIVE_DIR = path.join(ROOT, 'uploads', 'sdi-storico');
 
 // --- 1. costruzione della richiesta --------------------------------------
 
-function prepareRequest({ tenantId, jobId, utenteId = null }) {
+async function prepareRequest({ tenantId, jobId, utenteId = null }) {
   const job = requireJob(jobId, tenantId);
   if (job.status !== 'CREATED') {
     throw new Error(`Il job ${jobId} non e piu in preparazione (stato: ${job.status})`);
@@ -81,6 +82,10 @@ function prepareRequest({ tenantId, jobId, utenteId = null }) {
     nomeFile: filename,
     contenutoXml: xml
   });
+
+  // Prima di proporlo alla firma: o e' conforme a entrambi gli XSD, o non esce
+  // di qui. Dopo la firma l'errore costerebbe un'altra firma.
+  await validateMassiveRequest({ involucro, contenutoXml: xml });
 
   const xmlBuffer = Buffer.from(involucro, 'utf8');
   const xmlSha256 = sha256(xmlBuffer);
@@ -553,6 +558,58 @@ async function importSingleArchive({ job, archivio, dryRun, utenteId, identifier
   };
 }
 
+// Chiude un job che non ha piu' strada: una richiesta scartata da SdI non
+// diventera' mai pronta, e finche' il job resta aperto l'indice univoco
+// impedisce di ripianificare lo stesso periodo. Chiuderlo e' l'unico modo per
+// rifare quella finestra, e serve una firma nuova: quella spesa e' persa.
+function abandonJob({ jobId, tenantId = null, motivo = null, utenteId = null }) {
+  const job = requireJob(jobId, tenantId);
+  if (['COMPLETED', 'FAILED', 'EXPIRED'].includes(job.status)) {
+    throw new Error(`Il job ${jobId} e gia chiuso (stato: ${job.status})`);
+  }
+  transitionJob(job.id, 'FAILED', {
+    errors: [{ codice: 'ABBANDONATO', descrizione: motivo || 'Job abbandonato manualmente' }]
+  });
+  auditJob('SDI_HISTORICAL_JOB_ABANDONED', {
+    tenantId: job.tenant_id, jobId: job.id, utenteId,
+    dettagli: { statoPrecedente: job.status, idRichiesta: job.remote_request_id, motivo }
+  });
+  return { jobId: job.id, status: 'FAILED', statoPrecedente: job.status, motivo: motivo || null };
+}
+
+// Elimina un job e tutto cio' che ne discende, tranne le fatture importate.
+//
+// Le fatture restano: sono documenti fiscali e non si cancellano per pulire una
+// lista. Per rimuovere anche quelle c'e' reprocessArchives, che dice cosa fa.
+function deleteJob({ jobId, tenantId = null, utenteId = null }) {
+  const job = requireJob(jobId, tenantId);
+  const importate = db.prepare(
+    "SELECT COUNT(*) n FROM sdi_historical_sync_item WHERE job_id = ? AND outcome = 'IMPORTED'"
+  ).get(job.id).n;
+
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM sdi_historical_sync_item WHERE job_id = ?').run(job.id);
+    db.prepare('DELETE FROM sdi_historical_sync_archive WHERE job_id = ?').run(job.id);
+    db.prepare('DELETE FROM sdi_historical_sync_job WHERE id = ?').run(job.id);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+
+  auditJob('SDI_HISTORICAL_JOB_DELETED', {
+    tenantId: job.tenant_id, jobId: job.id, utenteId,
+    dettagli: {
+      stato: job.status,
+      periodo: `${job.date_from}/${job.date_to}`,
+      idRichiesta: job.remote_request_id,
+      fattureConservate: importate
+    }
+  });
+  return { jobId: job.id, eliminato: true, fattureConservate: importate };
+}
+
 // --- ri-elaborazione di archivi gia' scaricati ----------------------------
 
 // Rende ripetibile il parsing senza ripetere il download.
@@ -785,7 +842,9 @@ function parseJson(value) {
 module.exports = {
   ESITO_WINDOW_MS,
   MAX_ESITO_CALLS,
+  abandonJob,
   attachSignedRequest,
+  deleteJob,
   isEsitoWindowElapsed,
   downloadArchives,
   getRequestToSign,

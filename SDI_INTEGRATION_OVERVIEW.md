@@ -281,6 +281,14 @@ fondo: in mezzo c'e' una firma qualificata con PIN e OTP.
 | scarica gli archivi | `POST /api/sdi/storico/jobs/:id/scarica` |
 | importa | `POST /api/sdi/storico/jobs/:id/importa` |
 | rileggi quanto gia' scaricato | `POST /api/sdi/storico/jobs/:id/riprocessa` |
+| chiudi una richiesta senza via d'uscita | `POST /api/sdi/storico/jobs/:id/abbandona` |
+| elimina il job | `DELETE /api/sdi/storico/jobs/:id` |
+
+Una richiesta scartata da SdI non diventera' mai pronta: il job va **abbandonato**
+(cosi' l'indice univoco libera quel periodo) oppure **eliminato**. L'eliminazione
+cancella job, archivi e registro dei documenti, ma **non le fatture importate**:
+quelle sono documenti fiscali e si rimuovono solo con `riprocessa`, che lo
+dichiara.
 
 `GET /api/sdi/storico/stato` dice in anticipo cosa manca ancora per partire.
 
@@ -326,6 +334,13 @@ Tre vincoli del servizio sono applicati sul job, non solo in memoria:
   importati restano `PROCESSED`. Un backfill non ripartibile costringerebbe a
   rifare la richiesta, cioe' a spendere una firma per dati gia' scaricati.
 
+**Ogni richiesta viene validata contro gli XSD ufficiali prima di essere
+proposta alla firma** (`validateMassiveRequest`, entrambi i livelli, con
+`libxml2-wasm`). Non e' zelo: un file non conforme torna indietro come `00200`
+solo dopo l'inoltro, cioe' quando la firma qualificata e' gia' stata spesa e
+non e' recuperabile. Gli schemi sono versionati nel repo, verificare li' costa
+nulla ed e' l'ultimo momento in cui l'errore e' gratis.
+
 **La richiesta e' annidata su due livelli, e si firma quello esterno.** Le
 specifiche del formato v1.5 par. 1.1 dicono che alla SOAP request si allega un
 file conforme a `RichiestaServiziMassivi_v1.0.xsd`:
@@ -341,6 +356,18 @@ Firmare l'`InputMassivo` nudo produce un file che il servizio rifiuta, e la
 firma qualificata spesa per produrlo e' persa: va rifatta. Il `ds:Signature`
 previsto dal tracciato e' lo spazio per la firma XAdES avvolgente; con CAdES il
 documento resta com'e' e la firma lo avvolge dall'esterno, nel `.p7m`.
+
+**I due tracciati si scrivono in modo opposto**, ed e' la trappola che e'
+costata una firma il 10.08.2026:
+
+| Schema | `elementFormDefault` | Come si scrive |
+|---|---|---|
+| `InputMassivo_v1.5` | `qualified` | `xmlns` di default: tutto nel namespace |
+| `RichiestaServiziMassivi_v1.0` | **assente** = `unqualified` | prefisso sulla sola radice: i figli **fuori** dal namespace |
+
+Con `xmlns` di default sull'involucro, `TipoRichiesta` finisce nel namespace e
+SdI risponde `00200 - File non conforme al tracciato`, indicando proprio quel
+primo elemento.
 
 Formati ammessi per la firma: **CAdES-BES** (ETSI TS 101 733 v1.7.4, cioe' il
 `.p7m`) oppure **XAdES-BES** (ETSI TS 101 903 v1.4.1). Il base-64 non e' un

@@ -10,7 +10,9 @@ const { advanceJobs, isAutoEnabled } = require('../services/sdi-backfill-schedul
 const { getMassiveSigningStatus, REQUEST_TYPES } = require('../services/sdi-massive-request');
 const { planBackfill, resolveTenantVatNumber } = require('../services/sdi-historical-sync');
 const {
+  abandonJob,
   attachSignedRequest,
+  deleteJob,
   downloadArchives,
   getRequestToSign,
   importArchives,
@@ -115,10 +117,20 @@ router.get('/jobs/:id', requirePermesso('fatture', 'read'), (req, res) => {
   }
 });
 
-router.post('/jobs/:id/prepara', requirePermesso('fatture', 'edit'), (req, res) => {
-  handle(req, res, 'prepara', () => prepareRequest({
+router.post('/jobs/:id/prepara', requirePermesso('fatture', 'edit'), async (req, res) => {
+  // Asincrona perche' qui la richiesta viene validata contro gli XSD ufficiali
+  // prima di essere proposta alla firma.
+  await handleAsync(req, res, 'prepara', () => prepareRequest({
     tenantId: currentTenantId(),
     jobId: Number(req.params.id),
+    utenteId: req.user.id
+  }));
+});
+
+router.delete('/jobs/:id', requirePermesso('fatture', 'edit'), (req, res) => {
+  handle(req, res, 'elimina', () => deleteJob({
+    jobId: Number(req.params.id),
+    tenantId: currentTenantId(),
     utenteId: req.user.id
   }));
 });
@@ -200,6 +212,16 @@ router.post('/avanza', requirePermesso('fatture', 'edit'), async (req, res) => {
     logFailure(req, 'avanza', 0, error);
     res.status(400).json({ error: error.message });
   }
+});
+
+// Chiude un job senza via d'uscita, cosi' lo stesso periodo torna pianificabile.
+router.post('/jobs/:id/abbandona', requirePermesso('fatture', 'edit'), (req, res) => {
+  handle(req, res, 'abbandona', () => abandonJob({
+    jobId: Number(req.params.id),
+    tenantId: currentTenantId(),
+    motivo: String(req.body?.motivo || '').trim() || null,
+    utenteId: req.user.id
+  }));
 });
 
 // Ri-elabora archivi gia' scaricati: cancella le fatture prodotte da questo job

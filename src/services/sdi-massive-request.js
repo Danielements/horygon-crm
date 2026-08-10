@@ -129,15 +129,92 @@ function buildRichiestaServiziMassiviXml({ tipoRichiesta = 'FATT', nomeFile, con
   const payload = Buffer.from(String(contenutoXml || ''), 'utf8');
   if (!payload.length) throw new Error('Contenuto della richiesta massiva mancante');
 
+  // Il prefisso sulla sola radice non e' estetica: RichiestaServiziMassivi_v1.0
+  // non dichiara elementFormDefault, quindi vale "unqualified" e i figli devono
+  // stare FUORI dal namespace. Con xmlns di default finirebbero dentro, e SdI
+  // risponde 00200 "File non conforme al tracciato" indicando TipoRichiesta.
+  //
+  // InputMassivo_v1.5 fa l'opposto (elementFormDefault="qualified"), ed e' per
+  // questo che li' il namespace di default e' corretto. I due tracciati non si
+  // scrivono allo stesso modo.
+  //
   // L'elemento ds:Signature del tracciato e' lo spazio per la firma XAdES
   // avvolgente. Con la firma CAdES il documento esce cosi' com'e' e la firma lo
   // avvolge dall'esterno, nel .p7m: qui non va lasciato alcun segnaposto.
   return `<?xml version="1.0" encoding="UTF-8"?>`
-    + `<FileRichiesta xmlns="${RICHIESTA_NS}" versione="1.0">`
+    + `<ns:FileRichiesta xmlns:ns="${RICHIESTA_NS}" versione="1.0">`
     + `<TipoRichiesta>${tipoRichiesta}</TipoRichiesta>`
     + `<NomeFile>${nomeFile}</NomeFile>`
     + `<File>${payload.toString('base64')}</File>`
-    + `</FileRichiesta>`;
+    + `</ns:FileRichiesta>`;
+}
+
+// Validazione contro gli XSD ufficiali, prima della firma.
+//
+// Un file non conforme torna indietro come 00200 solo dopo l'inoltro, cioe'
+// dopo che una firma qualificata e' gia' stata spesa e non e' recuperabile.
+// Gli schemi sono versionati nel repo: verificare qui costa nulla ed e' l'unico
+// momento in cui l'errore e' ancora gratis.
+const SMTS_DIR = path.join(__dirname, '../../resources/sdi/smts');
+const DSIG_LOCAL = path.join(__dirname, '../../resources/sdi/invoices/common/xmldsig-core-schema.xsd');
+
+let libxmlPromise = null;
+function getLibxml() {
+  if (!libxmlPromise) libxmlPromise = import('libxml2-wasm');
+  return libxmlPromise;
+}
+
+async function validateAgainstXsd(xml, xsdFile, etichetta) {
+  const { XmlDocument, XsdValidator } = await getLibxml();
+  // L'import di xmldsig punta a un URL remoto, e il validatore gira in WASM
+  // senza accesso al filesystem dell'host: non e' raggiungibile in nessuno dei
+  // due modi. Si rimuove l'import e il riferimento a ds:Signature, che con la
+  // firma CAdES non emettiamo comunque - stesso trattamento gia' applicato agli
+  // schemi FatturaPA in sdi-xml-validator.
+  const xsd = String(fs.readFileSync(path.join(SMTS_DIR, xsdFile), 'utf8'))
+    .replace(/^\s*<xs:import[^>]*xmldsig-core-schema\.xsd[^>]*\/>\s*$/m, '')
+    .replace(/^\s*<xs:element\s+ref="ds:Signature"[^>]*\/>\s*$/m, '');
+
+  let xsdDoc = null;
+  let validator = null;
+  let xmlDoc = null;
+  try {
+    xsdDoc = XmlDocument.fromBuffer(Buffer.from(xsd, 'utf8'), { url: `${SMTS_DIR.replace(/\\/g, '/')}/${xsdFile}` });
+    validator = XsdValidator.fromDoc(xsdDoc);
+    xmlDoc = XmlDocument.fromString(xml);
+    validator.validate(xmlDoc);
+    return { ok: true, schema: xsdFile, errors: [] };
+  } catch (error) {
+    const details = Array.isArray(error?.details) ? error.details : null;
+    return {
+      ok: false,
+      schema: xsdFile,
+      errors: details ? details.map((d) => d.message || String(d)) : [error.message]
+    };
+  } finally {
+    try { xmlDoc && xmlDoc.dispose(); } catch {}
+    try { validator && validator.dispose(); } catch {}
+    try { xsdDoc && xsdDoc.dispose(); } catch {}
+  }
+}
+
+// Valida entrambi i livelli: l'involucro e il documento che porta dentro.
+async function validateMassiveRequest({ involucro, contenutoXml }) {
+  const esiti = [];
+  if (contenutoXml) esiti.push(await validateAgainstXsd(contenutoXml, 'InputMassivo_v1.5.xsd', 'contenuto'));
+  esiti.push(await validateAgainstXsd(involucro, 'RichiestaServiziMassivi_v1.0.xsd', 'involucro'));
+
+  const falliti = esiti.filter((esito) => !esito.ok);
+  if (falliti.length) {
+    const error = new Error(
+      'La richiesta massiva non e conforme ai tracciati ufficiali: '
+      + falliti.map((f) => `${f.schema} -> ${f.errors.join('; ')}`).join(' | ')
+    );
+    error.code = 'RICHIESTA_NON_CONFORME';
+    error.dettagli = falliti;
+    throw error;
+  }
+  return { ok: true, schemi: esiti.map((e) => e.schema) };
 }
 
 function assertNomeFile(nomeFile) {
@@ -259,5 +336,6 @@ module.exports = {
   getMassiveSigningConfig,
   getMassiveSigningStatus,
   signMassiveRequest,
+  validateMassiveRequest,
   verifySignedMassiveRequest
 };
