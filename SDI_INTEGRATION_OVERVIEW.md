@@ -331,6 +331,14 @@ La firma della richiesta massiva segue lo stesso ciclo esterno delle FPA12
 contenuto estratto dal `.p7m` deve coincidere con la richiesta registrata,
 altrimenti si interrogherebbe un periodo diverso da quello del job.
 
+**Sono due firme diverse e non vanno confuse.** Quella sulla fattura riguarda
+solo le FPA12 che emettiamo noi. Quella sulla richiesta massiva riguarda il
+file `InputMassivo`, serve per **ogni** richiesta SMTS a prescindere dalla
+direzione, e non tocca le fatture che tornano indietro: una fattura passiva non
+si firma mai: la firma, se c'e', e' di chi l'ha emessa, e il CRM al massimo la
+verifica estraendola dal `.p7m`. Nell'interfaccia le due cose hanno etichette
+distinte proprio per questo.
+
 Attenzione a tre cose delle Istruzioni SMTS v1.5:
 
 - le fatture in **reverse charge sono escluse** da tutte le operazioni di

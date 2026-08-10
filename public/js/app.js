@@ -3547,7 +3547,7 @@ let storicoFirmaJobId = null;
 // Cosa puo' fare l'operatore adesso, per ogni stato del job.
 const STORICO_PASSI = {
   CREATED: { label: 'Prepara la richiesta', azione: 'prepara' },
-  SIGNED: { label: 'Inoltra a SdI', azione: 'inoltra' },
+  SIGNED: { label: 'Inoltra la richiesta', azione: 'inoltra' },
   SUBMITTED: { label: 'Chiedi l\'esito', azione: 'esito' },
   PROCESSING: { label: 'Chiedi l\'esito', azione: 'esito' },
   READY: { label: 'Scarica gli archivi', azione: 'scarica' },
@@ -3615,8 +3615,8 @@ function renderStoricoJobs() {
       <td>${job.documents_imported || 0} / ${job.documents_found || 0}${job.duplicates ? ` <span style="color:var(--text-muted)">(${job.duplicates} dup)</span>` : ''}</td>
       <td><div style="display:flex;gap:6px;flex-wrap:wrap">
         ${job.status === 'CREATED' && job.request_xml_sha256
-          ? `<button class="btn btn-accent btn-sm" onclick="scaricaRichiestaDaFirmare(${job.id})">Scarica da firmare</button>
-             <button class="btn btn-outline btn-sm" onclick="chiediRichiestaFirmata(${job.id})">Carica .p7m</button>`
+          ? `<button class="btn btn-accent btn-sm" onclick="scaricaRichiestaDaFirmare(${job.id})" title="Scarica il file InputMassivo da firmare: non e una fattura">Scarica la richiesta</button>
+             <button class="btn btn-outline btn-sm" onclick="chiediRichiestaFirmata(${job.id})">Carica richiesta firmata</button>`
           : ''}
         ${passo.azione && !(job.status === 'CREATED' && job.request_xml_sha256)
           ? `<button class="btn ${job.status === 'CREATED' ? 'btn-accent' : 'btn-outline'} btn-sm" onclick="passoStoricoSdi(${job.id},'${passo.azione}')">${escapeHtml(passo.label)}</button>`
@@ -3631,9 +3631,12 @@ function renderStoricoJobs() {
 
 function renderStoricoStatoBadge(job) {
   const stato = String(job.status || '');
+  // "Richiesta" e non "firma" e basta: qui si firma il file InputMassivo, non
+  // le fatture. Le passive non si firmano mai, e un'etichetta ambigua accanto
+  // alla riga "Passive" faceva pensare il contrario.
   const etichette = {
-    CREATED: ['Attende firma', 'badge-scaduta'],
-    SIGNED: ['Firmata', 'badge-fornitore'],
+    CREATED: ['Richiesta da firmare', 'badge-scaduta'],
+    SIGNED: ['Richiesta firmata', 'badge-fornitore'],
     SUBMITTED: ['Inoltrata', 'badge-cliente'],
     PROCESSING: ['In elaborazione', 'badge-cliente'],
     READY: ['Archivi pronti', 'badge-fornitore'],
