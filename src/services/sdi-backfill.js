@@ -8,6 +8,7 @@ const { importDocument } = require('./sdi-import-pipeline');
 const {
   buildMassiveRequestFilename,
   buildMassiveRequestXml,
+  buildRichiestaServiziMassiviXml,
   getMassiveSigningStatus,
   signMassiveRequest,
   verifySignedMassiveRequest
@@ -71,7 +72,17 @@ function prepareRequest({ tenantId, jobId, utenteId = null }) {
     suffix: `J${job.id}`
   });
 
-  const xmlBuffer = Buffer.from(xml, 'utf8');
+  // Il documento da firmare e' l'involucro RichiestaServiziMassivi, che porta
+  // l'InputMassivo dentro di se' in base-64 (specifiche formato SMTS v1.5 par.
+  // 1.1). Firmare l'InputMassivo nudo produrrebbe un file che il servizio
+  // rifiuta, e la firma sarebbe da rifare.
+  const involucro = buildRichiestaServiziMassiviXml({
+    tipoRichiesta: 'FATT',
+    nomeFile: filename,
+    contenutoXml: xml
+  });
+
+  const xmlBuffer = Buffer.from(involucro, 'utf8');
   const xmlSha256 = sha256(xmlBuffer);
   const stored = persist(REQUEST_DIR, tenantId, `${xmlSha256}_${filename}`, xmlBuffer);
 
@@ -91,7 +102,8 @@ function prepareRequest({ tenantId, jobId, utenteId = null }) {
 
   // Con la firma locale non c'e' motivo di fermarsi: si firma e si prosegue.
   if (signing.available && !signing.external) {
-    return { ...attachSignedRequestBuffer({ job: getJob(job.id), signed: signMassiveRequest(xml), utenteId, tenantId }), filename, xmlSha256 };
+    // Anche la firma locale firma l'involucro, non l'InputMassivo.
+    return { ...attachSignedRequestBuffer({ job: getJob(job.id), signed: signMassiveRequest(involucro), utenteId, tenantId }), filename, xmlSha256 };
   }
 
   return {
@@ -201,8 +213,11 @@ async function submitRequest({ jobId, tenantId = null, client, utenteId = null }
   if (!job.request_signed_path) throw new Error(`Il job ${jobId} non ha un file di richiesta firmato`);
 
   const signedRequest = fs.readFileSync(resolveInsideUploads(job.request_signed_path));
+  // Il NomeFile della SOAP request descrive cio' che si sta trasmettendo, ed e'
+  // il file firmato: mandare il nome dell'XML in chiaro accanto al contenuto
+  // di un .p7m sarebbe una dichiarazione falsa.
   const response = await client.submitRequest({
-    filename: job.request_filename,
+    filename: `${String(job.request_filename || 'richiesta.xml').replace(/\.p7m$/i, '')}.p7m`,
     signedRequest
   });
 

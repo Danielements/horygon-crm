@@ -322,6 +322,69 @@ test('una fattura non viene scambiata per un file di metadati', () => {
   assert.equal(readCompanionMetadata(fatturaPath), null);
 });
 
+// --- involucro della richiesta --------------------------------------------
+// Specifiche formato SMTS v1.5 par. 1.1: cio' che si firma e si allega alla
+// SOAP request e' un FileRichiesta conforme a RichiestaServiziMassivi_v1.0,
+// che contiene l'InputMassivo codificato in base-64. Sono due livelli.
+
+test('la richiesta da firmare e l involucro, non l InputMassivo nudo', () => {
+  const { buildRichiestaServiziMassiviXml, buildMassiveRequestXml, RICHIESTA_NS } = require('../src/services/sdi-massive-request');
+  const input = buildMassiveRequestXml({
+    requestType: 'INCOMING', vatNumbers: [PIVA], dateFrom: '2026-06-01', dateTo: '2026-08-10'
+  });
+  const involucro = buildRichiestaServiziMassiviXml({
+    tipoRichiesta: 'FATT', nomeFile: '03365990591_TEST_1.xml', contenutoXml: input
+  });
+
+  assert.match(involucro, new RegExp(`<FileRichiesta xmlns="${RICHIESTA_NS.replace(/[/.]/g, '\\$&')}" versione="1.0">`));
+  assert.match(involucro, /<TipoRichiesta>FATT<\/TipoRichiesta>/);
+  assert.match(involucro, /<NomeFile>03365990591_TEST_1\.xml<\/NomeFile>/);
+
+  // L'InputMassivo deve essere dentro, in base-64, non in chiaro.
+  assert.doesNotMatch(involucro, /<InputMassivo/, 'l InputMassivo non va in chiaro nell involucro');
+  const base64 = involucro.match(/<File>([^<]+)<\/File>/)[1];
+  assert.equal(Buffer.from(base64, 'base64').toString('utf8'), input);
+});
+
+test('l involucro rifiuta un TipoRichiesta fuori tracciato e un nome file non conforme', () => {
+  const { buildRichiestaServiziMassiviXml } = require('../src/services/sdi-massive-request');
+  assert.throws(
+    () => buildRichiestaServiziMassiviXml({ tipoRichiesta: 'FATTURE', nomeFile: '03365990591_A.xml', contenutoXml: '<x/>' }),
+    /TipoRichiesta non ammesso/
+  );
+  // Il tracciato vuole fra 9 e 50 caratteri: "a.xml" e' troppo corto,
+  // "corto.xml" sono esattamente 9 e passa.
+  assert.throws(
+    () => buildRichiestaServiziMassiviXml({ tipoRichiesta: 'FATT', nomeFile: 'a.xml', contenutoXml: '<x/>' }),
+    /Nome file non conforme/
+  );
+  assert.throws(
+    () => buildRichiestaServiziMassiviXml({ tipoRichiesta: 'FATT', nomeFile: 'nome con spazi.xml', contenutoXml: '<x/>' }),
+    /Nome file non conforme/
+  );
+});
+
+test('il job prepara l involucro e ne calcola l hash da confrontare con la firma', () => {
+  cleanup();
+  seedFiscalConfig();
+  const job = createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-06-01', dateTo: '2026-08-10' });
+  const prepared = prepareRequest({ tenantId: TENANT, jobId: job.id });
+
+  const documento = getRequestToSign(job.id, TENANT).buffer.toString('utf8');
+  assert.match(documento, /<FileRichiesta /, 'si firma l involucro');
+  assert.match(documento, /<TipoRichiesta>FATT<\/TipoRichiesta>/);
+
+  // Il periodo richiesto resta verificabile: sta nell'InputMassivo annidato.
+  const interno = Buffer.from(documento.match(/<File>([^<]+)<\/File>/)[1], 'base64').toString('utf8');
+  assert.match(interno, /<Da>2026-06-01<\/Da><A>2026-08-10<\/A>/);
+  assert.match(interno, new RegExp(`<Piva>${PIVA}</Piva>`));
+
+  // L'hash registrato e' quello dell'involucro: e' il confronto che protegge
+  // dal firmare un documento diverso.
+  assert.equal(sha256(Buffer.from(documento, 'utf8')), prepared.xmlSha256);
+  cleanup();
+});
+
 // --- ciclo completo del job -----------------------------------------------
 
 test('senza configurazione fiscale il job non parte', () => {
@@ -345,9 +408,11 @@ test('la richiesta preparata attende la firma esterna e non e inoltrabile', (t) 
 
   const document = getRequestToSign(job.id, TENANT);
   const xml = document.buffer.toString('utf8');
-  assert.match(xml, /<FattureRicevute>/);
-  assert.match(xml, new RegExp(`<Piva>${PIVA}</Piva>`));
-  assert.match(xml, /<Da>2026-03-01<\/Da><A>2026-05-31<\/A>/);
+  assert.match(xml, /<FileRichiesta /, 'si firma l involucro, non l InputMassivo');
+  const interno = Buffer.from(xml.match(/<File>([^<]+)<\/File>/)[1], 'base64').toString('utf8');
+  assert.match(interno, /<FattureRicevute>/);
+  assert.match(interno, new RegExp(`<Piva>${PIVA}</Piva>`));
+  assert.match(interno, /<Da>2026-03-01<\/Da><A>2026-05-31<\/A>/);
   assert.equal(sha256(document.buffer), prepared.xmlSha256);
   cleanup();
 });

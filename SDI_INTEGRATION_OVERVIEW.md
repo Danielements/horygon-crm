@@ -326,6 +326,27 @@ Tre vincoli del servizio sono applicati sul job, non solo in memoria:
   importati restano `PROCESSED`. Un backfill non ripartibile costringerebbe a
   rifare la richiesta, cioe' a spendere una firma per dati gia' scaricati.
 
+**La richiesta e' annidata su due livelli, e si firma quello esterno.** Le
+specifiche del formato v1.5 par. 1.1 dicono che alla SOAP request si allega un
+file conforme a `RichiestaServiziMassivi_v1.0.xsd`:
+
+```text
+FileRichiesta versione="1.0"        <- questo e' il documento firmato
+  TipoRichiesta = FATT
+  NomeFile
+  File = base64( InputMassivo )     <- il periodo e la partita IVA stanno qui
+```
+
+Firmare l'`InputMassivo` nudo produce un file che il servizio rifiuta, e la
+firma qualificata spesa per produrlo e' persa: va rifatta. Il `ds:Signature`
+previsto dal tracciato e' lo spazio per la firma XAdES avvolgente; con CAdES il
+documento resta com'e' e la firma lo avvolge dall'esterno, nel `.p7m`.
+
+Formati ammessi per la firma: **CAdES-BES** (ETSI TS 101 733 v1.7.4, cioe' il
+`.p7m`) oppure **XAdES-BES** (ETSI TS 101 903 v1.4.1). Il base-64 non e' un
+terzo formato: e' la codifica con cui il file viaggia, applicata due volte, e la
+mette il CRM.
+
 La firma della richiesta massiva segue lo stesso ciclo esterno delle FPA12
 (`sdi.massive.signature.mode = external`), con lo stesso controllo: il
 contenuto estratto dal `.p7m` deve coincidere con la richiesta registrata,

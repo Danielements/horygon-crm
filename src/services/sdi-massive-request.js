@@ -15,7 +15,17 @@ const { signCadesBes } = require('./sdi-cades');
 // mTLS del canale SDICoop: sono due cose diverse e non vanno confuse.
 
 const INPUT_NS = 'http://www.sogei.it/InputPubblico';
+const RICHIESTA_NS = 'http://ivaservizi.agenziaentrate.gov.it/docs/xsd/ServiziMassivi/input/RichiestaServiziMassivi/v1.0';
 const SDI_CERTS_DIR = process.env.SDI_CERTS_DIR || '/run/sdi-certs';
+
+// TipoRichiesta dell'involucro, tabella al par. 1.1 delle specifiche formato.
+const TIPI_RICHIESTA = {
+  FATT: 'fatture e dati di sintesi RSM',
+  CORR: 'corrispettivi',
+  BOLLO_AB: 'bollo A e bollo B',
+  BOLLO_B: 'solo bollo B',
+  IVA: 'documenti IVA precompilati'
+};
 
 // Mappa fra i tipi usati dal CRM e i blocchi del tracciato ufficiale.
 const REQUEST_TYPES = {
@@ -102,6 +112,40 @@ function assertDateRange(dateFrom, dateTo) {
   }
 }
 
+// Involucro della richiesta massiva.
+//
+// Specifiche formato file SMTS v1.5 par. 1.1: il file allegato alla SOAP
+// request non e' l'InputMassivo, ma un documento conforme a
+// RichiestaServiziMassivi_v1.0.xsd che lo contiene codificato in base-64. Ed e'
+// questo involucro il documento che va firmato.
+//
+// Sono due livelli e vanno tenuti distinti: saltare l'involucro produce un file
+// che il servizio rifiuta, e la firma qualificata spesa per firmarlo e' persa.
+function buildRichiestaServiziMassiviXml({ tipoRichiesta = 'FATT', nomeFile, contenutoXml }) {
+  if (!TIPI_RICHIESTA[tipoRichiesta]) {
+    throw new Error(`TipoRichiesta non ammesso dal tracciato: ${tipoRichiesta}`);
+  }
+  assertNomeFile(nomeFile);
+  const payload = Buffer.from(String(contenutoXml || ''), 'utf8');
+  if (!payload.length) throw new Error('Contenuto della richiesta massiva mancante');
+
+  // L'elemento ds:Signature del tracciato e' lo spazio per la firma XAdES
+  // avvolgente. Con la firma CAdES il documento esce cosi' com'e' e la firma lo
+  // avvolge dall'esterno, nel .p7m: qui non va lasciato alcun segnaposto.
+  return `<?xml version="1.0" encoding="UTF-8"?>`
+    + `<FileRichiesta xmlns="${RICHIESTA_NS}" versione="1.0">`
+    + `<TipoRichiesta>${tipoRichiesta}</TipoRichiesta>`
+    + `<NomeFile>${nomeFile}</NomeFile>`
+    + `<File>${payload.toString('base64')}</File>`
+    + `</FileRichiesta>`;
+}
+
+function assertNomeFile(nomeFile) {
+  if (!/^[a-zA-Z0-9_.]{9,50}$/.test(String(nomeFile || ''))) {
+    throw new Error(`Nome file non conforme al tracciato ([a-zA-Z0-9_.]{9,50}): ${nomeFile}`);
+  }
+}
+
 // Nome file della richiesta: stesso vincolo del resto del SdI, [a-zA-Z0-9_.]{9,50}.
 function buildMassiveRequestFilename({ vatNumber, requestType, dateFrom, dateTo, suffix = '' }) {
   const parts = [
@@ -112,9 +156,7 @@ function buildMassiveRequestFilename({ vatNumber, requestType, dateFrom, dateTo,
     String(suffix || '').replace(/[^A-Za-z0-9]/g, '')
   ].filter(Boolean);
   const name = `${parts.join('_')}.xml`.replace(/[^A-Za-z0-9_.]/g, '');
-  if (!/^[a-zA-Z0-9_.]{9,50}$/.test(name)) {
-    throw new Error(`Nome file richiesta non conforme al tracciato: ${name}`);
-  }
+  assertNomeFile(name);
   return name;
 }
 
@@ -205,6 +247,9 @@ function resolvePath(value) {
 
 module.exports = {
   INPUT_NS,
+  RICHIESTA_NS,
+  TIPI_RICHIESTA,
+  buildRichiestaServiziMassiviXml,
   MAX_RANGE_DAYS,
   MAX_SDI_IDS,
   REQUEST_TYPES,
