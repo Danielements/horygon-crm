@@ -122,4 +122,11 @@ app.get('/{*path}', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`✅ Horygon CRM → http://localhost:${PORT} [${IS_PROD ? 'PROD' : 'DEV'}]`);
+  // Pilota automatico del backfill SdI: resta inerte finche' sdi.massive.auto
+  // non vale 1, e non tocca mai la firma della richiesta.
+  try {
+    require('./services/sdi-backfill-scheduler').startBackfillScheduler();
+  } catch (error) {
+    console.error('[sdi] scheduler backfill non avviato:', error.message);
+  }
 });

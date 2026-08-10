@@ -933,7 +933,10 @@ db.exec(`
   // Le interrogazioni di esito sono dieci per richiesta e le conta SdI, non
   // noi: il contatore in memoria del client si azzera a ogni riavvio, e fra
   // l'inoltro e la disponibilita' degli archivi possono passare ore.
-  "esito_calls INTEGER DEFAULT 0"
+  "esito_calls INTEGER DEFAULT 0",
+  // Quando e' stata fatta l'ultima interrogazione: serve a spalmare le dieci
+  // disponibili invece di bruciarle in pochi minuti.
+  "esito_last_at TEXT"
 ].forEach(col => ensureColumn('sdi_historical_sync_job', col));
 
 try {

@@ -109,10 +109,20 @@ cancella tutte le fatture, e importando per primi la deduplicazione
 arricchirebbe le righe di test invece di inserire quelle vere. Mai
 `--reset-progressivo`: quei nomi file sono gia' arrivati a SdI.
 
-Per ogni job: `prepara`, scarica la richiesta, firmala con FirmaOK, ricarica il
-`.p7m`, `inoltra`, `esito` (**non in un ciclo stretto: sono dieci
-interrogazioni in tutto per richiesta**, contate sul job e non solo in
-memoria), `scarica`, `importa` prima con `{"dryRun": true}`.
+Si fa tutto dalla sezione **Storico SdI**, sotto Contabilita: pianificazione,
+stato dei job, e per ogni riga il passo successivo. Le rotte restano
+disponibili per chi preferisce la riga di comando.
+
+L'unico passo che richiede una persona e' la **firma della richiesta**: scarica,
+firma con FirmaOK, ricarica il `.p7m`. Tutto il resto - inoltro, esito, scarico,
+import - lo fa il pilota automatico, che si accende con `sdi.massive.auto = 1`
+e gira ogni `sdi.massive.auto.interval_minutes` (15 di default). Il pulsante
+**Avanza ora** fa la stessa passata subito.
+
+Il pilota non tocca mai: la firma, le fatture messe a disposizione (presa
+visione fiscale) e la finestra di manutenzione 00:00-00:59 italiana. Le dieci
+interrogazioni di esito le spalma con un intervallo minimo di 30 minuti
+(`sdi.massive.esito.min_interval_minutes`).
 
 Scarico e import sono separati apposta: il download costa una firma e scade, il
 parsing no. Se il parser migliora, `riprocessa` rilegge gli archivi gia' in

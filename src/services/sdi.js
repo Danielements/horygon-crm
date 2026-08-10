@@ -56,6 +56,11 @@ const DEFAULT_SETTINGS = {
   // Firma qualificata della richiesta massiva: credenziali distinte da quelle
   // mTLS del canale SDICoop (Istruzioni SMTS v1.5 par. 1).
   'sdi.massive.signature.mode': 'disabled',
+  // Pilota automatico del backfill: fa avanzare i job in tutto cio' che non
+  // richiede una persona. La firma della richiesta resta manuale.
+  'sdi.massive.auto': '0',
+  'sdi.massive.auto.interval_minutes': '15',
+  'sdi.massive.esito.min_interval_minutes': '30',
   'sdi.massive.signature.certificate_path': sdiPath('massive', 'signer.pem'),
   'sdi.massive.signature.key_path': sdiPath('massive', 'signer.key')
 };

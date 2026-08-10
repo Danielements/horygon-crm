@@ -640,6 +640,76 @@ test('la ri-elaborazione rilegge gli archivi senza richiederli di nuovo a SdI', 
   cleanup();
 });
 
+// --- pilota automatico ----------------------------------------------------
+
+test('la finestra di manutenzione segue l ora italiana, non quella del container', () => {
+  const { isMaintenanceWindow } = require('../src/services/sdi-backfill-scheduler');
+  // In agosto Roma e' UTC+2: le 22:30 UTC sono le 00:30 italiane.
+  assert.equal(isMaintenanceWindow(new Date('2026-08-10T22:30:00Z')), true);
+  assert.equal(isMaintenanceWindow(new Date('2026-08-10T23:30:00Z')), false, 'in Italia e gia l una');
+  assert.equal(isMaintenanceWindow(new Date('2026-08-10T10:00:00Z')), false);
+});
+
+test('le interrogazioni di esito vengono spalmate nel tempo', () => {
+  const { shouldPoll } = require('../src/services/sdi-backfill-scheduler');
+  const now = new Date('2026-08-10T12:00:00Z');
+  assert.equal(shouldPoll({ esito_last_at: null }, now, 30), true, 'la prima si fa subito');
+  assert.equal(shouldPoll({ esito_last_at: '2026-08-10 11:45:00' }, now, 30), false);
+  assert.equal(shouldPoll({ esito_last_at: '2026-08-10 11:20:00' }, now, 30), true);
+});
+
+test('il pilota automatico inoltra da solo ma non firma mai', async () => {
+  const { advanceJobs } = require('../src/services/sdi-backfill-scheduler');
+  cleanup();
+  seedFiscalConfig();
+
+  const daFirmare = createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
+  const firmato = createJob({ tenantId: TENANT, requestType: 'OUTGOING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
+  db.prepare("UPDATE sdi_historical_sync_job SET status = 'SIGNED', request_filename = 'r.xml', request_signed_path = ? WHERE id = ?")
+    .run('/uploads/sdi-massive-requests/finto.p7m', firmato.id);
+
+  // Il file firmato deve esistere: submitRequest lo legge da disco.
+  const finto = path.join(ROOT, 'uploads', 'sdi-massive-requests', 'finto.p7m');
+  fs.mkdirSync(path.dirname(finto), { recursive: true });
+  fs.writeFileSync(finto, Buffer.from('p7m-finto'));
+
+  const client = clientWith([
+    { body: envelope('InoltroRichiestaResponse', '<IdRichiesta>REQ-AUTO</IdRichiesta>') }
+  ]);
+  const esito = await advanceJobs({ tenantId: TENANT, client, now: new Date('2026-08-10T10:00:00Z') });
+
+  assert.equal(getJob(firmato.id).status, 'SUBMITTED');
+  assert.equal(getJob(daFirmare.id).status, 'CREATED', 'chi attende la firma non viene toccato');
+  assert.deepEqual(esito.azioni.map((a) => a.passo), ['inoltra']);
+
+  fs.rmSync(finto, { force: true });
+  cleanup();
+});
+
+test('il pilota automatico non scarica le fatture messe a disposizione', async () => {
+  const { advanceJobs } = require('../src/services/sdi-backfill-scheduler');
+  cleanup();
+  seedFiscalConfig();
+  const job = createJob({ tenantId: TENANT, requestType: 'AVAILABLE_TO_RECIPIENT', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
+  db.prepare("UPDATE sdi_historical_sync_job SET status = 'READY', remote_request_id = 'REQ-MD' WHERE id = ?").run(job.id);
+
+  const esito = await advanceJobs({ tenantId: TENANT, client: clientWith([{ body: '<x/>' }]), now: new Date('2026-08-10T10:00:00Z') });
+  assert.equal(getJob(job.id).status, 'READY', 'la presa visione resta una decisione umana');
+  assert.equal(esito.azioni[0].passo, 'saltato');
+  assert.match(esito.azioni[0].motivo, /presa visione/);
+  cleanup();
+});
+
+test('durante la manutenzione non si interroga nulla', async () => {
+  const { advanceJobs } = require('../src/services/sdi-backfill-scheduler');
+  cleanup();
+  seedFiscalConfig();
+  createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
+  const esito = await advanceJobs({ tenantId: TENANT, client: clientWith([{ body: '<x/>' }]), now: new Date('2026-08-10T22:30:00Z') });
+  assert.match(esito.saltato, /manutenzione/);
+  cleanup();
+});
+
 // --- pianificazione marzo-oggi --------------------------------------------
 
 test('marzo-agosto sta in due finestre da tre mesi', () => {

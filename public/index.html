@@ -88,6 +88,7 @@
       <a class="nav-item" data-section="fatture-attive"><span class="nav-icon">🧾</span> Fatture attive</a>
       <a class="nav-item" data-section="fatture-passive"><span class="nav-icon">🧾</span> Fatture passive</a>
       <a class="nav-item" data-section="fatture-fuori-campo"><span class="nav-icon">🧾</span> Fuori campo IVA</a>
+      <a class="nav-item" data-section="storico-sdi"><span class="nav-icon">📥</span> Storico SdI</a>
 
       <div class="nav-group-label">Intelligence</div>
       <a class="nav-item" data-section="cig"><span class="nav-icon">📉</span> Stagionalità CIG</a>
@@ -373,6 +374,26 @@
         <table class="data-table"><thead><tr><th>Numero</th><th>Tipo</th><th>Fornitore/Cliente</th><th>Data</th><th>Totale</th><th>Stato</th><th></th></tr></thead>
         <tbody id="fatture-body"></tbody></table>
       </div>
+    </section>
+
+    <!-- STORICO SDI: backfill dai Servizi Massivi -->
+    <section id="section-storico-sdi" class="section">
+      <div class="page-header">
+        <h1>Storico SdI</h1>
+        <div class="header-actions">
+          <button class="btn btn-outline btn-sm" onclick="loadStoricoSdi()">Ricarica</button>
+          <button class="btn btn-outline btn-sm" onclick="avanzaStoricoSdi()" title="Fa avanzare i job di un passo, senza toccare la firma">Avanza ora</button>
+          <button class="btn btn-accent btn-sm" onclick="openModal('modal-storico-piano')">+ Pianifica periodo</button>
+        </div>
+      </div>
+      <div id="storico-sdi-stato" style="margin-bottom:16px"></div>
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead><tr><th>#</th><th>Direzione</th><th>Periodo</th><th>Stato</th><th>Archivi</th><th>Documenti</th><th>Prossimo passo</th></tr></thead>
+          <tbody id="storico-sdi-body"></tbody>
+        </table>
+      </div>
+      <input type="file" id="storico-p7m-input" accept=".p7m" style="display:none" onchange="caricaRichiestaFirmata(this)">
     </section>
 
     <!-- ═══════════════════════════════════════ -->
@@ -1582,6 +1603,32 @@
     <div id="fattura-preview-body"></div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeAllModals()">Chiudi</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL PIANIFICAZIONE STORICO SDI -->
+<div id="modal-storico-piano" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">&#128229; Pianifica lo scarico dello storico</div>
+    <p style="font-size:13px;color:var(--text-muted)">
+      Il tracciato non ammette richieste piu' lunghe di tre mesi, quindi un periodo lungo
+      diventa piu' job. Ogni job costa una firma qualificata.
+    </p>
+    <div class="form-group"><label>Direzione</label>
+      <select id="storico-direzione">
+        <option value="INCOMING">Passive (per data di ricezione)</option>
+        <option value="OUTGOING">Attive (per data di emissione)</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Dal</label><input type="date" id="storico-dal"></div>
+      <div class="form-group"><label>Al</label><input type="date" id="storico-al"></div>
+    </div>
+    <div id="storico-piano-esito" style="font-size:13px;color:var(--text-muted)"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAllModals()">Annulla</button>
+      <button class="btn btn-accent" onclick="pianificaStoricoSdi()">Crea i job</button>
     </div>
   </div>
 </div>

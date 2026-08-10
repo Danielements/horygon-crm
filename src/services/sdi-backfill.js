@@ -243,7 +243,7 @@ async function pollRequest({ jobId, tenantId = null, client, utenteId = null }) 
   // Incrementato prima della chiamata: se la richiesta parte e la risposta si
   // perde, SdI l'ha comunque contata. Meglio un'interrogazione in meno che
   // scoprire il limite superato quando serve davvero.
-  db.prepare("UPDATE sdi_historical_sync_job SET esito_calls = ?, aggiornato_il = datetime('now') WHERE id = ?")
+  db.prepare("UPDATE sdi_historical_sync_job SET esito_calls = ?, esito_last_at = datetime('now'), aggiornato_il = datetime('now') WHERE id = ?")
     .run(usate + 1, job.id);
   const rimaste = MAX_ESITO_CALLS - (usate + 1);
 

@@ -553,7 +553,7 @@ function organizeNavigationLayout() {
     { label: 'Operativo', sections: ['attivita', 'notifiche'] },
     { label: 'Anagrafiche', sections: ['clienti', 'fornitori', 'contatti', 'mappa'] },
     { label: 'Logistica', sections: ['prodotti', 'kit', 'magazzino', 'preventivi', 'ordini', 'ddt', 'container', 'documenti'] },
-    { label: 'Contabilita', sections: ['fatture-attive', 'fatture-passive', 'fatture-fuori-campo'] },
+    { label: 'Contabilita', sections: ['fatture-attive', 'fatture-passive', 'fatture-fuori-campo', 'storico-sdi'] },
     { label: 'Statistica', sections: ['mepa', 'rdo', 'analytics'] },
     { label: 'Amministrazione', sections: ['settings', 'utenti', 'audit-log', 'system-log', 'automazioni'] }
   ];
@@ -584,6 +584,7 @@ function organizeNavigationLayout() {
         : section === 'fatture-attive' ? getItem('fatture-attive', 'Fatture attive', '&#129534;')
         : section === 'fatture-passive' ? getItem('fatture-passive', 'Fatture passive', '&#129534;')
         : section === 'fatture-fuori-campo' ? getItem('fatture-fuori-campo', 'Fuori campo IVA', '&#129534;')
+        : section === 'storico-sdi' ? getItem('storico-sdi', 'Storico SdI', '&#128229;')
         : section === 'cig' ? getItem('cig', 'Stagionalita CIG', '&#128201;')
         : section === 'mepa' ? getItem('mepa', 'Abilitazioni CPV MEPA', '&#128202;')
         : section === 'rdo' ? getItem('rdo', 'RdO', '&#128221;')
@@ -733,6 +734,7 @@ function navigateTo(section) {
       'fatture-attive': 'Fatture attive',
       'fatture-passive': 'Fatture passive',
       'fatture-fuori-campo': 'Fuori campo IVA',
+      'storico-sdi': 'Storico SdI',
       mepa: 'CPV MEPA',
       analytics: 'Analisi',
       notifiche: 'Notifiche',
@@ -759,6 +761,7 @@ function navigateTo(section) {
     'fatture-attive': () => loadFattureBySection('fatture-attive'),
     'fatture-passive': () => loadFattureBySection('fatture-passive'),
     'fatture-fuori-campo': () => loadFattureBySection('fatture-fuori-campo'),
+    'storico-sdi': loadStoricoSdi,
     attivita: loadAttivita, documenti: loadDocumenti,
     statistics: loadStatistics, settings: loadSettingsPage,
     'audit-log': loadAuditLog,
@@ -3528,6 +3531,249 @@ async function testEsitoCommittenteSdi(id, esito) {
     }
   } catch (e) {
     toast(e.message || 'Errore invio esito committente SdI TEST', 'error');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// STORICO SDI: backfill dai Servizi Massivi
+// ---------------------------------------------------------------------------
+// Di tutto il ciclo un solo passo richiede una persona: la firma qualificata
+// della richiesta. Il resto lo fa il pilota automatico, e questi pulsanti
+// servono a farlo camminare a mano quando serve guardarlo da vicino.
+
+let storicoJobs = [];
+let storicoFirmaJobId = null;
+
+// Cosa puo' fare l'operatore adesso, per ogni stato del job.
+const STORICO_PASSI = {
+  CREATED: { label: 'Prepara la richiesta', azione: 'prepara' },
+  SIGNED: { label: 'Inoltra a SdI', azione: 'inoltra' },
+  SUBMITTED: { label: 'Chiedi l\'esito', azione: 'esito' },
+  PROCESSING: { label: 'Chiedi l\'esito', azione: 'esito' },
+  READY: { label: 'Scarica gli archivi', azione: 'scarica' },
+  DOWNLOADING: { label: 'Importa', azione: 'importa' },
+  PARTIAL: { label: 'Riprendi l\'import', azione: 'importa' },
+  IMPORTING: { label: 'Importa', azione: 'importa' },
+  COMPLETED: { label: 'Rileggi gli archivi', azione: 'riprocessa' },
+  FAILED: { label: null, azione: null },
+  EXPIRED: { label: null, azione: null }
+};
+
+async function loadStoricoSdi() {
+  try {
+    const [stato, jobs] = await Promise.all([
+      api('GET', '/sdi/storico/stato'),
+      api('GET', '/sdi/storico/jobs')
+    ]);
+    storicoJobs = jobs || [];
+    renderStoricoStato(stato);
+    renderStoricoJobs();
+  } catch (e) {
+    toast(e.message || 'Errore lettura storico SdI', 'error');
+  }
+}
+
+function renderStoricoStato(stato) {
+  const box = document.getElementById('storico-sdi-stato');
+  if (!box) return;
+  const pronto = stato?.pronto;
+  const auto = stato?.automatico;
+  box.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:10px">
+      ${sdiFirmaCard('Partita IVA', escapeHtml(stato?.partitaIva || '-'))}
+      ${sdiFirmaCard('Firma richieste', escapeHtml(stato?.firma?.mode || '-'))}
+      ${sdiFirmaCard('Pilota automatico', auto ? `attivo, ogni ${escapeHtml(String(stato.intervalloMinuti || '?'))} min` : 'spento')}
+      ${sdiFirmaCard('Servizi massivi', pronto ? 'pronti' : 'non pronti')}
+    </div>
+    ${pronto ? '' : `<div style="${SDI_FIRMA_AVVISO_STYLE}">
+      Non si puo' ancora interrogare SdI: ${escapeHtml(stato?.bloccante || 'configurazione incompleta')}.
+    </div>`}
+    ${pronto && stato?.firma?.mode !== 'external' ? `<div style="${SDI_FIRMA_AVVISO_STYLE}">
+      La firma delle richieste massive e' impostata su "${escapeHtml(stato?.firma?.mode || '-')}".
+      Per il ciclo con FirmaOK va messa su <strong>external</strong> in Configurazione tecnica.
+    </div>` : ''}`;
+}
+
+function renderStoricoJobs() {
+  const body = document.getElementById('storico-sdi-body');
+  if (!body) return;
+  if (!storicoJobs.length) {
+    body.innerHTML = '<tr><td colspan="7" style="color:var(--text-muted)">Nessun job. Usa "Pianifica periodo" per crearli.</td></tr>';
+    return;
+  }
+  body.innerHTML = storicoJobs.map(job => {
+    const passo = STORICO_PASSI[job.status] || { label: null, azione: null };
+    const direzione = job.request_type === 'OUTGOING' ? 'Attive'
+      : job.request_type === 'INCOMING' ? 'Passive'
+      : job.request_type === 'AVAILABLE_TO_RECIPIENT' ? 'A disposizione' : job.request_type;
+    return `<tr>
+      <td><strong>${job.id}</strong></td>
+      <td>${escapeHtml(direzione)}</td>
+      <td>${escapeHtml(formatDateIt(job.date_from) || job.date_from)} &rarr; ${escapeHtml(formatDateIt(job.date_to) || job.date_to)}</td>
+      <td>${renderStoricoStatoBadge(job)}</td>
+      <td>${job.archives_count || 0}</td>
+      <td>${job.documents_imported || 0} / ${job.documents_found || 0}${job.duplicates ? ` <span style="color:var(--text-muted)">(${job.duplicates} dup)</span>` : ''}</td>
+      <td><div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${job.status === 'CREATED' && job.request_xml_sha256
+          ? `<button class="btn btn-accent btn-sm" onclick="scaricaRichiestaDaFirmare(${job.id})">Scarica da firmare</button>
+             <button class="btn btn-outline btn-sm" onclick="chiediRichiestaFirmata(${job.id})">Carica .p7m</button>`
+          : ''}
+        ${passo.azione && !(job.status === 'CREATED' && job.request_xml_sha256)
+          ? `<button class="btn ${job.status === 'CREATED' ? 'btn-accent' : 'btn-outline'} btn-sm" onclick="passoStoricoSdi(${job.id},'${passo.azione}')">${escapeHtml(passo.label)}</button>`
+          : ''}
+        ${job.status === 'DOWNLOADING' || job.status === 'PARTIAL'
+          ? `<button class="btn btn-outline btn-sm" onclick="passoStoricoSdi(${job.id},'importa',true)" title="Simula senza scrivere">Prova import</button>`
+          : ''}
+      </div></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderStoricoStatoBadge(job) {
+  const stato = String(job.status || '');
+  const etichette = {
+    CREATED: ['Attende firma', 'badge-scaduta'],
+    SIGNED: ['Firmata', 'badge-fornitore'],
+    SUBMITTED: ['Inoltrata', 'badge-cliente'],
+    PROCESSING: ['In elaborazione', 'badge-cliente'],
+    READY: ['Archivi pronti', 'badge-fornitore'],
+    DOWNLOADING: ['Scaricati', 'badge-fornitore'],
+    IMPORTING: ['Import in corso', 'badge-cliente'],
+    COMPLETED: ['Completato', 'badge-pagata'],
+    PARTIAL: ['Parziale', 'badge-scaduta'],
+    FAILED: ['Fallito', 'badge-annullato'],
+    EXPIRED: ['Scaduto', 'badge-annullato']
+  };
+  const [label, cls] = etichette[stato] || [stato, 'badge-cliente'];
+  const extra = stato === 'PROCESSING' || stato === 'SUBMITTED'
+    ? `<div style="font-size:11px;color:var(--text-muted)">${10 - Number(job.esito_calls || 0)} interrogazioni rimaste</div>`
+    : '';
+  return `<span class="badge ${cls}">${escapeHtml(label)}</span>${extra}`;
+}
+
+async function pianificaStoricoSdi() {
+  const requestType = document.getElementById('storico-direzione')?.value || 'INCOMING';
+  const dateFrom = document.getElementById('storico-dal')?.value;
+  const dateTo = document.getElementById('storico-al')?.value;
+  if (!dateFrom || !dateTo) { toast('Indica il periodo', 'error'); return; }
+  try {
+    const result = await api('POST', '/sdi/storico/piano', { requestType, dateFrom, dateTo, months: 3 });
+    const creati = (result?.created || []).length;
+    const saltati = (result?.skipped || []).length;
+    document.getElementById('storico-piano-esito').textContent =
+      `${creati} job creati${saltati ? `, ${saltati} gia' attivi e saltati` : ''}.`;
+    toast(`${creati} job creati: ognuno richiede una firma`, 'success');
+    loadStoricoSdi();
+  } catch (e) {
+    toast(e.message || 'Errore pianificazione', 'error');
+  }
+}
+
+async function passoStoricoSdi(jobId, azione, dryRun = false) {
+  const conferme = {
+    riprocessa: 'Rileggere gli archivi gia\' scaricati?\n\nLe fatture importate da questo job vengono cancellate e reinserite. Non viene richiesto niente a SdI.',
+    esito: 'Chiedere l\'esito a SdI?\n\nLe interrogazioni sono dieci in tutto per richiesta.'
+  };
+  if (conferme[azione] && !confirm(conferme[azione])) return;
+  try {
+    const body = azione === 'importa' ? { dryRun } : {};
+    const result = await api('POST', `/sdi/storico/jobs/${jobId}/${azione}`, body);
+    toast(descriviEsitoStorico(azione, result), 'success');
+    loadStoricoSdi();
+  } catch (e) {
+    toast(e.message || `Errore su ${azione}`, 'error');
+  }
+}
+
+function descriviEsitoStorico(azione, result) {
+  if (azione === 'prepara') return 'Richiesta pronta: scaricala, firmala e ricaricala';
+  if (azione === 'inoltra') return `Inoltrata a SdI: ${result?.idRichiesta || 'ok'}`;
+  if (azione === 'esito') return result?.status === 'READY'
+    ? `Archivi pronti: ${(result.archivi || []).length}`
+    : `Stato: ${result?.stato || result?.status || 'in elaborazione'}`;
+  if (azione === 'scarica') return `Archivi scaricati: ${(result?.scaricati || []).length}`;
+  if (azione === 'importa') return result?.dryRun
+    ? 'Simulazione completata: niente scritto'
+    : `Import ${result?.status === 'COMPLETED' ? 'completato' : result?.status}`;
+  if (azione === 'riprocessa') return `${result?.fattureRimosse || 0} fatture rimosse, archivi rimessi in coda`;
+  return 'Fatto';
+}
+
+async function avanzaStoricoSdi() {
+  try {
+    const result = await api('POST', '/sdi/storico/avanza', {});
+    if (result?.saltato) { toast(result.saltato, 'info'); return; }
+    const azioni = (result?.azioni || []).length;
+    const errori = (result?.errori || []).length;
+    toast(azioni ? `${azioni} passi eseguiti${errori ? `, ${errori} errori` : ''}` : 'Niente da fare adesso', errori ? 'error' : 'success');
+    loadStoricoSdi();
+  } catch (e) {
+    toast(e.message || 'Errore avanzamento', 'error');
+  }
+}
+
+async function scaricaRichiestaDaFirmare(jobId) {
+  try {
+    const res = await fetch(`/api/sdi/storico/jobs/${jobId}/richiesta-da-firmare`, {
+      headers: { 'Authorization': `Bearer ${TOKEN}` },
+      cache: 'no-store'
+    });
+    if (res.status === 401) { logout(); return; }
+    if (!res.ok) {
+      const raw = await res.text();
+      let message = `Errore HTTP ${res.status}`;
+      try { message = JSON.parse(raw).error || message; } catch {}
+      throw new Error(message);
+    }
+    const match = (res.headers.get('content-disposition') || '').match(/filename="?([^";]+)"?/i);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = match ? match[1] : `richiesta-${jobId}.xml`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    toast('Richiesta scaricata: firmala con FirmaOK e ricaricala', 'success');
+  } catch (e) {
+    toast(e.message || 'Errore download richiesta', 'error');
+  }
+}
+
+function chiediRichiestaFirmata(jobId) {
+  storicoFirmaJobId = Number(jobId);
+  const input = document.getElementById('storico-p7m-input');
+  if (!input) return;
+  input.value = '';
+  input.click();
+}
+
+async function caricaRichiestaFirmata(input) {
+  const file = input.files && input.files[0];
+  if (!file || !storicoFirmaJobId) return;
+  try {
+    const res = await fetch(`/api/sdi/storico/jobs/${storicoFirmaJobId}/firma?filename=${encodeURIComponent(file.name)}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/octet-stream' },
+      body: file
+    });
+    if (res.status === 401) { logout(); return; }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (data.code === 'SIGNED_DOCUMENT_MISMATCH') {
+        toast('Il file firmato non corrisponde alla richiesta preparata: e\' stato firmato un altro documento', 'error');
+      } else {
+        toast(data.error || `Errore HTTP ${res.status}`, 'error');
+      }
+      return;
+    }
+    toast(`Firma verificata: ${data.signer?.subject ? formatDnFirma(data.signer.subject) : 'ok'}`, 'success');
+    loadStoricoSdi();
+  } catch (e) {
+    toast(e.message || 'Errore caricamento richiesta firmata', 'error');
+  } finally {
+    input.value = '';
   }
 }
 

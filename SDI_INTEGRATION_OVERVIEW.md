@@ -284,6 +284,18 @@ fondo: in mezzo c'e' una firma qualificata con PIN e OTP.
 
 `GET /api/sdi/storico/stato` dice in anticipo cosa manca ancora per partire.
 
+Tutto questo ha un'interfaccia: sezione **Storico SdI** sotto Contabilita, con
+pianificazione, tabella dei job e il passo successivo su ogni riga.
+
+**Solo la firma richiede una persona.** Il resto avanza da solo: con
+`sdi.massive.auto = 1` uno scheduler in-process fa una passata ogni
+`sdi.massive.auto.interval_minutes`, un passo per job. Non tocca mai i job in
+attesa di firma, non scarica le fatture messe a disposizione (presa visione
+fiscale) e si ferma nella finestra di manutenzione, calcolata sull'ora italiana
+e non su quella del container, che in produzione gira su UTC. Le dieci
+interrogazioni di esito le spalma con un intervallo minimo configurabile.
+`POST /api/sdi/storico/avanza` fa la stessa passata a comando.
+
 Tre cose apprese dalla specifica del formato file v1.5, che non erano nel
 codice:
 

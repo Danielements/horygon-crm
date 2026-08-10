@@ -6,6 +6,7 @@ const { writeAudit } = require('../services/audit');
 const { writeSystemLog } = require('../services/system-log');
 const { getSetting } = require('../services/google');
 const { getMassiveClient } = require('../services/sdi-massive-transport');
+const { advanceJobs, isAutoEnabled } = require('../services/sdi-backfill-scheduler');
 const { getMassiveSigningStatus, REQUEST_TYPES } = require('../services/sdi-massive-request');
 const { planBackfill, resolveTenantVatNumber } = require('../services/sdi-historical-sync');
 const {
@@ -46,7 +47,9 @@ router.get('/stato', requirePermesso('fatture', 'read'), (req, res) => {
     tenantId,
     tipiRichiesta: Object.keys(REQUEST_TYPES),
     firma: { mode: signing.mode, available: signing.available, external: Boolean(signing.external), reason: signing.reason || null },
-    endpoint: getSetting('sdi.massive.endpoint', 'https://servizi.fatturapa.it/sm-scarico-file')
+    endpoint: getSetting('sdi.massive.endpoint', 'https://servizi.fatturapa.it/sm-scarico-file'),
+    automatico: isAutoEnabled(),
+    intervalloMinuti: Number(getSetting('sdi.massive.auto.interval_minutes', '15'))
   };
   try {
     payload.partitaIva = resolveTenantVatNumber(tenantId);
@@ -185,6 +188,18 @@ router.post('/jobs/:id/scarica', requirePermesso('fatture', 'edit'), async (req,
     acknowledgeVisualizzazione: req.body?.acknowledgeVisualizzazione === true,
     utenteId: req.user.id
   }));
+});
+
+// Fa avanzare tutti i job di un passo, senza aspettare il timer. Stessa logica
+// del pilota automatico: non tocca mai la firma.
+router.post('/avanza', requirePermesso('fatture', 'edit'), async (req, res) => {
+  try {
+    const result = await advanceJobs({ tenantId: currentTenantId(), utenteId: req.user.id });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    logFailure(req, 'avanza', 0, error);
+    res.status(400).json({ error: error.message });
+  }
 });
 
 // Ri-elabora archivi gia' scaricati: cancella le fatture prodotte da questo job
