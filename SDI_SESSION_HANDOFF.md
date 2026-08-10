@@ -84,7 +84,7 @@ che oggi **non esiste** e senza la quale ogni job si ferma alla prima chiamata:
 e' l'unico passo di preparazione rimasto.
 
 ```bash
-docker compose exec app node scripts/sdi-fiscal-config.js --set --piva=03365990591 --cf=03365990591 --massivi --provider --confirm
+docker compose exec horygon-crm node scripts/sdi-fiscal-config.js --set --piva=03365990591 --cf=03365990591 --massivi --provider --confirm
 ```
 
 Lo script gira in dry-run senza `--confirm` e chiude con
