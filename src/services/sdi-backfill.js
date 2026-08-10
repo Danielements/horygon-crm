@@ -235,7 +235,7 @@ async function submitRequest({ jobId, tenantId = null, client, utenteId = null }
 // qui e' una di quelle dieci, quindi non va messa in un ciclo stretto.
 const MAX_ESITO_CALLS = 10;
 
-async function pollRequest({ jobId, tenantId = null, client, utenteId = null }) {
+async function pollRequest({ jobId, tenantId = null, client, utenteId = null, now = new Date() }) {
   const job = requireJob(jobId, tenantId);
   if (!['SUBMITTED', 'PROCESSING'].includes(job.status)) {
     throw new Error(`Il job ${jobId} non e in attesa di esito (stato: ${job.status})`);
@@ -244,13 +244,20 @@ async function pollRequest({ jobId, tenantId = null, client, utenteId = null }) 
 
   // Il conteggio sta sul job e non solo nel client: fra l'inoltro e la
   // disponibilita' degli archivi possono passare ore, e un riavvio del
-  // container azzererebbe un contatore tenuto in memoria. Quello vero lo tiene
-  // SdI, e superarlo significa non poter piu' sapere se la richiesta e' pronta.
-  const usate = Number(job.esito_calls || 0);
+  // container azzererebbe un contatore tenuto in memoria.
+  //
+  // Ma non e' un budget a vita. L'errore che SdI restituisce oltre il limite e'
+  // ER03 "Richiesta troppo frequente", lo stesso dei dieci archivi in due
+  // minuti: e' una soglia di frequenza. Trattarla come un tetto definitivo
+  // bloccherebbe per sempre un job che deve solo aspettare piu' a lungo del
+  // previsto. Il conteggio riparte quindi dopo una finestra di riposo, ed e'
+  // l'intervallo minimo fra due interrogazioni la vera protezione.
+  const riposato = isEsitoWindowElapsed(job.esito_last_at, now);
+  const usate = riposato ? 0 : Number(job.esito_calls || 0);
   if (usate >= MAX_ESITO_CALLS) {
     const error = new Error(
-      `Il job ${jobId} ha gia usato le ${MAX_ESITO_CALLS} interrogazioni di esito ammesse per la richiesta `
-      + `${job.remote_request_id}: gli archivi vanno scaricati con quanto gia noto, oppure serve una nuova richiesta`
+      `Il job ${jobId} ha usato le ${MAX_ESITO_CALLS} interrogazioni ravvicinate ammesse per la richiesta `
+      + `${job.remote_request_id}: attendere prima di richiedere l'esito, per non incorrere in ER03`
     );
     error.code = 'ESITO_LIMIT';
     throw error;
@@ -261,6 +268,12 @@ async function pollRequest({ jobId, tenantId = null, client, utenteId = null }) 
   db.prepare("UPDATE sdi_historical_sync_job SET esito_calls = ?, esito_last_at = datetime('now'), aggiornato_il = datetime('now') WHERE id = ?")
     .run(usate + 1, job.id);
   const rimaste = MAX_ESITO_CALLS - (usate + 1);
+  if (riposato && Number(job.esito_calls || 0) > 0) {
+    auditJob('SDI_HISTORICAL_ESITO_BUDGET_RESET', {
+      tenantId: job.tenant_id, jobId: job.id, utenteId,
+      dettagli: { precedenti: Number(job.esito_calls || 0), ultimaIl: job.esito_last_at }
+    });
+  }
 
   const status = await client.getRequestStatus(job.remote_request_id);
 
@@ -714,6 +727,22 @@ function relative(absolutePath) {
   return `/${path.relative(ROOT, absolutePath).split(path.sep).join('/')}`;
 }
 
+// Dopo quanto il conteggio delle interrogazioni riparte.
+//
+// Le Istruzioni v1.5 dicono "per la stessa richiesta al piu' 10 volte", ma la
+// finestra a cui si riferisce quel limite non e' leggibile nel PDF: la frase e'
+// spezzata da un salto di pagina. Ventiquattro ore e' la scelta prudente, ed e'
+// coerente con l'unico altro limite espresso in giorni dalle stesse istruzioni
+// ("al piu' 10 richieste al giorno della medesima tipologia").
+const ESITO_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+function isEsitoWindowElapsed(esitoLastAt, now = new Date()) {
+  if (!esitoLastAt) return true;
+  const last = Date.parse(`${String(esitoLastAt).replace(' ', 'T')}Z`);
+  if (!Number.isFinite(last)) return true;
+  return (new Date(now).getTime() - last) >= ESITO_WINDOW_MS;
+}
+
 // DataFineDisponibilita e' un giorno di calendario: la disponibilita' vale per
 // tutto quel giorno, quindi si e' scaduti solo dal giorno dopo.
 function isExpired(expiresAt, now = new Date()) {
@@ -754,8 +783,10 @@ function parseJson(value) {
 }
 
 module.exports = {
+  ESITO_WINDOW_MS,
   MAX_ESITO_CALLS,
   attachSignedRequest,
+  isEsitoWindowElapsed,
   downloadArchives,
   getRequestToSign,
   importArchives,

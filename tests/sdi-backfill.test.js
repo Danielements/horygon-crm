@@ -549,6 +549,39 @@ test('le dieci interrogazioni di esito sopravvivono al riavvio', async () => {
   cleanup();
 });
 
+test('il limite di esito e una soglia di frequenza, non un tetto definitivo', async () => {
+  cleanup();
+  seedFiscalConfig();
+  const job = createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
+  // Job che ha gia esaurito le dieci interrogazioni, ma un giorno fa.
+  db.prepare(`
+    UPDATE sdi_historical_sync_job
+    SET status = 'PROCESSING', remote_request_id = 'REQ-W', esito_calls = ?, esito_last_at = '2026-08-09 08:00:00'
+    WHERE id = ?
+  `).run(MAX_ESITO_CALLS, job.id);
+
+  // SdI risponde ER03 "richiesta troppo frequente", non "quota esaurita":
+  // dopo un periodo di riposo si puo' tornare a chiedere, altrimenti un job
+  // lento resterebbe bloccato per sempre.
+  const esito = await pollRequest({
+    jobId: job.id, tenantId: TENANT,
+    client: clientWith([{ body: envelope('EsitoRichiestaResponse', '<Stato>ST01</Stato>') }]),
+    now: new Date('2026-08-10T12:00:00Z')
+  });
+  assert.equal(esito.status, 'PROCESSING');
+  assert.equal(esito.interrogazioniRimaste, MAX_ESITO_CALLS - 1, 'il conteggio riparte');
+  assert.equal(getJob(job.id).esito_calls, 1);
+  cleanup();
+});
+
+test('la finestra di riposo delle interrogazioni e di un giorno', () => {
+  const { isEsitoWindowElapsed } = require('../src/services/sdi-backfill');
+  const now = new Date('2026-08-10T12:00:00Z');
+  assert.equal(isEsitoWindowElapsed(null, now), true);
+  assert.equal(isEsitoWindowElapsed('2026-08-10 08:00:00', now), false);
+  assert.equal(isEsitoWindowElapsed('2026-08-09 08:00:00', now), true);
+});
+
 test('la disponibilita vale per tutto l ultimo giorno', () => {
   assert.equal(isExpired('2026-09-15', new Date('2026-09-15T23:00:00Z')), false);
   assert.equal(isExpired('2026-09-15', new Date('2026-09-16T00:30:00Z')), true);

@@ -367,14 +367,28 @@ si firma mai: la firma, se c'e', e' di chi l'ha emessa, e il CRM al massimo la
 verifica estraendola dal `.p7m`. Nell'interfaccia le due cose hanno etichette
 distinte proprio per questo.
 
-Attenzione a tre cose delle Istruzioni SMTS v1.5:
+Attenzione a queste cose delle Istruzioni SMTS v1.5:
 
 - le fatture in **reverse charge sono escluse** da tutte le operazioni di
   download: non arriveranno mai dal backfill;
 - scaricare un archivio contenente **fatture messe a disposizione vale come
   presa visione fiscale**: non va fatto in automatico;
-- limiti: 10 interrogazioni di esito per richiesta, 10 archivi ogni due minuti,
-  intervallo massimo di tre mesi per richiesta.
+- intervallo massimo di **tre mesi** per richiesta (controllo 00201);
+- **10 richieste al giorno** per partita IVA e tipologia (errore 00604): le
+  quattro del backfill marzo-oggi ci stanno comodamente;
+- al massimo **50 archivi per richiesta**, ciascuno fino a **35 MB**
+  (errori 00502 e 00503);
+- gli archivi restano scaricabili **30 giorni** per i file-fattura. E' la
+  finestra che `DataFineDisponibilita` esprime.
+
+Sulle **interrogazioni di esito** le Istruzioni dicono "per la stessa richiesta
+al piu' 10 volte", ma la finestra temporale a cui quel limite si riferisce **non
+e' leggibile**: la frase e' spezzata da un salto di pagina nel PDF. L'errore
+restituito e' pero' `ER03 - Richiesta troppo frequente`, lo stesso dei dieci
+archivi in due minuti, quindi e' una soglia di frequenza e non un tetto
+definitivo. Il CRM la tratta cosi': conteggio azzerato dopo 24 ore di riposo,
+piu' un intervallo minimo fra due interrogazioni. Trattarla come un budget a
+vita bloccherebbe per sempre un job che deve solo aspettare piu' del previsto.
 
 **Import manuale** — export XML dal cassetto fiscale o da Pass.go, poi import
 nel CRM. Non dipende da nessuno dei blocchi ed e' la strada percorribile subito.
