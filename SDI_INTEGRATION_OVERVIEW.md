@@ -347,6 +347,13 @@ Formati ammessi per la firma: **CAdES-BES** (ETSI TS 101 733 v1.7.4, cioe' il
 terzo formato: e' la codifica con cui il file viaggia, applicata due volte, e la
 mette il CRM.
 
+**Una richiesta chiede una direzione sola.** Dentro `Fatture` il tracciato ha
+un `xs:choice` fra `FattureEmesse`, `FattureRicevute`, `FattureFEDisposizione`,
+`FattureSDI` e `FattureDataAcc`: esattamente uno per richiesta. Attive e passive
+non possono arrivare insieme, e infatti il `Ruolo` e' fisso per blocco (CEDENTE
+sulle emesse, CESSIONARIO sulle ricevute). Per marzo-oggi servono quindi quattro
+richieste: due finestre per due direzioni, quattro firme.
+
 La firma della richiesta massiva segue lo stesso ciclo esterno delle FPA12
 (`sdi.massive.signature.mode = external`), con lo stesso controllo: il
 contenuto estratto dal `.p7m` deve coincidere con la richiesta registrata,
