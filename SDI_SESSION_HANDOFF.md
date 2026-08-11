@@ -236,11 +236,59 @@ riferimenti la PA non liquida (tracciabilita' dei flussi finanziari); senza
 `EsigibilitaIVA = S` il trattamento IVA e' sbagliato. Gli altri servono a
 coprire i casi, non questa fattura.
 
-Percorso minimo: colonne `cig` e `cup` su `ordini` e su `fatture`, riportate
-nella conversione; `EsigibilitaIVA` derivata da un flag sull'anagrafica PA
-(come il "Escludi da gestione Split Payment" del loro software, quindi attivo
-salvo esclusione); emissione dei due blocchi nel builder. Poi `sdi.signature.mode`
-su `external`, che oggi e' `disabled` e da solo blocca ogni FPA12.
+### Piano esecutivo per la prossima sessione
+
+Sei passi, in quest'ordine. Non tocca la logica esistente: aggiunge campi e due
+blocchi XML.
+
+**1. Colonne** (additive, in `src/db/database.js` con `ensureColumn`):
+
+```text
+ordini:       cig TEXT, cup TEXT
+fatture:      cig TEXT, cup TEXT, esigibilita_iva TEXT
+anagrafiche:  escludi_split_payment INTEGER DEFAULT 0
+```
+
+Il flag sull'anagrafica ricalca quello del software di riferimento: lo split
+payment e' attivo per le PA **salvo esclusione**, non il contrario.
+
+**2. Conversione** (`src/routes/ordini.js`, `convert-to-fattura`): riporta
+`cig` e `cup` dall'ordine alla fattura. E' l'unico punto in cui la logica
+cambia davvero, ed e' una copia di due campi.
+
+**3. Payload** (`src/services/sdi-fatturapa.js`): porta `cig`, `cup`, il numero
+e la data dell'ordine, e calcola l'esigibilita': `S` se il cliente e' PA e non
+e' escluso, altrimenti quella configurata.
+
+**4. Builder** (`src/services/sdi-fatturapa-builder.js`), attenzione all'ordine
+degli elementi, che negli XSD e' vincolante:
+
+`DatiOrdineAcquisto` sta dentro `DatiGenerali`, **subito dopo**
+`DatiGeneraliDocumento`. `IdDocumento` e' obbligatorio quando il blocco c'e':
+
+```xml
+<DatiOrdineAcquisto>
+  <IdDocumento>numero ordine</IdDocumento>
+  <Data>data ordine</Data>
+  <CodiceCUP>...</CodiceCUP>
+  <CodiceCIG>...</CodiceCIG>
+</DatiOrdineAcquisto>
+```
+
+`EsigibilitaIVA` sta dentro `DatiRiepilogo`, **dopo `Imposta` e prima di
+`RiferimentoNormativo`**. Valori: `I` immediata, `D` differita, `S` scissione
+dei pagamenti. Il builder ha gia' il campo condizionale, va solo alimentato.
+
+**5. Interfaccia**: CIG e CUP sul modale ordine e su quello fattura; casella
+"escludi split payment" sulla scheda anagrafica quando il tipo e' `pa`.
+
+**6. Test**: una FPA12 per l'Aeronautica che valida contro
+`Schema_VFPR12_v1.2.3.xsd`, con `DatiOrdineAcquisto` popolato, `EsigibilitaIVA`
+a `S`, cessionario col solo codice fiscale e destinatario `AKGVPD`. Vale la
+regola imparata a caro prezzo: **validare contro lo schema, non a occhio**.
+
+Infine `sdi.signature.mode` su `external`: oggi e' `disabled` e da solo impedisce
+di generare qualunque FPA12.
 
 ## Lavori aperti, in ordine
 
