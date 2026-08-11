@@ -600,7 +600,19 @@ async function importSingleArchive({ job, archivio, dryRun, utenteId, identifier
       dedupLevel: outcome.dedupLevel || null,
       errorMessage: outcome.error || outcome.note || null
     });
-    esiti.push({ entry: file.name, outcome: outcome.outcome, numero: outcome.numero || null, fatturaId: outcome.fatturaId || null });
+    esiti.push({
+      entry: file.name,
+      outcome: outcome.outcome,
+      numero: outcome.numero || null,
+      fatturaId: outcome.fatturaId || null,
+      direzione: outcome.direction || null,
+      // Nella simulazione e' l'unico modo per accorgersi che una controparte e'
+      // sbagliata prima che finisca in archivio.
+      controparte: outcome.controparte?.denominazione || null,
+      partitaIva: outcome.controparte?.piva || null,
+      identificativoSdi: outcome.identificativoSdi || null,
+      nota: outcome.error || outcome.note || null
+    });
   }
 
   if (!dryRun) {
@@ -751,6 +763,13 @@ function reprocessArchives({ jobId, tenantId = null, utenteId = null, motivo = n
 // si indovina: il file viene riconosciuto dal contenuto, e l'abbinamento alla
 // fattura passa prima dall'hash, che e' una prova, e solo in mancanza di quello
 // dal nome, che e' un indizio.
+// Il nome reale, visto negli archivi dell'11.08.2026, e'
+// "<nomefattura>_metaDato.xml": e' il suffisso che la specifica descrive ma che
+// nel PDF non e' leggibile. Vale come segnale forte, senza pero' diventare
+// l'unico: il riconoscimento per contenuto resta, cosi' un archivio con una
+// convenzione diversa non manda tutto all'aria.
+const METADATA_SUFFIX = /_metadato\.xml$/i;
+
 function readCompanionMetadata(filePath) {
   if (!/\.xml$/i.test(filePath)) return null;
   let stat;
@@ -761,7 +780,9 @@ function readCompanionMetadata(filePath) {
 
   let content;
   try { content = fs.readFileSync(filePath, 'utf8'); } catch { return null; }
-  if (!/idfile|identificativoSdI/i.test(content) || !/hashfile|<hash>/i.test(content)) return null;
+  const dalNome = METADATA_SUFFIX.test(path.basename(filePath));
+  const dalContenuto = /idfile|identificativoSdI/i.test(content) && /hashfile|<hash>/i.test(content);
+  if (!dalNome && !dalContenuto) return null;
 
   const parser = new XMLParser({ ignoreAttributes: true, removeNSPrefix: true, parseTagValue: false, trimValues: true });
   let parsed;
@@ -769,7 +790,11 @@ function readCompanionMetadata(filePath) {
 
   const idfile = findValueCaseInsensitive(parsed, ['idfile', 'identificativosdi']);
   const hashfile = findValueCaseInsensitive(parsed, ['hashfile', 'hash']);
-  if (!idfile && !hashfile) return null;
+  // Se il nome lo dichiara metadato, e' un metadato anche quando non se ne
+  // riconoscono i campi: trattarlo come documento lo farebbe finire fra gli
+  // esiti come "UNKNOWN", sporcando il resoconto e nascondendo il problema
+  // vero, che e' non saperlo leggere.
+  if (!idfile && !hashfile && !dalNome) return null;
   return {
     idfile: idfile ? String(idfile).trim() : null,
     hashfile: hashfile ? String(hashfile).trim().toLowerCase() : null,

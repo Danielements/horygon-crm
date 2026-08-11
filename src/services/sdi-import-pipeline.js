@@ -135,7 +135,12 @@ function importDocument({
       xmlSha256,
       identificativoSdi,
       numero: parsed.numero,
-      totale: parsed.totale
+      totale: parsed.totale,
+      // La simulazione serve a controllare cosa finirebbe in archivio, e la
+      // controparte e' il campo che si sbaglia piu' facilmente: su una attiva
+      // e' il cessionario, su una passiva il cedente. Senza mostrarla, il
+      // dry-run non permette di verificare proprio la cosa che conta.
+      controparte: resolveCounterparty(directionInfo)
     });
   }
 

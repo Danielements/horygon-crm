@@ -443,6 +443,17 @@ test('il file di metadati viene riconosciuto dal contenuto e abbinato per hash',
   assert.equal(abbinato.idfile, '3344556677');
 });
 
+test('il metadato si riconosce dal nome _metaDato.xml, come negli archivi reali', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'meta-'));
+  // Nome reale visto negli archivi dell'11.08.2026. Il riconoscimento per solo
+  // contenuto falliva e questi file finivano fra i documenti, come "UNKNOWN".
+  const p = path.join(dir, 'IT00210759999_x9rpG.XML_metaDato.xml');
+  fs.writeFileSync(p, '<?xml version="1.0"?><Metadati><Sconosciuto>1</Sconosciuto></Metadati>', 'utf8');
+  const meta = readCompanionMetadata(p);
+  assert.ok(meta, 'il nome basta a classificarlo come metadato');
+  assert.equal(meta.idfile, null, 'i campi possono restare ignoti senza che diventi un documento');
+});
+
 test('una fattura non viene scambiata per un file di metadati', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'meta-'));
   const fatturaPath = path.join(dir, 'IT03365990591_00002.xml');
