@@ -885,6 +885,23 @@ test('le interrogazioni di esito vengono spalmate nel tempo', () => {
   assert.equal(shouldPoll({ esito_last_at: '2026-08-10 11:20:00' }, now, 30), true);
 });
 
+test('l intervallo si allarga per far durare le dieci interrogazioni', () => {
+  const { pollIntervalMinutes, MAX_INTERVAL_MINUTES } = require('../src/services/sdi-backfill-scheduler');
+  // Le prime restano fitte: una richiesta piccola puo' essere pronta subito.
+  assert.equal(pollIntervalMinutes({ esito_calls: 0 }, 30), 30);
+  assert.equal(pollIntervalMinutes({ esito_calls: 1 }, 30), 30);
+  assert.equal(pollIntervalMinutes({ esito_calls: 2 }, 30), 60);
+  assert.equal(pollIntervalMinutes({ esito_calls: 4 }, 30), 120);
+  assert.equal(pollIntervalMinutes({ esito_calls: 6 }, 30), 240);
+  assert.equal(pollIntervalMinutes({ esito_calls: 9 }, 30), MAX_INTERVAL_MINUTES, 'con un tetto');
+
+  // A intervallo fisso dieci chiamate coprono cinque ore e si esauriscono
+  // prima di un'elaborazione notturna; cosi' ne coprono una ventina.
+  let ore = 0;
+  for (let usate = 0; usate < 10; usate++) ore += pollIntervalMinutes({ esito_calls: usate }, 30) / 60;
+  assert.ok(ore > 18, `le dieci interrogazioni devono coprire piu di 18 ore, coprono ${ore}`);
+});
+
 test('il pilota automatico inoltra da solo ma non firma mai', async () => {
   const { advanceJobs } = require('../src/services/sdi-backfill-scheduler');
   cleanup();

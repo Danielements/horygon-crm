@@ -47,14 +47,31 @@ function isMaintenanceWindow(now = new Date()) {
   }
 }
 
-// Le interrogazioni di esito sono dieci in tutto per richiesta: vanno spalmate,
-// altrimenti si esauriscono in mezz'ora e poi non si sa piu' se il file e'
-// pronto.
+// Le interrogazioni di esito sono dieci per richiesta e vanno fatte durare
+// quanto l'elaborazione, che non e' documentata: l'unico dato osservato e' una
+// richiesta inoltrata di sera e pronta il mattino dopo.
+//
+// A intervallo fisso di mezz'ora dieci chiamate coprono cinque ore, cioe' si
+// esauriscono prima. L'intervallo quindi raddoppia ogni due interrogazioni:
+// mezz'ora, poi un'ora, due, quattro. Le dieci si distendono su una ventina di
+// ore, che copre anche un'elaborazione notturna, e le prime restano fitte
+// perche' una richiesta piccola puo' essere pronta subito.
+const MAX_INTERVAL_MINUTES = 240;
+// Ripetuto qui solo per il messaggio di attesa: il limite vero, con il suo
+// riazzeramento, lo applica pollRequest.
+const MAX_ESITO_CALLS_HINT = 10;
+
+function pollIntervalMinutes(job, baseMinutes) {
+  const usate = Number(job.esito_calls || 0);
+  const intervallo = baseMinutes * Math.pow(2, Math.floor(usate / 2));
+  return Math.min(intervallo, MAX_INTERVAL_MINUTES);
+}
+
 function shouldPoll(job, now, minIntervalMinutes) {
   if (!job.esito_last_at) return true;
   const last = Date.parse(`${String(job.esito_last_at).replace(' ', 'T')}Z`);
   if (!Number.isFinite(last)) return true;
-  return (now.getTime() - last) >= minIntervalMinutes * 60 * 1000;
+  return (now.getTime() - last) >= pollIntervalMinutes(job, minIntervalMinutes) * 60 * 1000;
 }
 
 async function advanceJobs({ tenantId, client = null, now = new Date(), utenteId = null } = {}) {
@@ -89,7 +106,12 @@ async function advanceJobs({ tenantId, client = null, now = new Date(), utenteId
         azioni.push({ jobId: job.id, passo: 'inoltra', idRichiesta: esito.idRichiesta });
       } else if (job.status === 'SUBMITTED' || job.status === 'PROCESSING') {
         if (!shouldPoll(job, now, minEsito)) {
-          azioni.push({ jobId: job.id, passo: 'attesa', motivo: `prossima interrogazione fra meno di ${minEsito} minuti` });
+          const intervallo = pollIntervalMinutes(job, minEsito);
+          azioni.push({
+            jobId: job.id,
+            passo: 'attesa',
+            motivo: `intervallo corrente ${intervallo} minuti, ${MAX_ESITO_CALLS_HINT - Number(job.esito_calls || 0)} interrogazioni rimaste`
+          });
           continue;
         }
         const esito = await pollRequest({ jobId: job.id, tenantId, client: smts, utenteId });
@@ -151,8 +173,10 @@ function stopBackfillScheduler() {
 module.exports = {
   AUTOMATABLE,
   advanceJobs,
+  MAX_INTERVAL_MINUTES,
   isAutoEnabled,
   isMaintenanceWindow,
+  pollIntervalMinutes,
   shouldPoll,
   startBackfillScheduler,
   stopBackfillScheduler
