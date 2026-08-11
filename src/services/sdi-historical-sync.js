@@ -1,6 +1,6 @@
 const db = require('../db/database');
 const { writeAudit } = require('./audit');
-const { MAX_RANGE_DAYS, REQUEST_TYPES } = require('./sdi-massive-request');
+const { MAX_RANGE_MONTHS, REQUEST_TYPES, addMonthsToDate } = require('./sdi-massive-request');
 
 // Ciclo di vita dei job di backfill storico dai Servizi Massivi.
 //
@@ -59,8 +59,9 @@ function generateWindows(dateFrom, dateTo, { months = 1 } = {}) {
     // Fine finestra = ultimo giorno prima dell'inizio della successiva.
     let end = addDays(addMonths(cursor, months), -1);
     if (compareDates(end, dateTo) > 0) end = dateTo;
-    if (daysBetween(cursor, end) + 1 > MAX_RANGE_DAYS) {
-      throw new Error(`Finestra ${cursor} - ${end} oltre il massimo di ${MAX_RANGE_DAYS} giorni`);
+    // Stesso metro del tracciato: mesi di calendario, non giorni contati.
+    if (end > addMonthsToDate(cursor, MAX_RANGE_MONTHS)) {
+      throw new Error(`Finestra ${cursor} - ${end} oltre i ${MAX_RANGE_MONTHS} mesi ammessi`);
     }
     windows.push({ from: cursor, to: end });
     cursor = addDays(end, 1);

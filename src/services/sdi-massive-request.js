@@ -105,19 +105,36 @@ function buildMassiveRequestXml({
 }
 
 // Istruzioni SMTS: l'intervallo temporale non puo' eccedere i tre mesi
-// (errore 00201 - Intervallo temporale indicato troppo ampio). Il CRM resta
-// comunque su finestre mensili come default applicativo.
+// (errore 00201 - Intervallo temporale indicato troppo ampio).
+//
+// Tre mesi sono mesi di calendario, non un numero fisso di giorni: dal 1 marzo
+// al 1 giugno sono tre mesi e ne fanno 93, dal 1 dicembre al 1 marzo sono
+// sempre tre mesi ma ne fanno 91. Contare i giorni rifiutava intervalli che il
+// servizio accetta, come mostrano le richieste composte sul portale.
+const MAX_RANGE_MONTHS = 3;
+// Tenuto per compatibilita' con chi lo importa: e' il caso peggiore in giorni.
 const MAX_RANGE_DAYS = 92;
+
+function addMonthsToDate(date, months) {
+  const [y, m, d] = String(date).split('-').map(Number);
+  const totale = (y * 12) + (m - 1) + months;
+  const anno = Math.floor(totale / 12);
+  const mese = (totale % 12) + 1;
+  const ultimo = new Date(Date.UTC(anno, mese, 0)).getUTCDate();
+  const giorno = Math.min(d, ultimo);
+  return `${anno}-${String(mese).padStart(2, '0')}-${String(giorno).padStart(2, '0')}`;
+}
 
 function assertDateRange(dateFrom, dateTo) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateFrom || ''))) throw new Error(`Data iniziale non valida: ${dateFrom}`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateTo || ''))) throw new Error(`Data finale non valida: ${dateTo}`);
-  const from = Date.parse(`${dateFrom}T00:00:00Z`);
-  const to = Date.parse(`${dateTo}T00:00:00Z`);
-  if (to < from) throw new Error(`Intervallo invertito: ${dateFrom} - ${dateTo}`);
-  const days = Math.round((to - from) / 86400000) + 1;
-  if (days > MAX_RANGE_DAYS) {
-    throw new Error(`Intervallo di ${days} giorni oltre il massimo ammesso di ${MAX_RANGE_DAYS} (controllo 00201)`);
+  if (dateTo < dateFrom) throw new Error(`Intervallo invertito: ${dateFrom} - ${dateTo}`);
+  const limite = addMonthsToDate(dateFrom, MAX_RANGE_MONTHS);
+  if (dateTo > limite) {
+    throw new Error(
+      `Intervallo ${dateFrom} - ${dateTo} oltre i ${MAX_RANGE_MONTHS} mesi ammessi `
+      + `(il massimo da ${dateFrom} e ${limite}, controllo 00201)`
+    );
   }
 }
 
@@ -337,6 +354,8 @@ module.exports = {
   TIPI_RICHIESTA,
   buildRichiestaServiziMassiviXml,
   MAX_RANGE_DAYS,
+  MAX_RANGE_MONTHS,
+  addMonthsToDate,
   MAX_SDI_IDS,
   REQUEST_TYPES,
   assertDateRange,

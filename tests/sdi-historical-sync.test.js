@@ -91,7 +91,7 @@ test('i mesi corti e gli anni bisestili non spostano i confini', () => {
 });
 
 test('una finestra piu ampia dei tre mesi viene rifiutata', () => {
-  assert.throws(() => generateWindows('2026-01-01', '2026-12-31', { months: 6 }), /oltre il massimo/);
+  assert.throws(() => generateWindows('2026-01-01', '2026-12-31', { months: 6 }), /oltre i 3 mesi/);
   assert.doesNotThrow(() => generateWindows('2026-01-01', '2026-12-31', { months: 3 }));
 });
 

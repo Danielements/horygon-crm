@@ -110,8 +110,13 @@ test('il prefisso IT viene normalizzato via dalla partita IVA', () => {
 
 test('un intervallo oltre i tre mesi viene rifiutato prima dell invio (00201)', () => {
   assert.doesNotThrow(() => assertDateRange('2026-03-01', '2026-05-31'));
-  assert.throws(() => assertDateRange('2026-01-01', '2026-06-30'), /oltre il massimo ammesso/);
+  assert.throws(() => assertDateRange('2026-01-01', '2026-06-30'), /oltre i 3 mesi/);
   assert.throws(() => assertDateRange('2026-03-31', '2026-03-01'), /invertito/);
+  // Tre mesi di calendario, non giorni contati: dal 1 marzo al 1 giugno sono
+  // tre mesi esatti e il servizio li accetta, pur essendo 93 giorni.
+  assert.doesNotThrow(() => assertDateRange('2026-03-01', '2026-06-01'));
+  assert.throws(() => assertDateRange('2026-03-01', '2026-06-02'), /oltre i 3 mesi/);
+  assert.doesNotThrow(() => assertDateRange('2026-12-01', '2027-03-01'), 'anche a cavallo d anno');
   assert.ok(MAX_RANGE_DAYS >= 90);
 });
 

@@ -415,7 +415,10 @@ Attenzione a queste cose delle Istruzioni SMTS v1.5:
   download: non arriveranno mai dal backfill;
 - scaricare un archivio contenente **fatture messe a disposizione vale come
   presa visione fiscale**: non va fatto in automatico;
-- intervallo massimo di **tre mesi** per richiesta (controllo 00201);
+- intervallo massimo di **tre mesi** per richiesta (controllo 00201), e sono
+  mesi di calendario, non un numero fisso di giorni: dal 1 marzo al 1 giugno
+  sono tre mesi e ne fanno 93, dal 1 dicembre al 1 marzo sono tre mesi e ne
+  fanno 91. Contare i giorni rifiuta intervalli che il servizio accetta;
 - **10 richieste al giorno** per partita IVA e tipologia (errore 00604): le
   quattro del backfill marzo-oggi ci stanno comodamente;
 - al massimo **50 archivi per richiesta**, ciascuno fino a **35 MB**
