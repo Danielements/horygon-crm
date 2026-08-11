@@ -14,7 +14,7 @@ cio' che non e' deducibile dal repository.
 
 ## Stato del codice
 
-Branch `codex/sdi-diagnostics`. **196 test, tutti verdi** (`npm test`).
+Branch `codex/sdi-diagnostics`. **198 test, tutti verdi** (`npm test`).
 
 Fatto il 09.08.2026, seconda parte: **backfill dello storico dai Servizi
 Massivi**. Nuovi `sdi-massive-esito.js` (lettura del file di esito, dove stanno
@@ -46,31 +46,33 @@ Archivi disponibili fino al **10.09.2026**.
 
 Mancano le due finestre delle **attive** (`OUTGOING`), da pianificare.
 
-### Cosa resta da risolvere prima dell'import vero
+### Risolto l'11.08.2026, dopo il primo dry-run
 
-1. **Tre `.p7m` non si aprono** e finiscono `STORED_NON_XML`, mentre altri `.p7m`
-   dello stesso archivio si aprono benissimo: `IT01879020517A2026_eUfD8`,
-   `IT00497121202_M0RQN`, `IT02355260981_gz8sU`. Sospetto CMS in lunghezza
-   indefinita (BER) che `extractCmsContent` non gestisce, ma **non e'
-   verificato**: servono i byte veri.
-2. **I metadati non venivano letti**: risolto riconoscendoli dal nome reale
-   `<fattura>_metaDato.xml`, ma **non e' ancora noto il tracciato interno** -
-   se i campi non hanno i nomi attesi, l'identificativo SdI resta comunque
-   inutilizzato. Serve vederne uno.
-3. Verificare nel dry-run le **controparti**: su queste passive devono essere i
-   fornitori. Il resoconto ora le mostra.
+Il dry-run ha trovato due difetti prima che si scrivesse qualcosa. Entrambi
+diagnosticati sui file veri, non per ipotesi, ed entrambi coperti da fixture in
+`tests/fixtures/smts/`.
 
-### Comandi di diagnosi
+**Il file di metadati e' una lista nome/valore**, namespace
+`urn:xml.fatturazione.sogei.it`: `idfile` e' il contenuto di un `<nome>`, non un
+tag. Cercare un elemento `<idfile>` non trovava niente, e ogni metadato veniva
+lavorato come documento. Porta molto piu' del previsto: `nomefile` della fattura
+a cui appartiene (abbinamento esplicito, non dedotto), `hashfile`, e cedente e
+cessionario **dichiarati da SdI**, che sono un riscontro indipendente sulla
+controparte.
 
-Contenuto di un file di metadati e struttura di un `.p7m` che fallisce:
+**Alcuni `.p7m` sono in base-64**, non in DER binario: erano i tre che finivano
+`STORED_NON_XML`. Nello stesso ZIP convivono le due forme. L'originale
+conservato resta il file come e' arrivato, base-64 compreso, perche' e' quello
+su cui SdI ha calcolato l'hash nei metadati.
 
-```bash
-docker compose exec horygon-crm sh -lc 'find /app/uploads/sdi-storico -name "*_metaDato.xml" | head -1 | xargs cat'
-```
+### Cosa resta prima dell'import vero
 
-```bash
-docker compose exec horygon-crm sh -lc 'find /app/uploads/sdi-storico -name "IT00497121202_M0RQN*" ! -name "*metaDato*" | head -1 | xargs -I{} od -A d -t x1 -N 64 {}'
-```
+1. Rilanciare il **dry-run** dopo il deploy: `metadati` non deve piu' essere 0,
+   i tre `STORED_NON_XML` devono sparire, e ogni riga deve mostrare direzione e
+   controparte.
+2. Verificare le **controparti**: su queste passive devono essere i fornitori,
+   e ora si possono confrontare con `cedentedenominazione` dei metadati.
+3. Solo allora `importa` con `{"dryRun": false}`.
 
 ### Lezioni pagate care, in questa sessione
 
