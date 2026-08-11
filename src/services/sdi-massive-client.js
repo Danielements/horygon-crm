@@ -16,6 +16,9 @@ const { parseEsitoRichiestaFile, selectInvoiceArchives } = require('./sdi-massiv
 // ufficiali, senza alcuna chiamata reale.
 
 const TYPES_NS = 'http://ivaservizi.agenziaentrate.gov.it/docs/wsdl/ServiziMassivi/v1.0/types';
+// Gli allegati MTOM viaggiano accanto all'albero parsato, non dentro: una
+// chiave Symbol non puo' essere confusa con un elemento del tracciato.
+const ATTACHMENTS = Symbol('mtomAttachments');
 const DEFAULT_ENDPOINT = 'https://servizi.fatturapa.it/sm-scarico-file';
 
 const OPERATIONS = {
@@ -106,7 +109,7 @@ class SdiMassiveServicesClient {
     const stato = firstText(parsed, 'Stato');
     const esitoFile = firstNode(parsed, 'EsitoFile');
     const allegato = esitoFile
-      ? { nomeFile: firstText(esitoFile, 'NomeFile'), buffer: decodeBase64(firstText(esitoFile, 'File')) }
+      ? { nomeFile: firstText(esitoFile, 'NomeFile'), buffer: readFilePart(esitoFile, parsed[ATTACHMENTS]) }
       : null;
 
     // L'elenco degli archivi non sta nella risposta SOAP ma dentro EsitoFile:
@@ -134,6 +137,10 @@ class SdiMassiveServicesClient {
       esitoFile: allegato,
       esito,
       esitoErrore,
+      // Con ST03 il tracciato promette un EsitoFile. Se manca, la differenza
+      // fra "SdI non ha allegato nulla" e "non abbiamo saputo leggerlo" sta in
+      // questi numeri, e senza sarebbe una nuova interrogazione per scoprirlo.
+      diagnostica: (stato === 'ST03' && !allegato?.buffer?.length) ? { ...this.lastRaw } : null,
       archivi: esito ? esito.archivi : [],
       archiviFatture: esito ? selectInvoiceArchives(esito) : [],
       dataFineDisponibilita: esito ? esito.dataFineDisponibilita : null,
@@ -161,7 +168,7 @@ class SdiMassiveServicesClient {
     }
     return {
       nomeFile: firstText(archivio, 'NomeFile'),
-      buffer: decodeBase64(firstText(archivio, 'File')),
+      buffer: readFilePart(archivio, parsed[ATTACHMENTS]),
       presaVisione: Boolean(acknowledgeVisualizzazione)
     };
   }
@@ -199,11 +206,23 @@ class SdiMassiveServicesClient {
       operation: operationName
     });
     const statusCode = response?.statusCode ?? 0;
-    const text = Buffer.isBuffer(response?.body) ? response.body.toString('utf8') : String(response?.body || '');
     if (statusCode < 200 || statusCode >= 300) {
       throw new SdiMassiveServiceError(`HTTP ${statusCode} da ${operationName}`, `HTTP_${statusCode}`, operationName);
     }
-    return parseResponse(text, operationName);
+
+    // Gli elementi File del contratto sono base64Binary annotati
+    // xmime:expectedContentTypes, cioe' ottimizzabili in MTOM: il contenuto puo'
+    // arrivare come allegato MIME invece che inline. Leggere il corpo come
+    // stringa e ignorare il content-type fa trovare un <File> vuoto al posto
+    // dell'allegato, senza nessun errore.
+    const bodyBuffer = Buffer.isBuffer(response?.body)
+      ? response.body
+      : Buffer.from(String(response?.body || ''), 'utf8');
+    const contentType = String(response?.headers?.['content-type'] || '');
+    const { xml, attachments } = splitMtomResponse(bodyBuffer, contentType);
+
+    this.lastRaw = { operation: operationName, contentType, bytes: bodyBuffer.length, attachments: attachments.size };
+    return { ...parseResponse(xml, operationName), [ATTACHMENTS]: attachments };
   }
 }
 
@@ -214,8 +233,59 @@ function buildEnvelope(element, innerXml) {
     + `</soapenv:Envelope>`;
 }
 
+// Separa una risposta MTOM nella parte XML e negli allegati indicizzati per
+// Content-ID. Una risposta non multipart passa invariata.
+function splitMtomResponse(buffer, contentType) {
+  const attachments = new Map();
+  if (!/multipart\/related/i.test(contentType)) {
+    return { xml: buffer.toString('utf8'), attachments };
+  }
+  const boundaryMatch = contentType.match(/boundary="?([^";]+)"?/i);
+  if (!boundaryMatch) return { xml: buffer.toString('utf8'), attachments };
+
+  const raw = buffer.toString('binary');
+  const parti = raw.split(`--${boundaryMatch[1]}`).filter((parte) => parte.trim() && parte.trim() !== '--');
+  let xml = '';
+  for (const parte of parti) {
+    const separatore = parte.indexOf('\r\n\r\n');
+    if (separatore < 0) continue;
+    const intestazioni = parte.slice(0, separatore);
+    // Il CRLF finale appartiene al delimitatore, non al contenuto: lasciarlo
+    // dentro cambierebbe l'hash di un allegato binario.
+    const contenuto = parte.slice(separatore + 4).replace(/\r\n$/, '');
+    const cid = (intestazioni.match(/content-id:\s*<?([^>\r\n]+)>?/i) || [])[1];
+    const tipo = (intestazioni.match(/content-type:\s*([^\r\n;]+)/i) || [])[1] || '';
+
+    if (/xop\+xml|text\/xml|soap\+xml/i.test(tipo) && !xml) {
+      xml = Buffer.from(contenuto, 'binary').toString('utf8');
+    } else if (cid) {
+      attachments.set(cid.trim(), Buffer.from(contenuto, 'binary'));
+    }
+  }
+  return { xml: xml || buffer.toString('utf8'), attachments };
+}
+
+// Restituisce il contenuto di un elemento File, comunque sia arrivato: inline
+// in base-64 oppure come allegato MTOM referenziato da xop:Include.
+function readFilePart(node, attachments) {
+  if (!node || typeof node !== 'object') return Buffer.alloc(0);
+  const inline = firstText(node, 'File');
+  if (inline) return decodeBase64(inline);
+
+  const include = firstNode(node, 'Include');
+  const href = include ? String(include['@_href'] || '') : '';
+  if (href.startsWith('cid:') && attachments) {
+    // L'href e' URL-encoded: i Content-ID contengono spesso caratteri sfuggiti.
+    const cid = decodeURIComponent(href.slice(4));
+    return attachments.get(cid) || attachments.get(cid.replace(/^<|>$/g, '')) || Buffer.alloc(0);
+  }
+  return Buffer.alloc(0);
+}
+
 function parseResponse(xml, operation) {
-  const parser = new XMLParser({ ignoreAttributes: true, removeNSPrefix: true, parseTagValue: false, trimValues: true });
+  // Gli attributi servono: senza, l'href di xop:Include sparisce e un allegato
+  // MTOM diventa indistinguibile da un file assente.
+  const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', removeNSPrefix: true, parseTagValue: false, trimValues: true });
   let parsed;
   try {
     parsed = parser.parse(xml);
@@ -277,5 +347,7 @@ module.exports = {
   SdiMassiveServiceError,
   SdiMassiveServicesClient,
   TYPES_NS,
-  buildEnvelope
+  buildEnvelope,
+  readFilePart,
+  splitMtomResponse
 };

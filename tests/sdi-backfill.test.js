@@ -293,6 +293,86 @@ test('un esito illeggibile non fa perdere l interrogazione', async () => {
   assert.deepEqual(status.archiviFatture, []);
 });
 
+// --- risposte MTOM --------------------------------------------------------
+// Gli elementi File del contratto sono base64Binary annotati
+// xmime:expectedContentTypes, quindi il contenuto puo' arrivare come allegato
+// MIME invece che inline. Leggerlo come stringa fa trovare un File vuoto.
+
+function mtomResponse(element, innerXml, { cid = 'allegato@sdi', payload }) {
+  const boundary = 'uuid:boundary-test';
+  const soap = '<?xml version="1.0"?>'
+    + '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">'
+    + `<soapenv:Body><ns:${element} xmlns:ns="${TYPES_NS}">${innerXml}</ns:${element}></soapenv:Body>`
+    + '</soapenv:Envelope>';
+  const parti = [
+    `--${boundary}`,
+    'Content-Type: application/xop+xml; charset=UTF-8; type="text/xml"',
+    'Content-ID: <root@sdi>',
+    '',
+    soap,
+    `--${boundary}`,
+    'Content-Type: application/octet-stream',
+    `Content-ID: <${cid}>`,
+    '',
+    payload.toString('binary'),
+    `--${boundary}--`,
+    ''
+  ].join('\r\n');
+  return {
+    body: Buffer.from(parti, 'binary'),
+    headers: { 'content-type': `multipart/related; type="application/xop+xml"; boundary="${boundary}"` }
+  };
+}
+
+function clientWithRaw(responses) {
+  const queue = [...responses];
+  const transport = async () => {
+    const next = queue.length > 1 ? queue.shift() : queue[0];
+    return { statusCode: 200, body: next.body, headers: next.headers || {} };
+  };
+  return new SdiMassiveServicesClient({ transport, endpoint: 'https://esempio.invalid/sm-scarico-file' });
+}
+
+test('un esito allegato in MTOM viene letto, non trovato vuoto', async () => {
+  const esito = Buffer.from(esitoXml({ archivi: [{ idFile: '777', nomeFile: 'fatture.zip' }] }), 'utf8');
+  const client = clientWithRaw([mtomResponse(
+    'EsitoRichiestaResponse',
+    '<Stato>ST03</Stato><EsitoFile><NomeFile>esito.xml</NomeFile>'
+    + '<File><xop:Include xmlns:xop="http://www.w3.org/2004/08/xop/include" href="cid:allegato@sdi"/></File></EsitoFile>',
+    { payload: esito }
+  )]);
+
+  const status = await client.getRequestStatus('REQ-MTOM');
+  assert.equal(status.ready, true);
+  assert.equal(status.archiviFatture.length, 1, 'l allegato MTOM deve essere risolto');
+  assert.equal(status.archiviFatture[0].idFile, '777');
+  assert.equal(status.diagnostica, null, 'niente da diagnosticare se l esito si e letto');
+});
+
+test('un archivio allegato in MTOM arriva integro', async () => {
+  const zip = zipWith([{ name: 'IT01043931003_00500.xml', content: invoiceXml({ numero: '2026/M1' }) }]);
+  const client = clientWithRaw([mtomResponse(
+    'ScaricoFileResponse',
+    '<ArchivioFile><NomeFile>fatture.zip</NomeFile>'
+    + '<File><xop:Include xmlns:xop="http://www.w3.org/2004/08/xop/include" href="cid:allegato@sdi"/></File></ArchivioFile>',
+    { payload: zip }
+  )]);
+
+  const archivio = await client.downloadArchive('REQ-MTOM', '777');
+  assert.equal(archivio.nomeFile, 'fatture.zip');
+  assert.equal(sha256(archivio.buffer), sha256(zip), 'il binario non deve essere alterato dal transito MIME');
+});
+
+test('un ST03 senza allegato lascia di che capire perche', async () => {
+  const client = clientWith([{
+    body: envelope('EsitoRichiestaResponse', '<Stato>ST03</Stato>')
+  }]);
+  const status = await client.getRequestStatus('REQ-VUOTO');
+  assert.equal(status.ready, true);
+  assert.ok(status.diagnostica, 'senza allegato serve sapere cosa e arrivato');
+  assert.equal(status.diagnostica.attachments, 0);
+});
+
 // --- metadati che accompagnano i file-fattura -----------------------------
 
 test('il file di metadati viene riconosciuto dal contenuto e abbinato per hash', () => {
