@@ -229,6 +229,25 @@ test('un solo archivio non diventa una lista di caratteri', () => {
   assert.equal(esito.archivi[0].idFile, '55');
 });
 
+test('la tipologia archivio si riconosce a prescindere dalla grafia', () => {
+  // Il valore della tabella e' "Fatt", ma quello che arriva davvero non era mai
+  // stato visto: una differenza di maiuscole scartava in silenzio l'unico
+  // archivio prodotto dalla richiesta.
+  for (const tipo of ['Fatt', 'FATT', 'fatt']) {
+    const esito = parseEsitoRichiestaFile(Buffer.from(esitoXml({
+      archivi: [{ idFile: '1', nomeFile: 'fatture.zip', tipo }]
+    }), 'utf8'));
+    assert.equal(selectInvoiceArchives(esito).length, 1, `grafia ${tipo}`);
+  }
+
+  // Senza tipologia l'archivio si tiene comunque: la richiesta era di fatture.
+  const senzaTipo = parseEsitoRichiestaFile(Buffer.from(
+    esitoXml({ archivi: [{ idFile: '9', nomeFile: 'x.zip' }] }).replace('<TipoElementi>Fatt</TipoElementi>', ''),
+    'utf8'
+  ));
+  assert.equal(selectInvoiceArchives(senzaTipo).length, 1, 'senza TipoElementi');
+});
+
 test('gli archivi non fatture restano fuori dal backfill fatture', () => {
   const esito = parseEsitoRichiestaFile(Buffer.from(esitoXml({
     archivi: [

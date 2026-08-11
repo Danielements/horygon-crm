@@ -83,14 +83,20 @@ function describeArchivio(archivio) {
   const idFile = text(archivio.IdFile);
   if (!idFile) return null;
   const tipo = text(archivio.TipoElementi);
+  const chiave = Object.keys(TIPI_ELEMENTI).find((k) => k.toLowerCase() === String(tipo || '').toLowerCase());
   return {
     idFile,
     nomeFile: text(archivio.NomeFile),
     dimensioneFile: integer(archivio.DimensioneFile),
     tipoElementi: tipo,
-    tipoElementiDescrizione: tipo ? (TIPI_ELEMENTI[tipo] || 'tipologia non documentata') : null,
+    tipoElementiDescrizione: chiave ? TIPI_ELEMENTI[chiave] : (tipo ? 'tipologia non documentata' : null),
     numeroElementi: integer(archivio.NumeroElementi),
-    fatture: tipo === 'Fatt'
+    // Confronto senza distinzione di maiuscole: il valore letterale della
+    // tabella e' "Fatt", ma quello che arriva davvero non era mai stato visto,
+    // e una differenza di grafia faceva scartare in silenzio l'unico archivio
+    // prodotto. Se la tipologia manca del tutto si tiene comunque l'archivio:
+    // la richiesta era di fatture, quindi e' quello che abbiamo chiesto.
+    fatture: !tipo || String(tipo).toLowerCase() === 'fatt'
   };
 }
 
