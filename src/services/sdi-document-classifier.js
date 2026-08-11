@@ -97,16 +97,42 @@ function unwrapDocument(buffer, filename = '') {
   return { contentType, signed: false, original: buffer, xml: null, filename };
 }
 
+// Prima della radice possono esserci piu' processing instruction, commenti e
+// un DOCTYPE. Le fatture emesse tramite alcuni intermediari portano un
+// <?xml-stylesheet?> dopo la dichiarazione: fermarsi alla prima non trovava piu'
+// la radice, e il documento veniva classificato UNKNOWN pur essendo una
+// FatturaPA perfettamente valida.
 function detectRootElement(xml) {
-  const text = String(xml || '').replace(/^﻿/, '').trimStart();
-  const match = text.match(/^<\?xml[^>]*\?>\s*<([A-Za-z_][\w.-]*:)?([A-Za-z_][\w.-]*)/)
-    || text.match(/^<([A-Za-z_][\w.-]*:)?([A-Za-z_][\w.-]*)/);
+  let text = String(xml || '').replace(/^﻿/, '').trimStart();
+  let precedente = null;
+  while (text && text !== precedente) {
+    precedente = text;
+    text = text
+      .replace(/^<\?[^>]*\?>/, '')
+      .replace(/^<!--[\s\S]*?-->/, '')
+      .replace(/^<!DOCTYPE[^>]*>/i, '')
+      .trimStart();
+  }
+  const match = text.match(/^<([A-Za-z_][\w.-]*:)?([A-Za-z_][\w.-]*)/);
   return match ? (match[2] || '') : '';
+}
+
+// Un XML dichiara la propria codifica, e non e' sempre UTF-8: le fatture che
+// arrivano in windows-1252 lette come UTF-8 perdono le lettere accentate, che
+// nelle denominazioni italiane sono ovunque. Per l'intervallo che conta,
+// latin1 e windows-1252 coincidono.
+function xmlBufferToString(buffer) {
+  if (!Buffer.isBuffer(buffer)) return String(buffer || '');
+  const testa = buffer.toString('latin1', 0, Math.min(buffer.length, 200));
+  const dichiarata = (testa.match(/encoding\s*=\s*["']([\w-]+)["']/i) || [])[1] || '';
+  return /^(windows-1252|iso-8859-1|latin1)$/i.test(dichiarata)
+    ? buffer.toString('latin1')
+    : buffer.toString('utf8');
 }
 
 // Un tipo sconosciuto non e' un errore: si archivia e si prosegue.
 function classifyDocument(xmlBuffer) {
-  const xml = Buffer.isBuffer(xmlBuffer) ? xmlBuffer.toString('utf8') : String(xmlBuffer || '');
+  const xml = xmlBufferToString(xmlBuffer);
   const root = detectRootElement(xml);
   const type = DOCUMENT_TYPES[root] || 'UNKNOWN';
   return { type, rootElement: root, isInvoice: INVOICE_TYPES.has(type) };
@@ -187,5 +213,6 @@ module.exports = {
   determineDirection,
   extractParties,
   normalizeId,
-  unwrapDocument
+  unwrapDocument,
+  xmlBufferToString
 };

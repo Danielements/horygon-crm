@@ -293,7 +293,31 @@ function readTlv(buffer, offset) {
     headerLength = 2;
   } else {
     const count = first & 0x7f;
-    if (count === 0 || count > 4) throw new Error('Lunghezza DER non supportata');
+    // count = 0 e' la forma indefinita del BER: il contenuto non dichiara la
+    // propria lunghezza e finisce a un end-of-contents (00 00). Molti
+    // dispositivi di firma la usano, e rifiutarla rendeva illeggibili p7m
+    // perfettamente validi. Per sapere dove finisce bisogna percorrere i figli,
+    // che a loro volta possono essere indefiniti.
+    if (count === 0) {
+      let cursor = offset + 2;
+      while (cursor + 1 < buffer.length) {
+        if (buffer[cursor] === 0x00 && buffer[cursor + 1] === 0x00) {
+          return {
+            tag,
+            length: cursor - (offset + 2),
+            headerLength: 2,
+            contentStart: offset + 2,
+            totalLength: (cursor + 2) - offset,
+            indefinite: true
+          };
+        }
+        const figlio = readTlv(buffer, cursor);
+        if (figlio.totalLength <= 0) throw new Error('Struttura DER incoerente');
+        cursor += figlio.totalLength;
+      }
+      throw new Error('Struttura DER troncata: end-of-contents mancante');
+    }
+    if (count > 4) throw new Error('Lunghezza DER non supportata');
     length = 0;
     for (let i = 0; i < count; i += 1) length = (length << 8) | buffer[offset + 2 + i];
     headerLength = 2 + count;

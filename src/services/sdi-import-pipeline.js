@@ -8,7 +8,8 @@ const {
   classifyDocument,
   countInvoiceBodies,
   determineDirection,
-  unwrapDocument
+  unwrapDocument,
+  xmlBufferToString
 } = require('./sdi-document-classifier');
 
 const ROOT = path.resolve(__dirname, '../../');
@@ -63,7 +64,9 @@ function importDocument({
     });
   }
 
-  const xmlText = unwrapped.xml.toString('utf8');
+  // Rispetta la codifica dichiarata: windows-1252 letto come UTF-8 rovina le
+  // lettere accentate nelle denominazioni.
+  const xmlText = xmlBufferToString(unwrapped.xml);
   const classification = classifyDocument(unwrapped.xml);
   if (!classification.isInvoice) {
     // Notifiche, metadati e sconosciuti si archiviano senza interrompere il job.

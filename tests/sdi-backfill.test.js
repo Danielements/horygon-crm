@@ -466,6 +466,49 @@ test('il metadato reale e una lista nome/valore, non elementi con quei nomi', ()
   assert.equal(abbinato.idfile, '17843360106');
 });
 
+test('una fattura con foglio di stile e windows-1252 viene riconosciuta', () => {
+  const { classifyDocument, detectRootElement, xmlBufferToString } = require('../src/services/sdi-document-classifier');
+  // Forma reale delle attive scaricate l'11.08.2026: due processing instruction
+  // prima della radice, e codifica windows-1252. Fermarsi alla prima le
+  // classificava UNKNOWN, e tutte e cinque restavano fuori dall import.
+  const xml = '<?xml version="1.0" encoding="windows-1252"?>\n'
+    + '<?xml-stylesheet type="text/xsl" href="fatturaordinaria_v1.2.xsl"?>\n'
+    + '<p:FatturaElettronica versione="FPR12" xmlns:p="http://ivaservizi.agenziaentrate.gov.it/docs/xsd/fatture/v1.2"><x/></p:FatturaElettronica>';
+  assert.equal(detectRootElement(xml), 'FatturaElettronica');
+  const classificata = classifyDocument(Buffer.from(xml, 'latin1'));
+  assert.equal(classificata.isInvoice, true);
+  assert.equal(classificata.type, 'FATTURA');
+
+  // E le lettere accentate non vanno perse: nelle denominazioni sono ovunque.
+  const conAccento = Buffer.from('<?xml version="1.0" encoding="windows-1252"?><x>SOCIET\xC0</x>', 'latin1');
+  assert.match(xmlBufferToString(conAccento), /SOCIETÀ/);
+});
+
+test('un p7m con lunghezza BER indefinita viene aperto', () => {
+  const { unwrapDocument } = require('../src/services/sdi-document-classifier');
+  const m = material();
+  if (!m) return;
+  const contenuto = Buffer.from('<?xml version="1.0"?><p:FatturaElettronica versione="FPR12"><x/></p:FatturaElettronica>', 'utf8');
+  const der = signCadesBes({
+    content: contenuto,
+    certificatePem: fs.readFileSync(m.certPath),
+    privateKeyPem: fs.readFileSync(m.keyPath)
+  });
+
+  // Riscrive la SEQUENCE esterna in forma indefinita, come fanno diversi
+  // dispositivi di firma: intestazione 30 80, contenuto invariato, EOC finale.
+  const header = der[1] & 0x80 ? 2 + (der[1] & 0x7f) : 2;
+  const indefinito = Buffer.concat([
+    Buffer.from([0x30, 0x80]),
+    der.subarray(header),
+    Buffer.from([0x00, 0x00])
+  ]);
+
+  const aperto = unwrapDocument(indefinito, 'IT02355260981_gz8sU.xml.p7m');
+  assert.equal(aperto.contentType, 'p7m', 'non deve restare "binary"');
+  assert.equal(aperto.xml.toString('utf8'), contenuto.toString('utf8'));
+});
+
 test('un p7m in base64 viene aperto come quello binario', () => {
   const { unwrapDocument } = require('../src/services/sdi-document-classifier');
   const m = material();
