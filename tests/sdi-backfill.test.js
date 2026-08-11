@@ -937,6 +937,36 @@ test('durante la manutenzione non si interroga nulla', async () => {
   cleanup();
 });
 
+test('un job con una richiesta viva non si elimina per distrazione', () => {
+  const { deleteJob } = require('../src/services/sdi-backfill');
+  cleanup();
+  seedFiscalConfig();
+  const job = createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
+  db.prepare("UPDATE sdi_historical_sync_job SET status='READY', remote_request_id='359870495' WHERE id = ?").run(job.id);
+
+  // L'IdRichiesta vale una firma qualificata e resta utilizzabile trenta giorni.
+  assert.throws(
+    () => deleteJob({ jobId: job.id, tenantId: TENANT }),
+    (error) => error.code === 'RICHIESTA_ANCORA_VIVA' && error.idRichiesta === '359870495'
+  );
+  assert.ok(getJob(job.id), 'il job deve essere ancora li');
+
+  // Con la conferma esplicita si procede.
+  assert.equal(deleteJob({ jobId: job.id, tenantId: TENANT, force: true }).eliminato, true);
+  assert.equal(getJob(job.id), undefined);
+  cleanup();
+});
+
+test('un job fallito si elimina senza cerimonie', () => {
+  const { deleteJob } = require('../src/services/sdi-backfill');
+  cleanup();
+  seedFiscalConfig();
+  const job = createJob({ tenantId: TENANT, requestType: 'INCOMING', dateFrom: '2026-03-01', dateTo: '2026-05-31' });
+  db.prepare("UPDATE sdi_historical_sync_job SET status='FAILED', remote_request_id='111' WHERE id = ?").run(job.id);
+  assert.equal(deleteJob({ jobId: job.id, tenantId: TENANT }).eliminato, true);
+  cleanup();
+});
+
 // --- pianificazione marzo-oggi --------------------------------------------
 
 test('marzo-agosto sta in due finestre da tre mesi', () => {

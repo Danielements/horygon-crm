@@ -131,7 +131,10 @@ router.delete('/jobs/:id', requirePermesso('fatture', 'edit'), (req, res) => {
   handle(req, res, 'elimina', () => deleteJob({
     jobId: Number(req.params.id),
     tenantId: currentTenantId(),
-    utenteId: req.user.id
+    utenteId: req.user.id,
+    // La conferma viaggia in query: una DELETE non porta corpo in modo
+    // affidabile attraverso tutti i client.
+    force: String(req.query.force || '') === 'true'
   }));
 });
 

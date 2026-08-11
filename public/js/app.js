@@ -3850,7 +3850,17 @@ async function abbandonaJobStorico(jobId) {
 async function eliminaJobStorico(jobId) {
   if (!confirm(`Eliminare il job ${jobId}?\n\nSpariscono il job, i suoi archivi e il registro dei documenti.\nLe fatture gia' importate NON vengono toccate.`)) return;
   try {
-    const result = await api('DELETE', `/sdi/storico/jobs/${jobId}`);
+    let result;
+    try {
+      result = await api('DELETE', `/sdi/storico/jobs/${jobId}`);
+    } catch (primo) {
+      // Il server rifiuta se la richiesta e' ancora valida presso SdI: quella
+      // eliminazione butta via una firma qualificata, e va detto con parole
+      // sue prima di insistere.
+      if (!/RICHIESTA_ANCORA_VIVA/.test(primo.code || '') && !/richiesta accettata da SdI/.test(primo.message || '')) throw primo;
+      if (!confirm(`${primo.message}\n\nEliminare comunque?\n\nPer riavere quegli archivi servira' una nuova richiesta, quindi una nuova firma con PIN e OTP.`)) return;
+      result = await api('DELETE', `/sdi/storico/jobs/${jobId}?force=true`);
+    }
     toast(result?.fattureConservate
       ? `Job eliminato. ${result.fattureConservate} fatture importate restano nel CRM.`
       : 'Job eliminato', 'success');

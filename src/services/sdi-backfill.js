@@ -639,8 +639,24 @@ function abandonJob({ jobId, tenantId = null, motivo = null, utenteId = null }) 
 //
 // Le fatture restano: sono documenti fiscali e non si cancellano per pulire una
 // lista. Per rimuovere anche quelle c'e' reprocessArchives, che dice cosa fa.
-function deleteJob({ jobId, tenantId = null, utenteId = null }) {
+function deleteJob({ jobId, tenantId = null, utenteId = null, force = false }) {
   const job = requireJob(jobId, tenantId);
+
+  // Un job con una richiesta gia' accettata da SdI vale una firma qualificata:
+  // l'IdRichiesta resta valido per trenta giorni e gli archivi sono li' che
+  // aspettano. Cancellarlo butta via quel lavoro senza poterlo rifare se non
+  // firmando di nuovo, quindi non deve poter succedere per distrazione.
+  const richiestaViva = job.remote_request_id && !['FAILED', 'EXPIRED'].includes(job.status);
+  if (richiestaViva && !force) {
+    const error = new Error(
+      `Il job ${jobId} ha una richiesta accettata da SdI (IdRichiesta ${job.remote_request_id}) `
+      + 'ancora utilizzabile: eliminarlo significa perdere la firma gia spesa. '
+      + 'Confermare esplicitamente per procedere.'
+    );
+    error.code = 'RICHIESTA_ANCORA_VIVA';
+    error.idRichiesta = job.remote_request_id;
+    throw error;
+  }
   const importate = db.prepare(
     "SELECT COUNT(*) n FROM sdi_historical_sync_item WHERE job_id = ? AND outcome = 'IMPORTED'"
   ).get(job.id).n;
