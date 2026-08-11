@@ -60,9 +60,10 @@ async function prepareRequest({ tenantId, jobId, utenteId = null }) {
     vatNumbers: [vatNumber],
     dateFrom: job.date_from,
     dateTo: job.date_to,
-    // FILE_FATTURA restituisce gli XML delle fatture con i loro metadati;
-    // ELENCO darebbe solo un CSV di estremi, che non e' importabile.
-    tipoOutput: 'FILE_FATTURA',
+    // TipoOutput omesso: assente vale FILE_FATTURA, cioe' gli XML delle fatture
+    // con i loro metadati, ed e' l'unica forma accettata da entrambe le
+    // versioni del tracciato in circolazione.
+    tipoOutput: null,
     flow: 'ALL'
   });
   const filename = buildMassiveRequestFilename({

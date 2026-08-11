@@ -45,7 +45,14 @@ function buildMassiveRequestXml({
   dateTo,
   sdiIds = [],
   tipoRicerca = 'PUNTUALE',
-  tipoOutput = 'FILE_FATTURA',
+  // Omesso per default. E' facoltativo nel nostro tracciato (minOccurs="0") e
+  // assente non vale FILE_FATTURA, che e' esattamente cio' che vogliamo
+  // (Istruzioni SMTS: "se valorizzato con FILE_FATTURA o non presente").
+  // Ometterlo rende la richiesta valida anche per lo schema del servizio di
+  // Consultazione e Download Massivi v2.4, che TipoOutput non lo prevede:
+  // stesso namespace, stesso nome radice, schemi diversi. Un elemento in meno
+  // e' un motivo in meno di essere rifiutati.
+  tipoOutput = null,
   flow = 'ALL'
 }) {
   const descriptor = REQUEST_TYPES[requestType];
@@ -60,7 +67,9 @@ function buildMassiveRequestXml({
   });
 
   if (!['PUNTUALE', 'COMPLETA'].includes(tipoRicerca)) throw new Error(`TipoRicerca non valido: ${tipoRicerca}`);
-  if (!['FILE_FATTURA', 'ELENCO'].includes(tipoOutput)) throw new Error(`TipoOutput non valido: ${tipoOutput}`);
+  if (tipoOutput !== null && !['FILE_FATTURA', 'ELENCO'].includes(tipoOutput)) {
+    throw new Error(`TipoOutput non valido: ${tipoOutput}`);
+  }
 
   let body;
   if (requestType === 'BY_SDI_ID') {
@@ -82,7 +91,7 @@ function buildMassiveRequestXml({
     body = `<${descriptor.element}>${periodo}${flusso}<Ruolo>${descriptor.ruolo}</Ruolo></${descriptor.element}>`;
   }
 
-  const output = requestType === 'BY_SDI_ID' ? '' : `<TipoOutput>${tipoOutput}</TipoOutput>`;
+  const output = (requestType === 'BY_SDI_ID' || tipoOutput === null) ? '' : `<TipoOutput>${tipoOutput}</TipoOutput>`;
   return `<?xml version="1.0" encoding="UTF-8"?>`
     + `<InputMassivo xmlns="${INPUT_NS}">`
     + `<TipoRichiesta><Fatture>`

@@ -322,6 +322,21 @@ codice:
 Manca `ScaricoRichiesteEsito_v1.0.xsd`, che non e' pubblicato insieme al WSDL:
 il parser segue la tabella della specifica.
 
+**Attenzione a non confondere due tracciati omonimi.** Esiste anche un
+`InputMassivo` del servizio *Consultazione e Download Massivi* (versione 2.4),
+quello che si usa a mano dal portale Fatture e Corrispettivi: stesso namespace
+`http://www.sogei.it/InputPubblico`, stessa radice, schema diverso. Quello
+prevede `Adesione`, `Anagrafica` e `Ricevute` e **non** ha `TipoOutput`; il
+nostro, versionato accanto al WSDL, ha `TipoOutput`, `FattureSDI`,
+`FattureDataAcc`, `IvaPrecompilata` e `Lipe`. Il contratto giusto per il canale
+in cooperazione applicativa e' quello nel repo.
+
+Il CRM **omette comunque `TipoOutput`**: e' facoltativo nel nostro tracciato e
+assente vale `FILE_FATTURA`, quindi toglierlo non cambia il risultato e rende
+la richiesta accettabile da entrambe le versioni. Resta passabile
+esplicitamente per chiedere `ELENCO`, che pero' produce un CSV di estremi non
+importabile.
+
 Tre vincoli del servizio sono applicati sul job, non solo in memoria:
 
 - le **dieci interrogazioni di esito** per richiesta sono contate sul job.

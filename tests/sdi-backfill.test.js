@@ -474,6 +474,24 @@ test('il job prepara l involucro e ne calcola l hash da confrontare con la firma
   cleanup();
 });
 
+test('TipoOutput viene omesso, cosi la richiesta vale per entrambi i tracciati', () => {
+  const { buildMassiveRequestXml } = require('../src/services/sdi-massive-request');
+  const xml = buildMassiveRequestXml({
+    requestType: 'INCOMING', vatNumbers: [PIVA], dateFrom: '2026-03-01', dateTo: '2026-05-31'
+  });
+  // Facoltativo nel nostro tracciato e assente da quello del servizio di
+  // Consultazione e Download Massivi v2.4. Omesso vale FILE_FATTURA, quindi
+  // toglierlo non cambia il risultato e toglie un motivo di rifiuto.
+  assert.doesNotMatch(xml, /<TipoOutput>/);
+  assert.match(xml, /<TipoRicerca>PUNTUALE<\/TipoRicerca><FattureRicevute>/, 'e la sequenza resta contigua');
+
+  // Resta possibile chiederlo, per il CSV di soli estremi.
+  const elenco = buildMassiveRequestXml({
+    requestType: 'INCOMING', vatNumbers: [PIVA], dateFrom: '2026-03-01', dateTo: '2026-05-31', tipoOutput: 'ELENCO'
+  });
+  assert.match(elenco, /<TipoOutput>ELENCO<\/TipoOutput>/);
+});
+
 test('la richiesta e valida contro gli XSD ufficiali, entrambi i livelli', async () => {
   const {
     buildMassiveRequestXml, buildRichiestaServiziMassiviXml, validateMassiveRequest
