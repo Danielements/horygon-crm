@@ -28,7 +28,7 @@ function sqlNullable(value) {
 // Lista fatture
 router.get('/', requirePermesso('fatture', 'read'), (req, res) => {
   const { tipo, stato, direzione } = req.query;
-  let sql = `SELECT f.*, a.ragione_sociale FROM fatture f LEFT JOIN anagrafiche a ON a.id = f.anagrafica_id WHERE 1=1`;
+  let sql = `SELECT f.*, COALESCE(a.ragione_sociale, f.cliente_fornitore_label) AS ragione_sociale FROM fatture f LEFT JOIN anagrafiche a ON a.id = f.anagrafica_id WHERE 1=1`;
   const params = [];
   if (tipo) { sql += ' AND f.tipo = ?'; params.push(tipo); }
   if (direzione) { sql += ' AND COALESCE(f.direzione, CASE WHEN f.tipo = "emessa" THEN "attiva" ELSE "passiva" END) = ?'; params.push(direzione); }
@@ -39,7 +39,7 @@ router.get('/', requirePermesso('fatture', 'read'), (req, res) => {
 
 // Singola fattura con righe
 router.get('/:id', requirePermesso('fatture', 'read'), (req, res) => {
-  const f = db.prepare(`SELECT f.*, a.ragione_sociale FROM fatture f LEFT JOIN anagrafiche a ON a.id = f.anagrafica_id WHERE f.id = ?`).get(req.params.id);
+  const f = db.prepare(`SELECT f.*, COALESCE(a.ragione_sociale, f.cliente_fornitore_label) AS ragione_sociale FROM fatture f LEFT JOIN anagrafiche a ON a.id = f.anagrafica_id WHERE f.id = ?`).get(req.params.id);
   if (!f) return res.status(404).json({ error: 'Non trovata' });
   f.righe = db.prepare(`SELECT r.*, p.nome, p.codice_interno FROM fatture_righe r LEFT JOIN prodotti p ON p.id = r.prodotto_id WHERE r.fattura_id = ?`).all(req.params.id);
   f.riepilogo_iva = db.prepare(`SELECT * FROM fatture_iva_riepilogo WHERE fattura_id = ? ORDER BY id`).all(req.params.id);
