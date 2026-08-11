@@ -200,6 +200,48 @@ Da sapere prima di leggere i risultati: le fatture in **reverse charge sono
 escluse** da tutte le operazioni di download e non arriveranno mai. Un buco li'
 non e' un errore del backfill.
 
+## Fattura PA da ordine evaso — analisi dei campi mancanti
+
+Caso reale: ordine per **AERONAUTICA MILITARE 70 STORMO**, CF `80007090592`,
+**senza partita IVA**, codice univoco ufficio `AKGVPD` (sei caratteri, controllo
+00427 soddisfatto), PEC `aerostormo70@postacert.difesa.it`, split payment
+**attivo**.
+
+Quello che c'e' gia' e non va toccato: `POST /api/ordini/:id/convert-to-fattura`
+con il suo pulsante, la scelta automatica FPA12 quando l'anagrafica e'
+`tipo = 'pa'`, il ciclo di firma esterna, e il cessionario con il solo codice
+fiscale (il builder rende `IdFiscaleIVA` condizionale).
+
+Le righe sono gia' allineate al software del commercialista: `unita_misura`,
+`numero_linea`, `codice_articolo`, `sconto_maggiorazione`, `aliquota_iva`,
+`natura_iva`, `riferimento_normativo`, `dati_gestionali`.
+
+Mancano campi di **testata**, che nel software di riferimento stanno nei
+pulsanti laterali:
+
+| Pulsante loro | Blocco FatturaPA | Stato |
+|---|---|---|
+| Riferimenti | `DatiOrdineAcquisto` / `DatiContratto` / `DatiConvenzione`, con **CIG e CUP** | **manca** |
+| (flag anagrafica) | `EsigibilitaIVA = S`, scissione dei pagamenti | **manca** |
+| Riferimenti DDT | `DatiDDT` | manca |
+| Rate | `DatiPagamento` / `DettaglioPagamento` | parziale: c'e' `scadenza` e i default in `sdi.payment.*` |
+| Bollo | `DatiBollo` | manca |
+| Causale | `Causale` | manca |
+| Spese accessorie | `Arrotondamento`, spese | manca |
+| Allegato | `Allegati` | manca |
+| Trasporto (piede) | `DatiTrasporto` | manca, non obbligatorio |
+
+**I primi due sono gli unici bloccanti per farsi pagare.** Senza CIG nel blocco
+riferimenti la PA non liquida (tracciabilita' dei flussi finanziari); senza
+`EsigibilitaIVA = S` il trattamento IVA e' sbagliato. Gli altri servono a
+coprire i casi, non questa fattura.
+
+Percorso minimo: colonne `cig` e `cup` su `ordini` e su `fatture`, riportate
+nella conversione; `EsigibilitaIVA` derivata da un flag sull'anagrafica PA
+(come il "Escludi da gestione Split Payment" del loro software, quindi attivo
+salvo esclusione); emissione dei due blocchi nel builder. Poi `sdi.signature.mode`
+su `external`, che oggi e' `disabled` e da solo blocca ogni FPA12.
+
 ## Lavori aperti, in ordine
 
 1. **Chiudere i tre `.p7m` illeggibili e il tracciato dei metadati**, poi
