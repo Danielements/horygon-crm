@@ -1,6 +1,6 @@
 # Passaggio di consegne — integrazione SdI
 
-Ultimo aggiornamento: 2026-08-09, fine sessione.
+Ultimo aggiornamento: 2026-08-11, sera.
 
 Questo file serve a riprendere il lavoro in una sessione nuova senza rileggere
 tutto. Il riferimento completo resta `SDI_INTEGRATION_OVERVIEW.md`: qui c'e' solo
@@ -25,11 +25,9 @@ gli `IdFile`) e `sdi-backfill.js` (orchestratore), ramo di firma esterna in
 Il censimento del canale per le forniture massive **e' attivo**: provider
 HORYGON S.R.L., `03365990591`, WebService, Scarico Fatture.
 
-**Il 10.08.2026 la prima richiesta massiva reale e' stata accettata**:
-`inoltroRichiesta` sul job 1 (passive, 01.03-31.05) ha restituito
-`IdRichiesta 359870495`. Quindi sono confermati sul campo, oltre alle fixture:
-mTLS verso `servizi.fatturapa.it`, la SOAPAction come stringa nuda, l'involucro
-`RichiestaServiziMassivi` e la firma CAdES di FirmaOK.
+Confermati sul campo, oltre che su fixture: mTLS verso `servizi.fatturapa.it`,
+la SOAPAction come stringa nuda, l'involucro `RichiestaServiziMassivi`, la firma
+CAdES di FirmaOK, gli allegati MTOM in risposta.
 
 ## Stato del backfill all'11.08.2026, sera
 
@@ -126,8 +124,9 @@ vedevano, quindi **vanno usati come riferimento quando si tocca il parsing**.
 
 ## Stato del deploy
 
-**Il VPS e' fermo al commit `11ebf49`.** Manca tutto il ciclo di firma esterna,
-backend e interfaccia:
+Il VPS viene aggiornato man mano. **Verificare sempre a che commit e'** prima di
+dare per presente una correzione: buona parte dei problemi di questa sessione si
+e' manifestata su codice non ancora deployato.
 
 ```bash
 cd /opt/horygon-crm && git pull && docker compose up -d --build
@@ -142,9 +141,9 @@ cambiato di proposito.
 
 ## Scarico dello storico marzo-oggi
 
-Il censimento provider e' fatto. Resta la configurazione fiscale del tenant,
-che oggi **non esiste** e senza la quale ogni job si ferma alla prima chiamata:
-e' l'unico passo di preparazione rimasto.
+Censimento provider e configurazione fiscale del tenant sono **fatti**, e
+`sdi.massive.signature.mode` e' su `external`. Il comando resta qui per
+riferimento, o per rifarla su un altro ambiente:
 
 ```bash
 docker compose exec horygon-crm node scripts/sdi-fiscal-config.js --set --piva=03365990591 --cf=03365990591 --massivi --provider --confirm
