@@ -44,14 +44,50 @@ function detectContentType(buffer, filename = '') {
 }
 
 // Restituisce sempre l'originale accanto all'eventuale XML estratto.
+// Un .p7m puo' arrivare in DER binario oppure in base-64, e negli archivi dei
+// Servizi Massivi convivono entrambe le forme: nello stesso ZIP alcuni file
+// cominciano con 0x30 0x82, altri con "MII", che e' quel DER codificato.
+// Trattare i secondi come binario li faceva archiviare senza importarli.
+function decodeIfBase64(buffer) {
+  const testa = buffer.toString('latin1', 0, Math.min(buffer.length, 64)).trim();
+  if (!/^[A-Za-z0-9+/\r\n]+={0,2}$/.test(testa) || !testa.startsWith('MI')) return null;
+  try {
+    const der = Buffer.from(buffer.toString('latin1').replace(/\s+/g, ''), 'base64');
+    // Deve risultare una SEQUENCE DER in forma lunga, come un CMS vero.
+    return der.length > 4 && der[0] === 0x30 && (der[1] & 0x80) !== 0 ? der : null;
+  } catch {
+    return null;
+  }
+}
+
 function unwrapDocument(buffer, filename = '') {
   const contentType = detectContentType(buffer, filename);
   if (contentType === 'p7m') {
     try {
-      const xml = extractCmsContent(buffer);
-      return { contentType: 'p7m', signed: true, original: buffer, xml, filename };
+      return { contentType: 'p7m', signed: true, original: buffer, xml: extractCmsContent(buffer), filename };
     } catch (error) {
+      // Prima di arrendersi: puo' essere lo stesso DER in base-64. Il nome .p7m
+      // porta qui entrambe le forme, e distinguerle guardando i primi byte non
+      // basta perche' il ramo e' scelto sull'estensione.
+      const der = decodeIfBase64(buffer);
+      if (der) {
+        try {
+          // L'originale fiscale resta il file come e' arrivato, base-64
+          // compreso: e' quello su cui SdI ha calcolato l'hash dei metadati.
+          return { contentType: 'p7m', signed: true, original: buffer, xml: extractCmsContent(der), filename, base64: true };
+        } catch (secondo) {
+          return { contentType: 'binary', signed: false, original: buffer, xml: null, filename, error: secondo.message };
+        }
+      }
       // Un DER che non e' un CMS leggibile resta archiviato come binario.
+      return { contentType: 'binary', signed: false, original: buffer, xml: null, filename, error: error.message };
+    }
+  }
+  const derNudo = decodeIfBase64(buffer);
+  if (derNudo) {
+    try {
+      return { contentType: 'p7m', signed: true, original: buffer, xml: extractCmsContent(derNudo), filename, base64: true };
+    } catch (error) {
       return { contentType: 'binary', signed: false, original: buffer, xml: null, filename, error: error.message };
     }
   }

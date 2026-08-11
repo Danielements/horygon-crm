@@ -443,6 +443,54 @@ test('il file di metadati viene riconosciuto dal contenuto e abbinato per hash',
   assert.equal(abbinato.idfile, '3344556677');
 });
 
+test('il metadato reale e una lista nome/valore, non elementi con quei nomi', () => {
+  // File realmente ricevuto: cercare un elemento <idfile> non trovava nulla,
+  // perche' "idfile" e' il contenuto di un <nome>, non un tag.
+  const meta = readCompanionMetadata(
+    path.join(ROOT, 'tests', 'fixtures', 'smts', 'IT03755271008_01FCV.xml.p7m_metaDato.xml')
+  );
+  assert.ok(meta);
+  assert.equal(meta.idfile, '17843360106', 'l identificativo SdI, che dal nome del file non si ricava');
+  assert.equal(meta.hashfile, '353f6376e7f2918c1f16dba7dfe5c9c4742fa7fcdcfa0befd48d6b8f75178fe8');
+  assert.equal(meta.nomeFileFattura, 'IT03755271008_01FCV.xml.p7m');
+  assert.equal(meta.cedente.denominazione, 'SCIPIONI S.R.L.');
+  assert.equal(meta.cessionario.piva, PIVA);
+  assert.equal(meta.formato, 'FPR');
+
+  // Abbinamento per nome dichiarato: piu' solido di hash e prefisso.
+  const abbinato = matchCompanionMetadata({
+    file: { name: 'IT03755271008_01FCV.xml.p7m' },
+    buffer: Buffer.from('contenuto qualunque'),
+    metadati: [{ ...meta, file: { name: 'IT03755271008_01FCV.xml.p7m_metaDato.xml' } }]
+  });
+  assert.equal(abbinato.idfile, '17843360106');
+});
+
+test('un p7m in base64 viene aperto come quello binario', () => {
+  const { unwrapDocument } = require('../src/services/sdi-document-classifier');
+  const m = material();
+  if (!m) return;
+  const xml = invoiceXml({ numero: '2026/B64' });
+  const der = signCadesBes({
+    content: Buffer.from(xml, 'utf8'),
+    certificatePem: fs.readFileSync(m.certPath),
+    privateKeyPem: fs.readFileSync(m.keyPath)
+  });
+
+  // Negli archivi convivono le due forme: alcuni file cominciano con 0x30 0x82,
+  // altri con "MII", che e' lo stesso DER codificato in base-64.
+  const base64 = Buffer.from(der.toString('base64'), 'utf8');
+  assert.equal(base64.toString('latin1', 0, 2), 'MI');
+
+  const aperto = unwrapDocument(base64, 'IT00497121202_M0RQN.xml.p7m');
+  assert.equal(aperto.contentType, 'p7m', 'non deve restare "binary"');
+  assert.equal(aperto.signed, true);
+  assert.equal(aperto.xml.toString('utf8'), xml);
+  // L'originale fiscale resta il file come e' arrivato: e' quello su cui SdI ha
+  // calcolato l'hash nei metadati.
+  assert.equal(aperto.original, base64);
+});
+
 test('il metadato si riconosce dal nome _metaDato.xml, come negli archivi reali', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'meta-'));
   // Nome reale visto negli archivi dell'11.08.2026. Il riconoscimento per solo

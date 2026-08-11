@@ -788,8 +788,20 @@ function readCompanionMetadata(filePath) {
   let parsed;
   try { parsed = parser.parse(content); } catch { return null; }
 
-  const idfile = findValueCaseInsensitive(parsed, ['idfile', 'identificativosdi']);
-  const hashfile = findValueCaseInsensitive(parsed, ['hashfile', 'hash']);
+  // Il file reale non ha elementi con quei nomi: e' una lista di coppie
+  //   <metadato><nome>idfile</nome><valore>...</valore></metadato>
+  // nel namespace urn:xml.fatturazione.sogei.it. Cercare un elemento <idfile>
+  // non trovava nulla, e i metadati finivano fra i documenti.
+  const campi = new Map();
+  toArray(parsed?.metadatiFattura?.metadato).forEach((voce) => {
+    const nome = String(voce?.nome ?? '').trim().toLowerCase();
+    if (nome) campi.set(nome, String(voce?.valore ?? '').trim());
+  });
+
+  const valore = (nome) => campi.get(nome) || findValueCaseInsensitive(parsed, [nome]) || null;
+  const idfile = valore('idfile') || findValueCaseInsensitive(parsed, ['identificativosdi']);
+  const hashfile = valore('hashfile') || findValueCaseInsensitive(parsed, ['hash']);
+
   // Se il nome lo dichiara metadato, e' un metadato anche quando non se ne
   // riconoscono i campi: trattarlo come documento lo farebbe finire fra gli
   // esiti come "UNKNOWN", sporcando il resoconto e nascondendo il problema
@@ -798,13 +810,34 @@ function readCompanionMetadata(filePath) {
   return {
     idfile: idfile ? String(idfile).trim() : null,
     hashfile: hashfile ? String(hashfile).trim().toLowerCase() : null,
-    dataaccoglienza: findValueCaseInsensitive(parsed, ['dataaccoglienza', 'dataoraricezione']) || null,
+    dataaccoglienza: valore('dataaccoglienza') || findValueCaseInsensitive(parsed, ['dataoraricezione']) || null,
+    // Il nome del file-fattura a cui appartiene: e' un abbinamento certo, piu'
+    // solido dell'hash e del prefisso del nome.
+    nomeFileFattura: valore('nomefile'),
+    // Cedente e cessionario dichiarati da SdI: un riscontro indipendente sulla
+    // controparte, che il parser della fattura ricava per conto suo.
+    cedente: { piva: valore('cedentepiva'), cf: valore('cedentecf'), denominazione: valore('cedentedenominazione') },
+    cessionario: { piva: valore('cessionariopiva'), cf: valore('cessionariocf'), denominazione: valore('cessionariodenominazione') },
+    formato: valore('formatofattura'),
+    tipoFirma: valore('tipofirma'),
     path: filePath
   };
 }
 
+function toArray(value) {
+  if (value === undefined || value === null) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
 function matchCompanionMetadata({ file, buffer, metadati }) {
   if (!metadati.length) return null;
+
+  // Il metadato dichiara il nome del file a cui appartiene: e' un abbinamento
+  // esplicito, e viene prima di qualunque deduzione.
+  const nome = path.basename(file.name);
+  const perNome = metadati.find((meta) => meta.nomeFileFattura && path.basename(meta.nomeFileFattura) === nome);
+  if (perNome) return perNome;
+
   const hash = sha256(buffer).toLowerCase();
   const perHash = metadati.find((meta) => meta.hashfile && meta.hashfile === hash);
   if (perHash) return perHash;

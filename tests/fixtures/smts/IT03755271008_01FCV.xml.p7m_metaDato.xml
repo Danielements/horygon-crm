@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<metadatiFattura xmlns="urn:xml.fatturazione.sogei.it">
+    <metadato>
+        <nome>idfile</nome>
+        <valore>17843360106</valore>
+    </metadato>
+    <metadato>
+        <nome>dataaccoglienza</nome>
+        <valore>2026-07-23T11:14:00.000+02:00</valore>
+    </metadato>
+    <metadato>
+        <nome>hashfile</nome>
+        <valore>353f6376e7f2918c1f16dba7dfe5c9c4742fa7fcdcfa0befd48d6b8f75178fe8</valore>
+    </metadato>
+    <metadato>
+        <nome>tipodocumento</nome>
+        <valore>FATTURA ELETTRONICA</valore>
+    </metadato>
+    <metadato>
+        <nome>formatofattura</nome>
+        <valore>FPR</valore>
+    </metadato>
+    <metadato>
+        <nome>versionexsd</nome>
+        <valore>FPR12</valore>
+    </metadato>
+    <metadato>
+        <nome>cedentepiva</nome>
+        <valore>03755271008</valore>
+    </metadato>
+    <metadato>
+        <nome>cedentecf</nome>
+        <valore>03755271008</valore>
+    </metadato>
+    <metadato>
+        <nome>cedentedenominazione</nome>
+        <valore>SCIPIONI S.R.L.</valore>
+    </metadato>
+    <metadato>
+        <nome>cessionariopiva</nome>
+        <valore>03365990591</valore>
+    </metadato>
+    <metadato>
+        <nome>cessionariocf</nome>
+        <valore>03365990591</valore>
+    </metadato>
+    <metadato>
+        <nome>cessionariodenominazione</nome>
+        <valore>HORYGON S.R.L.</valore>
+    </metadato>
+    <metadato>
+        <nome>nomefile</nome>
+        <valore>IT03755271008_01FCV.xml.p7m</valore>
+    </metadato>
+    <metadato>
+        <nome>tipofirma</nome>
+        <valore>Cades</valore>
+    </metadato>
+    <metadato>
+        <nome>numerofatture</nome>
+        <valore>1</valore>
+    </metadato>
+</metadatiFattura>
