@@ -14,7 +14,7 @@ cio' che non e' deducibile dal repository.
 
 ## Stato del codice
 
-Branch `codex/sdi-diagnostics`. **166 test, tutti verdi** (`npm test`).
+Branch `codex/sdi-diagnostics`. **196 test, tutti verdi** (`npm test`).
 
 Fatto il 09.08.2026, seconda parte: **backfill dello storico dai Servizi
 Massivi**. Nuovi `sdi-massive-esito.js` (lettura del file di esito, dove stanno
@@ -31,13 +31,62 @@ HORYGON S.R.L., `03365990591`, WebService, Scarico Fatture.
 mTLS verso `servizi.fatturapa.it`, la SOAPAction come stringa nuda, l'involucro
 `RichiestaServiziMassivi` e la firma CAdES di FirmaOK.
 
-La prima richiesta e' stata rifiutata con `00200`: l'involucro aveva i figli nel
-namespace sbagliato, e la firma spesa e' andata persa. Da li' e' nata la
-validazione XSD prima della firma. La seconda, il 10.08.2026 alle 22:07, e'
-stata accettata e `esitoRichiesta` ha risposto `ST01 IN ELABORAZIONE`.
+## Stato del backfill all'11.08.2026, sera
 
-Restano da provare contro il servizio reale la risposta `ST03` con il file di
-esito, `scaricoFile` e l'import degli archivi veri.
+**Il ciclo SMTS funziona end-to-end contro il servizio reale.** Due job passive
+inoltrati, elaborati, archivi scaricati e import simulato:
+
+| Job | Periodo | IdRichiesta | Archivio | Documenti |
+|---|---|---|---|---|
+| 1 | 01.03-31.05 | `360566686` | `360566686_FATT_03365990591.zip` | 10 fatture |
+| 2 | 01.06-10.08 | `360612883` | `360612883_FATT_03365990591.zip` | 19 fatture |
+
+Entrambi in `IMPORTING` con `dry_run = 1`: **niente e' ancora stato scritto**.
+Archivi disponibili fino al **10.09.2026**.
+
+Mancano le due finestre delle **attive** (`OUTGOING`), da pianificare.
+
+### Cosa resta da risolvere prima dell'import vero
+
+1. **Tre `.p7m` non si aprono** e finiscono `STORED_NON_XML`, mentre altri `.p7m`
+   dello stesso archivio si aprono benissimo: `IT01879020517A2026_eUfD8`,
+   `IT00497121202_M0RQN`, `IT02355260981_gz8sU`. Sospetto CMS in lunghezza
+   indefinita (BER) che `extractCmsContent` non gestisce, ma **non e'
+   verificato**: servono i byte veri.
+2. **I metadati non venivano letti**: risolto riconoscendoli dal nome reale
+   `<fattura>_metaDato.xml`, ma **non e' ancora noto il tracciato interno** -
+   se i campi non hanno i nomi attesi, l'identificativo SdI resta comunque
+   inutilizzato. Serve vederne uno.
+3. Verificare nel dry-run le **controparti**: su queste passive devono essere i
+   fornitori. Il resoconto ora le mostra.
+
+### Comandi di diagnosi
+
+Contenuto di un file di metadati e struttura di un `.p7m` che fallisce:
+
+```bash
+docker compose exec horygon-crm sh -lc 'find /app/uploads/sdi-storico -name "*_metaDato.xml" | head -1 | xargs cat'
+```
+
+```bash
+docker compose exec horygon-crm sh -lc 'find /app/uploads/sdi-storico -name "IT00497121202_M0RQN*" ! -name "*metaDato*" | head -1 | xargs -I{} od -A d -t x1 -N 64 {}'
+```
+
+### Lezioni pagate care, in questa sessione
+
+Quattro errori, tutti con la stessa radice: **letterali e strutture copiati
+dalle tabelle del PDF senza mai vederli in una risposta reale**, con test
+scritti sulla stessa lettura, quindi verdi mentre il documento era sbagliato.
+
+- involucro `RichiestaServiziMassivi` mancante -> `00200`, una firma persa;
+- namespace di default sull'involucro, che invece e' `unqualified` -> `00200`,
+  seconda firma persa;
+- `TipoElementi` confrontato con `Fatt` mentre arriva `FATT` -> l'unico archivio
+  prodotto scartato in silenzio;
+- allegati MTOM non gestiti -> esito vuoto senza errore.
+
+Da qui: validazione XSD prima della firma, e la prima risposta reale salvata in
+`tests/fixtures/smts/`.
 
 Fatto il 09.08.2026: **interfaccia del ciclo di firma esterna** (punto 1 dei
 lavori aperti). Badge di stato SdI sulla riga della fattura, pulsante
@@ -152,9 +201,9 @@ non e' un errore del backfill.
 
 ## Lavori aperti, in ordine
 
-1. **Collaudo del backfill contro l'endpoint reale**, una finestra sola per
-   cominciare, in dry-run sull'import. Non ci sono piu' prerequisiti esterni.
-2. Interfaccia del backfill: le rotte ci sono, i pulsanti no.
+1. **Chiudere i tre `.p7m` illeggibili e il tracciato dei metadati**, poi
+   lanciare l'import vero sui job 1 e 2 (vedi "Stato del backfill").
+2. Pianificare, firmare e importare le due finestre delle **attive**.
 3. Import automatico delle passive firmate `.p7m` dal canale realtime: oggi
    vengono archiviate ma non importate, e il CRM risponde comunque `ER01`.
 4. Client di quadratura e reinoltro: **bloccato**, mancano tre WSDL da recuperare
