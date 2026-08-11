@@ -3821,7 +3821,11 @@ function descriviEsitoStorico(azione, result) {
   if (azione === 'esito') return result?.status === 'READY'
     ? `Archivi pronti: ${(result.archivi || []).length}`
     : `Stato: ${result?.stato || result?.status || 'in elaborazione'}`;
-  if (azione === 'scarica') return `Archivi scaricati: ${(result?.scaricati || []).length}`;
+  if (azione === 'scarica') {
+    return result?.nessunArchivio
+      ? (result.motivo || 'Nessun archivio da scaricare')
+      : `Archivi scaricati: ${(result?.scaricati || []).length}`;
+  }
   if (azione === 'importa') return result?.dryRun
     ? 'Simulazione completata: niente scritto'
     : `Import ${result?.status === 'COMPLETED' ? 'completato' : result?.status}`;

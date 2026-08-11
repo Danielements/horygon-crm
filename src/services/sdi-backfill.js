@@ -375,10 +375,31 @@ async function downloadArchives({ jobId, tenantId = null, client, archivi = null
     );
   }
 
-  const daScaricare = archivi || (await listReadyArchives({ job, client }));
+  const ricognizione = archivi ? null : await listReadyArchives({ job, client });
+  const daScaricare = archivi || ricognizione.archiviFatture;
   if (!daScaricare.length) {
+    // "Nessun archivio" da solo non e' una diagnosi: puo' voler dire che il
+    // periodo e' vuoto, che SdI ha prodotto errori (00500 mancata adesione al
+    // servizio di consultazione, 00501 nessun file prodotto), oppure che gli
+    // archivi ci sono ma di un'altra tipologia. Sono situazioni diverse e chi
+    // guarda deve poterle distinguere senza andare a leggere un file su disco.
+    const motivo = spiegaAssenzaArchivi(ricognizione);
     transitionJob(job.id, 'DOWNLOADING');
-    return { jobId: job.id, status: 'DOWNLOADING', scaricati: [], nessunArchivio: true };
+    auditJob('SDI_HISTORICAL_NESSUN_ARCHIVIO', {
+      tenantId: job.tenant_id, jobId: job.id, utenteId,
+      dettagli: { motivo, errori: ricognizione?.errori || [], altreTipologie: ricognizione?.altreTipologie || [] }
+    });
+    return {
+      jobId: job.id,
+      status: 'DOWNLOADING',
+      scaricati: [],
+      nessunArchivio: true,
+      motivo,
+      errori: ricognizione?.errori || [],
+      altreTipologie: ricognizione?.altreTipologie || [],
+      archiviDichiarati: ricognizione?.numeroArchivi ?? null,
+      esitoFile: job.esito_file_path || null
+    };
   }
 
   if (job.status !== 'DOWNLOADING') transitionJob(job.id, 'DOWNLOADING');
@@ -433,10 +454,36 @@ async function downloadArchives({ jobId, tenantId = null, client, archivi = null
   return { jobId: job.id, status: getJob(job.id).status, scaricati, falliti };
 }
 
+// Ricognizione prima dello scarico. Restituisce anche cio' che serve a
+// spiegare un elenco vuoto, non solo gli archivi da prendere: interrogare
+// costa una delle dieci chiamate, e sprecarla senza raccogliere il perche'
+// significa doverla spendere di nuovo.
 async function listReadyArchives({ job, client }) {
   const status = await client.getRequestStatus(job.remote_request_id);
   if (!status.ready) throw new Error(`La richiesta ${job.remote_request_id} non e ancora elaborata (${status.stato})`);
-  return status.archiviFatture || [];
+  return {
+    archiviFatture: status.archiviFatture || [],
+    altreTipologie: (status.archivi || []).filter((archivio) => !archivio.fatture),
+    errori: status.esito?.errori || [],
+    numeroArchivi: status.esito?.numeroArchivi ?? null,
+    esitoErrore: status.esitoErrore || null
+  };
+}
+
+// Traduce un elenco vuoto in una frase che dice cosa fare.
+function spiegaAssenzaArchivi(ricognizione) {
+  if (!ricognizione) return 'Nessun archivio indicato fra quelli passati in ingresso';
+  if (ricognizione.esitoErrore) {
+    return `Il file di esito non e leggibile: ${ricognizione.esitoErrore}`;
+  }
+  if (ricognizione.errori.length) {
+    return `SdI ha risposto con errori: ${ricognizione.errori.map((e) => `${e.codice} ${e.descrizione || ''}`.trim()).join('; ')}`;
+  }
+  if (ricognizione.altreTipologie.length) {
+    const tipi = [...new Set(ricognizione.altreTipologie.map((a) => a.tipoElementi))].join(', ');
+    return `La richiesta ha prodotto archivi di altra tipologia (${tipi}), nessuno di fatture`;
+  }
+  return 'La richiesta e stata elaborata senza errori ma non ha prodotto archivi: nel periodo non risultano fatture di questa direzione';
 }
 
 // --- 6. import documento per documento ------------------------------------
@@ -483,7 +530,18 @@ async function importArchives({ jobId, tenantId = null, dryRun = null, utenteId 
     });
   }
 
-  return { jobId: job.id, dryRun: simulazione, status: getJob(job.id).status, archivi: report, errori };
+  // Un job che si chiude senza aver mai avuto un archivio non e' un import
+  // riuscito: e' un import che non ha avuto niente da fare. Dirlo evita di
+  // leggere "COMPLETED" come "storico acquisito".
+  const totaleArchivi = db.prepare('SELECT COUNT(*) n FROM sdi_historical_sync_archive WHERE job_id = ?').get(job.id).n;
+  return {
+    jobId: job.id,
+    dryRun: simulazione,
+    status: getJob(job.id).status,
+    archivi: report,
+    errori,
+    nessunArchivio: totaleArchivi === 0
+  };
 }
 
 async function importSingleArchive({ job, archivio, dryRun, utenteId, identifiers }) {
