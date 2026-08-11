@@ -229,6 +229,35 @@ test('un solo archivio non diventa una lista di caratteri', () => {
   assert.equal(esito.archivi[0].idFile, '55');
 });
 
+// Primo esito realmente ricevuto da SdI, 11.08.2026. Le fixture costruite da
+// noi confermavano la nostra lettura della specifica; questa no, e infatti
+// mostra due cose che la tabella del PDF non diceva: TipoElementi arriva in
+// maiuscolo e NumeroErrori puo' mancare del tutto.
+test('l esito reale ricevuto da SdI viene letto correttamente', () => {
+  const reale = fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'smts', 'EsitoRichiesta_360612883.xml'));
+  const esito = parseEsitoRichiestaFile(reale);
+
+  assert.equal(esito.idRichiesta, '360612883');
+  assert.equal(esito.piva, PIVA);
+  assert.equal(esito.numeroArchivi, 1);
+  assert.equal(esito.numeroErrori, null, 'NumeroErrori manca del tutto quando non ci sono errori');
+  assert.deepEqual(esito.errori, []);
+  assert.equal(esito.conteggioCoerente, true);
+
+  const archivi = selectInvoiceArchives(esito);
+  assert.equal(archivi.length, 1, 'l archivio di fatture non deve essere scartato');
+  assert.equal(archivi[0].idFile, '167846801');
+  assert.equal(archivi[0].nomeFile, '360612883_FATT_03365990591.zip');
+  assert.equal(archivi[0].tipoElementi, 'FATT', 'maiuscolo, non "Fatt" come nella tabella');
+  assert.equal(archivi[0].numeroElementi, 38);
+  assert.equal(archivi[0].dimensioneFile, 630452);
+
+  // La disponibilita' e' un dateTime, non una data: isExpired deve reggerlo.
+  assert.equal(esito.dataFineDisponibilita, '2026-09-10T00:00:00.000+02:00');
+  assert.equal(isExpired(esito.dataFineDisponibilita, new Date('2026-09-10T22:00:00Z')), false);
+  assert.equal(isExpired(esito.dataFineDisponibilita, new Date('2026-09-11T06:00:00Z')), true);
+});
+
 test('la tipologia archivio si riconosce a prescindere dalla grafia', () => {
   // Il valore della tabella e' "Fatt", ma quello che arriva davvero non era mai
   // stato visto: una differenza di maiuscole scartava in silenzio l'unico

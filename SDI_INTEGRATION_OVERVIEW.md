@@ -320,7 +320,17 @@ codice:
   sola tipologia, e il backfill fatture scarica solo `Fatt`.
 
 Manca `ScaricoRichiesteEsito_v1.0.xsd`, che non e' pubblicato insieme al WSDL:
-il parser segue la tabella della specifica.
+il parser segue la tabella della specifica. Il **primo esito realmente
+ricevuto** e' versionato in `tests/fixtures/smts/` e i test ci girano sopra,
+perche' mostra due cose che la tabella non dice:
+
+- `TipoElementi` arriva **maiuscolo** (`FATT`), non `Fatt` come nella tabella.
+  Un confronto esatto scartava in silenzio l'unico archivio prodotto;
+- `NumeroErrori` **manca del tutto** quando non ci sono errori, invece di
+  valere zero;
+- il namespace reale e' `.../ScaricoRichiestaEsito/v1.0`, al singolare, mentre
+  la specifica nomina lo schema `ScaricoRichiesteEsito_v1.0.xsd`, al plurale;
+- `DataFineDisponibilita` e' un **dateTime** con fuso, non una data.
 
 **Attenzione a non confondere due tracciati omonimi.** Esiste anche un
 `InputMassivo` del servizio *Consultazione e Download Massivi* (versione 2.4),
