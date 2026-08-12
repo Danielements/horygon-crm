@@ -3091,6 +3091,13 @@ async function prepareFatturaModal(id = null) {
   document.getElementById('fatt-cig').value = f.cig || '';
   document.getElementById('fatt-cup').value = f.cup || '';
   document.getElementById('fatt-esigibilita-iva').value = f.esigibilita_iva || '';
+  // Serve a salvaFattura per accorgersi se si sta rinumerando un documento
+  // che al SdI e' gia' andato.
+  const modaleFattura = document.getElementById('modal-fattura');
+  if (modaleFattura) {
+    modaleFattura.dataset.statoSdi = f.stato_sdi || '';
+    modaleFattura.dataset.numeroOriginale = f.numero || '';
+  }
   toggleFatturaPaFields(isAnagraficaPa(f) || isAnagraficaPa(findAnagraficaInCache(fatturaAnagraficheCache, f.anagrafica_id)));
   (f.righe?.length ? f.righe : [{}]).forEach(aggiungiRigaFattura);
   (f.riepilogo_iva?.length ? f.riepilogo_iva : [{}]).forEach(aggiungiRiepilogoIva);
@@ -3830,6 +3837,7 @@ function renderFattureRows(targetId, rows) {
       ${['ricevuta','pagata','scaduta','annullata'].map(s=>`<option value="${s}"${f.stato===s?' selected':''}>${s}</option>`).join('')}
     </select></td>
     <td><div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button class="btn btn-outline btn-sm" onclick="editFattura(${f.id})" title="Apri e modifica la fattura">Apri</button>
       <button class="btn btn-outline btn-sm" onclick="previewFattura(${f.id})" title="Anteprima fattura">&#128065;</button>
       <button class="btn btn-outline btn-sm" onclick="openApiPdf('/fatture/${f.id}/pdf-cortesia')" title="Copia di cortesia in PDF">PDF</button>
       ${f.xml_path ? `<button class="btn btn-outline btn-sm" onclick="openFatturaXml(${f.id})" title="Apri XML">XML</button>` : ''}
@@ -3837,6 +3845,13 @@ function renderFattureRows(targetId, rows) {
       ${f.tipo === 'emessa' ? `<button class="btn btn-outline btn-sm" onclick="testSendFatturaSdi(${f.id})">Genera XML TEST</button><button class="btn btn-accent btn-sm" onclick="testTransmitFatturaSdi(${f.id})">Invia a SdI TEST</button>` : ''}
       ${f.tipo === 'ricevuta' ? `<button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC01')">Accetta SdI TEST</button><button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC02')">Rifiuta SdI TEST</button>` : ''}
     </div></td></tr>`).join('');
+}
+
+// Il modale sa gia' modificare una fattura esistente: mancava il pulsante per
+// aprirla, quindi un numero sbagliato non si poteva correggere da nessuna
+// parte.
+async function editFattura(id) {
+  await openModal('modal-fattura', id);
 }
 
 async function loadFattureBySection(section) {
@@ -6750,6 +6765,19 @@ async function modificaPreventivo(id) {
 async function salvaFattura() {
   const id = document.getElementById('fatt-id')?.value;
   const tipo = document.getElementById('fatt-tipo').value;
+  // Rinumerare una fattura mai trasmessa e' una correzione; rinumerarne una
+  // gia' passata dal SdI e' un'altra cosa, e va detto prima.
+  const modaleFattura = document.getElementById('modal-fattura');
+  const numeroOriginale = modaleFattura?.dataset.numeroOriginale || '';
+  const numeroNuovo = document.getElementById('fatt-numero').value;
+  if (id && numeroOriginale && numeroNuovo !== numeroOriginale && modaleFattura?.dataset.statoSdi) {
+    const procedi = confirm(
+      `Questa fattura ha gia' uno stato SdI (${modaleFattura.dataset.statoSdi}).\n\n`
+      + `Cambiare il numero da ${numeroOriginale} a ${numeroNuovo} non modifica il file gia' generato `
+      + 'ne\' quello eventualmente trasmesso. Procedere?'
+    );
+    if (!procedi) return;
+  }
   const body = {
     numero: document.getElementById('fatt-numero').value,
     tipo,

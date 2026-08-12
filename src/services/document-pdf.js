@@ -637,7 +637,14 @@ async function createFatturaPdfBuffer(id) {
   const riepilogo = db.prepare(`
     SELECT * FROM fatture_iva_riepilogo WHERE fattura_id = ? ORDER BY id
   `).all(id);
+  return renderFatturaPdf({ row, righe, riepilogo });
+}
 
+// Il disegno e' separato dalla lettura per poterlo misurare senza toccare il
+// database: la prima versione aveva le colonne fuori dal foglio e la tabella
+// sopra l'intestazione a pagina due, e senza un modo di provarla su dati finti
+// quei difetti si vedevano solo aprendo il PDF.
+async function renderFatturaPdf({ row, righe = [], riepilogo = [] }) {
   const valuta = row.valuta || 'EUR';
   const doc = new PDFDocument({ size: 'A4', margin: 40, bufferPages: true });
   const done = bufferFromDoc(doc);
@@ -647,8 +654,11 @@ async function createFatturaPdfBuffer(id) {
     `Data: ${row.data || '-'}`,
     `Scadenza: ${row.scadenza || '-'}`
   ];
-  const frame = drawCommonFrame(doc, theme, headerLines);
-  const { colors, startX } = frame;
+  // Frame adattivo, lo stesso del DDT: allarga il riquadro e manda a capo il
+  // valore in una colonna sua invece di sovrapporlo alla riga dopo. Con
+  // `drawCommonFrame` un numero lungo finiva sopra la data.
+  const frame = drawDdtFrame(doc, theme, headerLines);
+  const { colors, startX, contentStartY } = frame;
 
   // Su una fattura emessa il cedente siamo noi; su una ricevuta e' la
   // controparte. Invertire le due intestazioni farebbe leggere il documento
@@ -660,7 +670,7 @@ async function createFatturaPdfBuffer(id) {
     row.indirizzo, row.cap, row.citta, row.provincia
   );
 
-  let y = 156;
+  let y = contentStartY;
   drawInfoBox(doc, colors, theme.accent, startX, y, 250, 76, emessa ? 'Cedente / prestatore' : 'Fornitore', emessa ? nostro : loro);
   drawInfoBox(doc, colors, theme.accent, 305, y, 250, 76, emessa ? 'Cessionario / committente' : 'Cessionario', emessa ? loro : nostro);
 
@@ -679,46 +689,70 @@ async function createFatturaPdfBuffer(id) {
   y = drawRowsTable(doc, theme, {
     ...frame,
     y,
-    title: 'Righe fattura',
+    // La tabella e' larga quanto il foglio meno i margini: 515 punti. Le
+    // colonne stanno fra 8 e 507, come nelle altre. Prima l'ultima finiva a
+    // 572 e usciva dal riquadro.
+    title: `Righe fattura (importi in ${valuta})`,
     headerLines,
+    continuationY: contentStartY,
+    drawFrame: drawDdtFrame,
     rows: righe,
+    // La descrizione va a capo: l'altezza della riga si misura, non si
+    // presume, altrimenti due righe di testo escono dalla loro cornice.
+    rowHeight: (r) => {
+      doc.font('Helvetica').fontSize(8.3);
+      return Math.max(26, 14 + doc.heightOfString(String(r.descrizione || r.nome || '-'), { width: 176 }));
+    },
     columns: [
-      { label: 'Codice', x: 8, width: 62, value: (r) => r.codice_articolo || r.codice_interno || '-' },
-      { label: 'Descrizione', x: 76, width: 186, value: (r) => r.descrizione || r.nome || '-' },
-      { label: 'Q.tà', x: 268, width: 40, align: 'right', value: (r) => Number(r.quantita || 0).toFixed(2) },
-      { label: 'Prezzo', x: 314, width: 66, align: 'right', value: (r) => money(r.prezzo_unitario || 0, valuta) },
-      { label: 'Imponibile', x: 386, width: 72, align: 'right', value: (r) => money(r.imponibile || 0, valuta) },
+      { label: 'Codice', x: 8, width: 54, value: (r) => r.codice_articolo || r.codice_interno || '-' },
+      { label: 'Descrizione', x: 66, width: 176, value: (r) => r.descrizione || r.nome || '-' },
+      { label: 'Q.tà', x: 246, width: 32, align: 'right', value: (r) => Number(r.quantita || 0).toFixed(2) },
+      { label: 'Prezzo', x: 282, width: 56, align: 'right', value: (r) => Number(r.prezzo_unitario || 0).toFixed(2) },
+      { label: 'Imponibile', x: 342, width: 60, align: 'right', value: (r) => Number(r.imponibile || 0).toFixed(2) },
       // Su una riga con Natura la percentuale non vuol dire niente: si stampa
       // il codice, che e' l'informazione fiscale vera.
-      { label: 'IVA', x: 464, width: 44, align: 'right', value: (r) => r.natura_iva || `${Number(r.aliquota_iva || 0).toFixed(0)}%` },
-      { label: 'Totale', x: 512, width: 60, align: 'right', value: (r) => money(r.totale_riga || 0, valuta) }
+      { label: 'IVA', x: 406, width: 38, align: 'right', value: (r) => r.natura_iva || `${Number(r.aliquota_iva || 0).toFixed(0)}%` },
+      { label: 'Totale', x: 448, width: 59, align: 'right', value: (r) => Number(r.totale_riga || 0).toFixed(2) }
     ]
   });
 
   y += 18;
-  const altezzaRiepilogo = 40 + Math.max(1, riepilogo.length) * 14;
-  y = ensureDocumentSpace(doc, theme, headerLines, Math.max(altezzaRiepilogo, 96) + 12, y);
-
   const dettaglioIva = riepilogo.length
     ? riepilogo.map((r) => {
         const etichetta = r.natura_iva ? r.natura_iva : `${Number(r.aliquota_iva || 0).toFixed(0)}%`;
-        return `${etichetta}  imponibile ${money(r.imponibile || 0, valuta)}  imposta ${money(r.imposta || 0, valuta)}`;
+        return `${etichetta}  imponibile ${Number(r.imponibile || 0).toFixed(2)}  imposta ${Number(r.imposta || 0).toFixed(2)}`;
       }).join('\n')
     : 'Nessun riepilogo IVA registrato';
-  drawInfoBox(doc, colors, theme.accent, 40, y, 250, altezzaRiepilogo, 'Riepilogo IVA', dettaglioIva);
-  drawInfoBox(doc, colors, theme.accent, 305, y, 250, altezzaRiepilogo, 'Totali', [
+  const totaliText = [
     `Imponibile: ${money(row.imponibile || 0, valuta)}`,
     `IVA: ${money(row.iva || 0, valuta)}`,
     `Totale documento: ${money(row.totale || 0, valuta)}`
-  ].join('\n'), theme.fill);
+  ].join('\n');
+
+  // L'altezza dei due riquadri si misura sul testo che ci va dentro invece di
+  // stimarla a quattordici punti per riga: con molti trattamenti IVA il
+  // riepilogo usciva dalla sua cornice.
+  doc.font('Helvetica').fontSize(9);
+  const altezzaRiepilogo = Math.max(
+    76,
+    34 + doc.heightOfString(dettaglioIva, { width: 230 }),
+    34 + doc.heightOfString(totaliText, { width: 230 })
+  );
+  y = ensureDocumentSpace(doc, theme, headerLines, altezzaRiepilogo + 12, y, contentStartY, { drawFrame: drawDdtFrame });
+
+  drawInfoBox(doc, colors, theme.accent, 40, y, 250, altezzaRiepilogo, 'Riepilogo IVA', dettaglioIva);
+  drawInfoBox(doc, colors, theme.accent, 305, y, 250, altezzaRiepilogo, 'Totali', totaliText, theme.fill);
 
   y += altezzaRiepilogo + 14;
-  y = ensureDocumentSpace(doc, theme, headerLines, 70, y);
-  drawInfoBox(doc, colors, theme.accent, 40, y, 515, 60, 'Note', row.note || 'Nessuna nota');
+  doc.font('Helvetica').fontSize(10);
+  const testoNote = row.note || 'Nessuna nota';
+  const altezzaNote = Math.max(60, Math.min(160, 34 + doc.heightOfString(testoNote, { width: 495 })));
+  y = ensureDocumentSpace(doc, theme, headerLines, altezzaNote + 6, y, contentStartY, { drawFrame: drawDdtFrame });
+  drawInfoBox(doc, colors, theme.accent, 40, y, 515, altezzaNote, 'Note', testoNote);
 
-  y += 74;
-  y = ensureDocumentSpace(doc, theme, headerLines, 30, y);
-  doc.fillColor(colors.muted).fontSize(8)
+  y += altezzaNote + 14;
+  y = ensureDocumentSpace(doc, theme, headerLines, 30, y, contentStartY, { drawFrame: drawDdtFrame });
+  doc.fillColor(colors.muted).font('Helvetica').fontSize(8)
     .text(
       'Copia di cortesia. L\'originale della fattura elettronica e\' il file XML trasmesso al Sistema di Interscambio.',
       40, y, { width: 515 }
@@ -746,5 +780,6 @@ module.exports = {
   createPreventivoPdfBuffer,
   createOrdinePdfBuffer,
   createDdtPdfBuffer,
-  createFatturaPdfBuffer
+  createFatturaPdfBuffer,
+  renderFatturaPdf
 };

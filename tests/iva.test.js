@@ -15,7 +15,7 @@ const {
 } = require('../src/services/iva');
 const { backfillSnapshotIva } = require('../src/db/backfill-iva');
 const { nextNumeroFattura } = require('../src/services/fattura-numerazione');
-const { createFatturaPdfBuffer } = require('../src/services/document-pdf');
+const { createFatturaPdfBuffer, renderFatturaPdf } = require('../src/services/document-pdf');
 
 // --- ambiente ---------------------------------------------------------------
 //
@@ -442,6 +442,116 @@ test('la migrazione non ripassa sulle righe gia allineate', () => {
   const riga = db.prepare('SELECT aliquota_iva, codice_iva FROM ordini_righe WHERE ordine_id = ?').get(ordineId);
   assert.equal(riga.aliquota_iva, 10);
   assert.equal(riga.codice_iva, 'IVA10');
+});
+
+// Il PDF si misura, non si guarda.
+//
+// La prima versione aveva le colonne oltre il bordo del foglio e, a pagina
+// due, la tabella sopra l'intestazione: difetti che si vedono solo aprendo il
+// file, e che quindi tornano. Qui si intercetta ogni `doc.text` e si controlla
+// dove finisce davvero.
+function misuraPdf(disegna) {
+  const PDFDocument = require('pdfkit');
+  const originaleText = PDFDocument.prototype.text;
+  const originaleAddPage = PDFDocument.prototype.addPage;
+  const scritte = [];
+  // Il costruttore di PDFDocument chiama gia' addPage per la prima pagina:
+  // il contatore parte da zero e non da uno.
+  let pagina = 0;
+  PDFDocument.prototype.addPage = function (...args) { pagina += 1; return originaleAddPage.apply(this, args); };
+  PDFDocument.prototype.text = function (testo, x, y, opzioni) {
+    if (typeof x === 'number' && typeof y === 'number') {
+      const larghezza = opzioni && opzioni.width ? opzioni.width : this.widthOfString(String(testo));
+      scritte.push({
+        pagina, x, y,
+        testo: String(testo).replace(/\s+/g, ' ').slice(0, 40),
+        destra: x + larghezza,
+        basso: y + this.heightOfString(String(testo), opzioni || {})
+      });
+    }
+    return originaleText.apply(this, arguments);
+  };
+  return disegna().then((risultato) => {
+    PDFDocument.prototype.text = originaleText;
+    PDFDocument.prototype.addPage = originaleAddPage;
+    return { risultato, scritte, pagine: pagina };
+  }, (errore) => {
+    PDFDocument.prototype.text = originaleText;
+    PDFDocument.prototype.addPage = originaleAddPage;
+    throw errore;
+  });
+}
+
+function fatturaFinta(numeroRighe) {
+  const righe = Array.from({ length: numeroRighe }, (unused, i) => ({
+    codice_articolo: `COD${i}`,
+    descrizione: `Articolo di prova numero ${i} con una descrizione lunga che deve andare a capo`,
+    quantita: 100 + i, prezzo_unitario: 12345.67, imponibile: 12345.67,
+    aliquota_iva: 22, natura_iva: null, importo_iva: 2716.05, totale_riga: 15061.72
+  }));
+  return {
+    // Numero volutamente lungo: e' quello che mandava a capo l'intestazione.
+    row: {
+      id: 1, numero: 'FAT-2026-RD-PREV-20260625-354', numero_documento: 'FAT-2026-RD-PREV-20260625-354',
+      tipo: 'emessa', data: '2026-06-25', scadenza: '2026-08-24',
+      imponibile: 160493.71, iva: 35308.62, totale: 195802.33, valuta: 'EUR',
+      ragione_sociale: 'AERONAUTICA MILITARE 70 STORMO', indirizzo: "Via dell'Aeroporto, 1",
+      cap: '04013', citta: 'Latina', provincia: 'LT', codice_fiscale: '80007090592',
+      codice_ordine: 'ORD-PREV-20260625-354', cig: 'B1C2D3E4F5', cup: 'F81B26000000001',
+      note: 'Consegna presso magazzino, orario 8-13.'
+    },
+    righe,
+    riepilogo: [
+      { aliquota_iva: 22, natura_iva: null, imponibile: 160493.71, imposta: 35308.62 },
+      { aliquota_iva: 10, natura_iva: null, imponibile: 1000, imposta: 100 },
+      { aliquota_iva: 0, natura_iva: 'N4', imponibile: 500, imposta: 0 },
+      { aliquota_iva: 0, natura_iva: 'N3.1', imponibile: 250, imposta: 0 }
+    ]
+  };
+}
+
+test('il PDF della fattura sta dentro i margini e non scrive sopra l intestazione', async () => {
+  const dati = fatturaFinta(13);
+  const { scritte, pagine } = await misuraPdf(() => renderFatturaPdf(dati));
+  assert.equal(pagine > 1, true, 'con tredici righe il documento deve andare a capo pagina');
+
+  const BORDO_DESTRO = 555;   // margine 40 + larghezza utile 515
+  const BANDA_PIEDE = 786;    // sotto questa riga c'e' solo il pie' di pagina
+  const contenuto = scritte.filter((s) => s.y < BANDA_PIEDE);
+
+  const fuori = contenuto.filter((s) => s.destra > BORDO_DESTRO + 0.5);
+  assert.deepEqual(fuori.map((s) => `${s.testo} @${Math.round(s.destra)}`), [], 'testo oltre il margine destro');
+
+  const sotto = contenuto.filter((s) => s.basso > BANDA_PIEDE + 1);
+  assert.deepEqual(sotto.map((s) => `${s.testo} @${Math.round(s.basso)}`), [], 'testo sotto il pie di pagina');
+
+  // Il riquadro dell'intestazione arriva a 138 abbondanti: nessun contenuto
+  // deve cominciare li' dentro, su nessuna pagina.
+  const perPagina = new Map();
+  contenuto.filter((s) => s.y > 150).forEach((s) => {
+    if (!perPagina.has(s.pagina) || s.y < perPagina.get(s.pagina)) perPagina.set(s.pagina, s.y);
+  });
+  for (const [numero, primaY] of perPagina) {
+    assert.equal(primaY > 150, true, `pagina ${numero}: il contenuto comincia a ${primaY}, sull intestazione`);
+  }
+});
+
+test('le righe dell intestazione non si sovrappongono nemmeno con un numero lungo', async () => {
+  const { scritte } = await misuraPdf(() => renderFatturaPdf(fatturaFinta(2)));
+  // Le tre voci del riquadro in alto a destra, sulla prima pagina disegnata.
+  const primaPagina = Math.min(...scritte.map((s) => s.pagina));
+  const voci = scritte
+    .filter((s) => s.pagina === primaPagina && s.y >= 88 && s.y < 160 && s.x > 250)
+    .sort((a, b) => a.y - b.y);
+  assert.equal(voci.length >= 3, true, 'il riquadro deve riportare numero, data e scadenza');
+  for (let i = 1; i < voci.length; i += 1) {
+    if (Math.abs(voci[i].x - voci[i - 1].x) > 0.5) continue;
+    assert.equal(
+      voci[i].y >= voci[i - 1].basso - 0.5,
+      true,
+      `"${voci[i - 1].testo}" finisce a ${Math.round(voci[i - 1].basso)} e "${voci[i].testo}" comincia a ${Math.round(voci[i].y)}`
+    );
+  }
 });
 
 test('la copia di cortesia in PDF si genera e riporta i totali', async () => {
