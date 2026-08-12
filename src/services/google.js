@@ -2,6 +2,7 @@ const { google } = require('googleapis');
 const db = require('../db/database');
 const { writeSystemLog } = require('./system-log');
 const { sendPushToUserIds } = require('./push');
+const { outboundBlocked } = require('./outbound');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS mepa_mail_alerts (
@@ -642,6 +643,9 @@ function buildRawEmail({ to, subject, text, attachments = [] }) {
 }
 
 async function sendMail(utente_id, to, subject, text, attachments = []) {
+  // Unico punto da cui esce posta: notifiche, invii ai clienti e documenti
+  // passano tutti di qui, quindi basta questa riga per non farne uscire.
+  if (outboundBlocked('gmail', { to, subject })) return { blocked: true };
   const client = getCalendarClient(utente_id);
   if (!client) throw new Error('Google non connesso');
   const gmail = google.gmail({ version: 'v1', auth: client });
@@ -774,19 +778,23 @@ async function sendMailToRecipients(senderUserId, recipients = [], subject, text
       .map(v => String(v || '').trim())
       .filter(Boolean)
   )];
-  if (!senderUserId || !cleanRecipients.length) return { sent: 0, failed: 0 };
+  if (!senderUserId || !cleanRecipients.length) return { sent: 0, failed: 0, blocked: 0 };
   let sent = 0;
   let failed = 0;
+  let blocked = 0;
   for (const recipient of cleanRecipients) {
     try {
-      await sendMail(senderUserId, recipient, subject, text, attachments);
+      const esito = await sendMail(senderUserId, recipient, subject, text, attachments);
+      // Bloccato non e' inviato: se lo contassimo fra i riusciti, il chiamante
+      // direbbe all'utente che la mail e' partita quando non e' mai uscita.
+      if (esito?.blocked) { blocked += 1; continue; }
       sent += 1;
     } catch (e) {
       logGoogleError('notifications.sendMailToRecipients', e, { senderUserId, to: recipient, subject });
       failed += 1;
     }
   }
-  return { sent, failed };
+  return { sent, failed, blocked };
 }
 
 async function notifyUsersWithEmail({
@@ -814,7 +822,7 @@ async function notifyUsersWithEmail({
     uniqueSuffix
   });
   const recipients = notificationTargets.map(target => target.userId);
-  let email = { sent: 0, failed: 0, skipped: true };
+  let email = { sent: 0, failed: 0, blocked: 0, skipped: true };
   if (emailSettingKey && getSetting(emailSettingKey, '0') === '1' && recipients.length) {
     const resolvedRecipients = resolveUserNotificationEmails(recipients);
     const resolvedIds = new Set(resolvedRecipients.map(recipient => Number(recipient.id)));
@@ -845,12 +853,15 @@ async function notifyUsersWithEmail({
       const target = notificationTargets.find(item => Number(item.userId) === Number(recipient.id));
       let ok = 0;
       try {
-        await sendMail(
+        const esito = await sendMail(
           senderUserId,
           recipient.email,
           emailSubject || `[Horygon] ${titolo}`,
           emailText || `${titolo}\n\n${messaggio || ''}`
         );
+        // La notifica in app resta, ma senza flag di invio: non risulta
+        // tentata, perche' davvero non lo e' stata.
+        if (esito?.blocked) { email.blocked += 1; continue; }
         ok = 1;
         email.sent += 1;
       } catch (e) {
@@ -895,7 +906,10 @@ async function dispatchPendingNotificationEmails(senderUserId) {
     const recipient = resolveUserNotificationEmails([row.user_id])[0];
     try {
       if (!recipient?.email) throw new Error('Email destinatario non trovata');
-      await sendMail(senderUserId, recipient.email, `[Horygon] ${row.titolo}`, `${row.titolo}\n\n${row.messaggio || ''}`);
+      const esito = await sendMail(senderUserId, recipient.email, `[Horygon] ${row.titolo}`, `${row.titolo}\n\n${row.messaggio || ''}`);
+      // Senza il flag la notifica resta in coda e verra' ripresa quando gli
+      // invii sono di nuovo permessi: un test non deve consumarla.
+      if (esito?.blocked) continue;
       ok = 1;
       sent += 1;
     } catch (e) {

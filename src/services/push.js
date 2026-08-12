@@ -1,6 +1,7 @@
 const webpush = require('web-push');
 const db = require('../db/database');
 const { writeSystemLog } = require('./system-log');
+const { outboundBlocked } = require('./outbound');
 
 const PUBLIC_KEY = String(process.env.WEB_PUSH_PUBLIC_KEY || '').trim();
 const PRIVATE_KEY = String(process.env.WEB_PUSH_PRIVATE_KEY || '').trim();
@@ -97,6 +98,11 @@ function getUnreadNotificationCount(userId) {
 }
 
 async function sendPushToUserIds(userIds = [], payload = {}) {
+  // Le iscrizioni push nel database di sviluppo sono quelle vere dei colleghi:
+  // un test che notifica farebbe vibrare i loro telefoni.
+  if (outboundBlocked('web-push', { userIds })) {
+    return { sent: 0, failed: 0, skipped: true, reason: 'test_run' };
+  }
   if (!isPushConfigured()) {
     return { sent: 0, failed: 0, skipped: true, reason: 'not_configured' };
   }
