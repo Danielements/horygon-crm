@@ -23,6 +23,53 @@ function preparePreventivoRiga(riga = {}) {
   return calcolaRiga(conTrattamento);
 }
 
+// Il preventivo guarda la giacenza, ma non la impegna e non blocca.
+//
+// Preventivare merce che non e' in magazzino e' legittimo: la si ordina al
+// fornitore quando il cliente accetta. Quello che non deve succedere e'
+// scoprirlo alla consegna, quindi il salvataggio risponde con l'elenco delle
+// righe scoperte e l'interfaccia lo mostra.
+//
+// La formula della giacenza e' quella usata da tutti gli altri moduli, con le
+// rettifiche contate: una lettura diversa qui darebbe due verita' diverse
+// sullo stesso prodotto.
+function verificaDisponibilita(righe = []) {
+  const giacenza = db.prepare(`
+    SELECT COALESCE(SUM(CASE
+      WHEN tipo = 'carico' THEN quantita
+      WHEN tipo IN ('scarico','reso') THEN -quantita
+      WHEN tipo = 'rettifica' THEN quantita
+      ELSE 0
+    END), 0) AS q
+    FROM magazzino_movimenti WHERE prodotto_id = ?
+  `);
+  const nome = db.prepare('SELECT nome, codice_interno FROM prodotti WHERE id = ?');
+
+  const richiestoPerProdotto = new Map();
+  (righe || []).forEach((riga) => {
+    const prodottoId = i(riga.prodotto_id);
+    const quantita = n(riga.quantita) || 0;
+    if (!prodottoId || quantita <= 0) return;
+    richiestoPerProdotto.set(prodottoId, (richiestoPerProdotto.get(prodottoId) || 0) + quantita);
+  });
+
+  const scoperte = [];
+  for (const [prodottoId, richiesta] of richiestoPerProdotto) {
+    const disponibile = Number(giacenza.get(prodottoId)?.q || 0);
+    if (richiesta > disponibile) {
+      const p = nome.get(prodottoId);
+      scoperte.push({
+        prodotto_id: prodottoId,
+        prodotto: p?.nome || p?.codice_interno || `#${prodottoId}`,
+        richiesta,
+        disponibile,
+        mancante: Math.round((richiesta - disponibile) * 100) / 100
+      });
+    }
+  }
+  return scoperte;
+}
+
 function insertPreventivoRighe(preventivoId, righe = []) {
   const ins = db.prepare(`
     INSERT INTO preventivi_righe (
@@ -149,7 +196,7 @@ router.post('/', requirePermesso('ordini', 'edit'), (req, res) => {
     );
     const id = r.lastInsertRowid;
     insertPreventivoRighe(id, b.righe);
-    res.json({ id });
+    res.json({ id, disponibilita: verificaDisponibilita(b.righe) });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
@@ -177,7 +224,7 @@ router.put('/:id', requirePermesso('ordini', 'edit'), (req, res) => {
     );
     db.prepare('DELETE FROM preventivi_righe WHERE preventivo_id = ?').run(req.params.id);
     insertPreventivoRighe(req.params.id, b.righe);
-    res.json({ ok: true });
+    res.json({ ok: true, disponibilita: verificaDisponibilita(b.righe) });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }

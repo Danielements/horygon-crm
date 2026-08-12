@@ -334,6 +334,24 @@ router.patch('/:id/stato', requirePermesso('ordini', 'edit'), async (req, res, n
     if (!current) return res.status(404).json({ error: 'Ordine non trovato' });
 
     db.prepare('UPDATE ordini SET stato=? WHERE id=?').run(nextState, req.params.id);
+
+    // Un ordine annullato libera la merce che aveva impegnato: restava
+    // prenotata per sempre, e la giacenza mostrava meno pezzi di quanti ce ne
+    // fossero davvero in magazzino.
+    if (String(nextState).toLowerCase() === 'annullato') {
+      const liberati = db.prepare(
+        'DELETE FROM magazzino_movimenti WHERE riferimento_tipo = ? AND riferimento_id = ?'
+      ).run('ordine', req.params.id);
+      if (liberati.changes) {
+        writeAudit({
+          utente_id: req.user.id,
+          azione: 'ordine_magazzino_liberato',
+          entita_tipo: 'ordine',
+          entita_id: Number(req.params.id),
+          dettagli: { codice: current.codice_ordine, movimenti_rimossi: liberati.changes }
+        });
+      }
+    }
     if ((current.stato || '') !== nextState) {
       writeAudit({
         utente_id: req.user.id,

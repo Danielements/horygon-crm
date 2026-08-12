@@ -592,6 +592,50 @@ test('modificare una fattura non le stacca l ordine di origine', async () => {
   db.prepare('DELETE FROM fatture WHERE id = ?').run(fattura.fattura_id);
 });
 
+// Il preventivo guarda il magazzino ma non lo impegna: preventivare merce da
+// ordinare e' normale, accorgersene alla consegna no.
+test('il preventivo segnala la merce che non c e, senza rifiutare il salvataggio', async () => {
+  const prodottoId = creaProdotto('DISP', IVA22.id);
+  // creaProdotto carica 1000 pezzi: ne chiedo 1500.
+  const esito = await call('POST', '/api/preventivi', {
+    codice_preventivo: `${MARKER}-PRE-DISP`,
+    data_preventivo: '2026-08-12',
+    righe: [{ prodotto_id: prodottoId, descrizione: 'Riga scoperta', quantita: 1500, prezzo_unitario: 1, regola_iva_id: IVA22.id }]
+  });
+  assert.equal(Number(esito.id) > 0, true, 'il preventivo si deve salvare lo stesso');
+  assert.equal(esito.disponibilita.length, 1);
+  assert.deepEqual(
+    { richiesta: esito.disponibilita[0].richiesta, disponibile: esito.disponibilita[0].disponibile, mancante: esito.disponibilita[0].mancante },
+    { richiesta: 1500, disponibile: 1000, mancante: 500 }
+  );
+
+  // Con quantita' entro la giacenza non segnala niente.
+  const dentro = await call('POST', '/api/preventivi', {
+    codice_preventivo: `${MARKER}-PRE-DISP-OK`,
+    data_preventivo: '2026-08-12',
+    righe: [{ prodotto_id: prodottoId, descrizione: 'Riga coperta', quantita: 10, prezzo_unitario: 1, regola_iva_id: IVA22.id }]
+  });
+  assert.deepEqual(dentro.disponibilita, []);
+});
+
+test('annullare un ordine libera la merce che aveva impegnato', async () => {
+  const prodottoId = creaProdotto('ANNUL', IVA22.id);
+  const ordine = await call('POST', '/api/ordini', {
+    codice_ordine: `${MARKER}-ORD-ANNUL`, tipo: 'vendita', data_ordine: '2026-08-12',
+    righe: [{ prodotto_id: prodottoId, quantita: 500, prezzo_unitario: 1 }]
+  });
+  const impegnati = db.prepare(
+    "SELECT COUNT(*) n FROM magazzino_movimenti WHERE riferimento_tipo = 'ordine' AND riferimento_id = ?"
+  ).get(ordine.id).n;
+  assert.equal(impegnati > 0, true, 'un ordine vendita impegna la merce');
+
+  await call('PATCH', `/api/ordini/${ordine.id}/stato`, { stato: 'annullato' });
+  const dopo = db.prepare(
+    "SELECT COUNT(*) n FROM magazzino_movimenti WHERE riferimento_tipo = 'ordine' AND riferimento_id = ?"
+  ).get(ordine.id).n;
+  assert.equal(dopo, 0, 'annullando, la merce torna disponibile');
+});
+
 // Modificare il CIG di un ordine gia' consegnato falliva con "Giacenza
 // insufficiente": il salvataggio rifaceva la prenotazione di magazzino per
 // merce che era gia' uscita con il DDT.

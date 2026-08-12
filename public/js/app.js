@@ -6814,10 +6814,20 @@ async function salvaPreventivo() {
     righe: collectDocumentoRighe('prev')
   };
   try {
-    if (id) await api('PUT', `/preventivi/${id}`, body);
-    else await api('POST', '/preventivi', body);
+    const esito = id
+      ? await api('PUT', `/preventivi/${id}`, body)
+      : await api('POST', '/preventivi', body);
     closeAllModals();
     toast('Preventivo salvato', 'success');
+    // Il preventivo si salva comunque: preventivare merce da ordinare al
+    // fornitore e' normale. Quello che non deve succedere e' accorgersene
+    // alla consegna.
+    if (esito?.disponibilita?.length) {
+      const elenco = esito.disponibilita
+        .map((d) => `${d.prodotto}: richiesti ${d.richiesta}, disponibili ${d.disponibile}`)
+        .join(' — ');
+      toast(`Attenzione, merce non a magazzino: ${elenco}`, 'error');
+    }
     loadPreventivi();
   } catch (e) { toast(e.message, 'error'); }
 }
