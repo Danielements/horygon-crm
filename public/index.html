@@ -1471,7 +1471,14 @@
       <div class="form-row">
         <div class="form-group"><label>P.IVA</label><input type="text" id="fatt-piva"></div>
         <div class="form-group"><label>Codice fiscale</label><input type="text" id="fatt-cf"></div>
-        <div class="form-group"><label>SDI ID</label><input type="text" id="fatt-sdi"></div>
+        <div class="form-group">
+          <label>Identificativo SdI</label>
+          <input type="text" id="fatt-sdi" placeholder="lo assegna SdI alla ricezione">
+          <div style="font-size:12px;color:var(--text-muted);margin-top:4px">
+            Numerico, e arriva da SdI: non e' il Codice Univoco Ufficio del cliente, che sta sull'anagrafica.
+            Se e' valorizzato, il CRM considera la fattura gia' trasmessa e non la fa piu' eliminare.
+          </div>
+        </div>
       </div>
       <div id="fatt-riferimenti-pa" style="display:none">
         <div class="form-row">

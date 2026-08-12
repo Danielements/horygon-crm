@@ -592,6 +592,30 @@ test('modificare una fattura non le stacca l ordine di origine', async () => {
   db.prepare('DELETE FROM fatture WHERE id = ?').run(fattura.fattura_id);
 });
 
+// Si fattura da un ordine confermato in poi: e' l'ordine gia' consegnato quello
+// che si fattura piu' spesso, e prima veniva rifiutato.
+test('un ordine consegnato si fattura, uno solo ricevuto no', async () => {
+  const prodottoId = creaProdotto('STATI', IVA22.id);
+  const ordine = await call('POST', '/api/ordini', {
+    codice_ordine: `${MARKER}-ORD-STATI`, tipo: 'vendita', data_ordine: '2026-08-12',
+    righe: [{ prodotto_id: prodottoId, quantita: 1, prezzo_unitario: 100 }]
+  });
+
+  // Appena ricevuto non si fattura.
+  await assert.rejects(
+    () => call('POST', `/api/ordini/${ordine.id}/convert-to-fattura`, {}),
+    /non si fattura/
+  );
+
+  await call('PATCH', `/api/ordini/${ordine.id}/stato`, { stato: 'consegnato' });
+  const fattura = await call('POST', `/api/ordini/${ordine.id}/convert-to-fattura`, {});
+  assert.equal(Number(fattura.fattura_id) > 0, true, 'un ordine consegnato deve essere fatturabile');
+
+  db.prepare('DELETE FROM fatture_righe WHERE fattura_id = ?').run(fattura.fattura_id);
+  db.prepare('DELETE FROM fatture_iva_riepilogo WHERE fattura_id = ?').run(fattura.fattura_id);
+  db.prepare('DELETE FROM fatture WHERE id = ?').run(fattura.fattura_id);
+});
+
 test('una fattura mai trasmessa si elimina, una con identificativo SdI no', async () => {
   const prodottoId = creaProdotto('DEL', IVA22.id);
   const ordine = await call('POST', '/api/ordini', {

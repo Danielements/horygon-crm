@@ -378,8 +378,16 @@ router.post('/:id/convert-to-fattura', requirePermesso('fatture', 'edit'), (req,
   if (ordine.tipo !== 'vendita') {
     return res.status(400).json({ error: 'La fattura puo essere generata solo da ordini vendita' });
   }
-  if (String(ordine.stato || '').toLowerCase() !== 'confermato') {
-    return res.status(400).json({ error: 'La fattura puo essere generata solo da ordini confermati' });
+  // Si fattura da un ordine confermato in poi, consegnato compreso: la fattura
+  // segue la merce, non la precede. Accettare il solo stato 'confermato'
+  // rendeva non fatturabile un ordine appena passava a 'spedito', ed e' l'ordine
+  // gia' consegnato quello che si fattura piu' spesso.
+  const FATTURABILI = ['confermato', 'in_lavorazione', 'spedito', 'consegnato'];
+  const statoOrdine = String(ordine.stato || '').toLowerCase();
+  if (!FATTURABILI.includes(statoOrdine)) {
+    return res.status(400).json({
+      error: `Un ordine in stato "${statoOrdine || 'sconosciuto'}" non si fattura: serve almeno la conferma (${FATTURABILI.join(', ')})`
+    });
   }
   const existingInvoice = db.prepare('SELECT id, numero FROM fatture WHERE ordine_id = ? LIMIT 1').get(ordineId);
   if (existingInvoice) {

@@ -6839,6 +6839,18 @@ async function salvaFattura() {
     );
     if (!procedi) return;
   }
+  // L'identificativo SdI e' numerico. Ci era finito dentro il Codice Univoco
+  // Ufficio del cliente, e da quel momento il CRM considerava la fattura
+  // trasmessa e si rifiutava di eliminarla.
+  const identificativoSdi = String(document.getElementById('fatt-sdi').value || '').trim();
+  if (identificativoSdi && !/^\d+$/.test(identificativoSdi)) {
+    const procedi = confirm(
+      `"${identificativoSdi}" non sembra un Identificativo SdI: quello lo assegna SdI ed e' numerico.\n\n`
+      + 'Se e\' il Codice Univoco Ufficio del cliente va sull\'anagrafica, non qui. '
+      + 'Lasciandolo, la fattura risultera\' gia\' trasmessa e non potra\' piu\' essere eliminata.\n\nProcedere comunque?'
+    );
+    if (!procedi) return;
+  }
   const body = {
     numero: document.getElementById('fatt-numero').value,
     tipo,
