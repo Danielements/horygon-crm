@@ -111,12 +111,12 @@ function loadCompanyProfile() {
     country: normalizeCountry(getSetting('sdi.company.country', 'IT')),
     vat: normalizeVat(getSetting('sdi.company.vat', '')),
     fiscalCode: normalizeIdentifier(getSetting('sdi.company.fiscal_code', '')),
-    denomination: String(getSetting('sdi.company.denomination', '') || '').trim(),
+    denomination: normalizeLatinText(getSetting('sdi.company.denomination', '')),
     regimeFiscale: String(getSetting('sdi.company.regime_fiscale', 'RF01') || 'RF01').trim(),
-    address: String(getSetting('sdi.company.address', '') || '').trim(),
+    address: normalizeLatinText(getSetting('sdi.company.address', '')),
     streetNumber: String(getSetting('sdi.company.street_number', '') || '').trim(),
     cap: String(getSetting('sdi.company.cap', '') || '').trim(),
-    city: String(getSetting('sdi.company.city', '') || '').trim(),
+    city: normalizeLatinText(getSetting('sdi.company.city', '')),
     province: String(getSetting('sdi.company.province', '') || '').trim().toUpperCase(),
     pec: String(getSetting('sdi.company.pec', '') || '').trim(),
     email: String(getSetting('sdi.company.email', '') || '').trim(),
@@ -158,7 +158,12 @@ function loadRecipientProfile(anagraficaId) {
   return {
     ...customer,
     destinationCode,
-    isPa: customer.tipo === 'pa',
+    // Una PA si riconosce dal tipo di record oppure dalla tipologia cliente.
+    // Sono due strade diverse per dire la stessa cosa: una scheda creata dalla
+    // sezione Clienti resta `tipo = 'cliente'` e porta la PA in
+    // `tipologia_cliente`. Guardare solo `tipo` faceva emettere una FPR12 a una
+    // Pubblica Amministrazione, senza codice univoco ufficio e senza firma.
+    isPa: customer.tipo === 'pa' || customer.tipologia_cliente === 'pa',
     escludiSplitPayment: Number(customer.escludi_split_payment || 0) === 1
   };
 }
@@ -183,7 +188,7 @@ function buildInvoicePayload(invoice, company, customer, options = {}) {
     const aliquotaIva = toAmount(line.aliquota_iva) || 0;
     return {
       numeroLinea: index + 1,
-      descrizione: line.descrizione || `Riga ${index + 1}`,
+      descrizione: normalizeLatinText(line.descrizione) || `Riga ${index + 1}`,
       quantita,
       unitaMisura: String(line.unita_misura || 'NR').trim(),
       prezzoUnitario,
@@ -248,11 +253,11 @@ function buildInvoicePayload(invoice, company, customer, options = {}) {
       phone: String(getSetting('sdi.transmitter.phone', company.phone || '') || '').trim()
     },
     customer: {
-      denomination: String(customer.ragione_sociale || '').trim(),
-      address: String(customer.indirizzo || '').trim(),
+      denomination: normalizeLatinText(customer.ragione_sociale),
+      address: normalizeLatinText(customer.indirizzo),
       streetNumber: '',
       cap: String(customer.cap || '').trim(),
-      city: String(customer.citta || '').trim(),
+      city: normalizeLatinText(customer.citta),
       province: String(customer.provincia || '').trim().toUpperCase(),
       country: normalizeCountry(customer.paese || 'IT'),
       fiscalCode: normalizeCustomerFiscalCode(customer.cf, customerVat),
@@ -482,6 +487,36 @@ function normalizeCountry(value) {
   return String(value || '').trim().toUpperCase();
 }
 
+// I tipi testuali della FatturaPA (String\d+LatinType) ammettono un pattern
+// ristretto a Basic Latin e Latin-1 Supplement, cioe' fino a U+00FF. Le
+// virgolette e i trattini tipografici arrivano da qualunque copia-incolla e
+// stanno fuori da entrambi: "Via dell'Aeroporto" scritto con l'apostrofo
+// curvo fa fallire la validazione XSD. Verificato sull'anagrafica reale.
+//
+// Qui si sostituisce solo la punteggiatura tipografica con il suo equivalente
+// ASCII, che e' lo stesso carattere scritto in un altro modo. Tutto il resto
+// che sta fuori dall'intervallo **non** viene toccato: se una denominazione
+// contiene caratteri non latini e' giusto che la validazione lo dica, invece
+// di spedire un nome mutilato.
+const PUNTEGGIATURA_TIPOGRAFICA = new Map([
+  ['‘', "'"], ['’', "'"], ['‚', "'"], ['‛', "'"],
+  ['“', '"'], ['”', '"'], ['„', '"'], ['‟', '"'],
+  ['‐', '-'], ['‑', '-'], ['‒', '-'], ['–', '-'],
+  ['—', '-'], ['―', '-'], ['−', '-'],
+  ['…', '...'], ['•', '-'], [' ', ' '],
+  ['⁄', '/'], ['ʼ', "'"], ['´', "'"], ['′', "'"], ['″', '"']
+]);
+
+function normalizeLatinText(value) {
+  const text = String(value ?? '');
+  if (!text) return text;
+  let normalized = '';
+  for (const char of text) {
+    normalized += PUNTEGGIATURA_TIPOGRAFICA.get(char) ?? char;
+  }
+  return normalized.replace(/\s+/g, ' ').trim();
+}
+
 function normalizeDate(value) {
   if (!value) return '';
   const str = String(value).trim();
@@ -526,5 +561,6 @@ module.exports = {
   buildFilenameProgressivo,
   buildInvoicePayload,
   generateOutboundXmlForInvoice,
-  normalizeCustomerFiscalCode
+  normalizeCustomerFiscalCode,
+  normalizeLatinText
 };

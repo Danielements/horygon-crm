@@ -8,7 +8,7 @@ const { validateInvoiceXml } = require('../src/services/sdi-xml-validator');
 const { parseSdiNotificationXml } = require('../src/services/sdi-notification-parser');
 const { receiveSdiNotificationXml } = require('../src/services/sdi-inbound');
 const { getSchemaRegistryEntry, listSchemaRegistry, syncSchemaRegistry } = require('../src/services/sdi-schema-registry');
-const { buildFilename, buildFilenameProgressivo, buildInvoicePayload, normalizeCustomerFiscalCode } = require('../src/services/sdi-fatturapa');
+const { buildFilename, buildFilenameProgressivo, buildInvoicePayload, normalizeCustomerFiscalCode, normalizeLatinText } = require('../src/services/sdi-fatturapa');
 const { buildRiceviFileMtomMessage, buildRiceviFileSoapEnvelope, extractXmlFromHttpResponse, parseRiceviFileResponse } = require('../src/services/sdi-transmission');
 const {
   MESSAGGI_NS,
@@ -351,6 +351,40 @@ test('private customer with a CIG still gets the correlated document block', () 
   );
   assert.equal(payload.esigibilitaIva, 'I');
   assert.equal(payload.datiOrdineAcquisto.codiceCig, 'B1C2D3E4F5');
+});
+
+// Trovato sull'anagrafica reale dell'Aeronautica: "Via dell'Aeroporto" scritto
+// con l'apostrofo tipografico. Gli String*LatinType della FatturaPA ammettono
+// solo fino a U+00FF, quindi l'XSD lo rifiuta — dopo che la firma qualificata
+// e' stata spesa.
+test('typographic punctuation is normalised so the address passes the Latin pattern', async () => {
+  const payload = buildInvoicePayload(
+    makeAeronauticaInvoice(),
+    makeOrdinaryPayload('FPA12').company,
+    makeAeronauticaCustomer({ indirizzo: 'Via dell’Aeroporto, 1 – palazzina C' }),
+    { mode: 'test', progressivo: 'H0050' }
+  );
+  assert.equal(payload.customer.address, "Via dell'Aeroporto, 1 - palazzina C");
+  const result = await validateInvoiceXml({ xml: buildOrdinaryInvoiceXml(payload), format: 'FPA12' });
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
+});
+
+test('characters outside Latin-1 are left alone so validation says so instead of mutilating a name', () => {
+  assert.equal(normalizeLatinText('Shenzhen 中国 Ltd'), 'Shenzhen 中国 Ltd');
+  // Gli accenti italiani stanno in Latin-1 Supplement e non vanno toccati.
+  assert.equal(normalizeLatinText('Città di Latina'), 'Città di Latina');
+});
+
+test('a PA marked only by tipologia_cliente still gets FPA12', () => {
+  const payload = buildInvoicePayload(
+    makeAeronauticaInvoice(),
+    makeOrdinaryPayload('FPA12').company,
+    // Scheda creata dalla sezione Clienti: `tipo` resta 'cliente'.
+    { ...makeAeronauticaCustomer(), isPa: undefined, tipo: 'cliente', tipologia_cliente: 'pa' },
+    { mode: 'test', progressivo: 'H0051', forceFormat: 'FPA12' }
+  );
+  assert.equal(payload.formatoTrasmissione, 'FPA12');
+  assert.equal(payload.destinationCode, 'AKGVPD');
 });
 
 test('FSM10 sample validates against local XSD and app rules', async () => {
