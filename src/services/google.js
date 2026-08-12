@@ -79,6 +79,11 @@ const fillSettingIfBlank = db.prepare(`
 seedSetting.run('notifications.email_enabled', '0', 'boolean');
 seedSetting.run('notifications.deadline_days', '3,1', 'string');
 seedSetting.run('notifications.recipient_mode', 'all_active_users', 'string');
+// Casella a cui arrivano le notifiche interne. Una sola, o poche indicate a
+// mano separate da virgola: mai piu' "tutti gli utenti attivi", che e' il
+// modo in cui il 12 agosto 2026 sono partite sessanta mail in un'ora, tre
+// delle quali verso indirizzi fuori dall'azienda.
+seedSetting.run('notifications.internal_email', 'info@horygon.com', 'string');
 seedSetting.run('company.notification_sender_name', 'Horygon CRM', 'string');
 seedSetting.run('automation.email_users_activity_assignments', '1', 'boolean');
 seedSetting.run('automation.email_users_activity_updates', '1', 'boolean');
@@ -733,43 +738,24 @@ function getActiveUserIds() {
   return db.prepare('SELECT id FROM utenti WHERE attivo = 1 ORDER BY id').all().map(row => row.id);
 }
 
-function resolveUserNotificationEmails(userIds = []) {
-  const ids = [...new Set((Array.isArray(userIds) ? userIds : []).map(v => parseInt(v, 10)).filter(v => !Number.isNaN(v) && v > 0))];
-  if (!ids.length) return [];
-  const placeholders = ids.map(() => '?').join(',');
-  const rows = db.prepare(`
-    SELECT
-      u.id,
-      u.nome,
-      u.email AS user_email,
-      (
-        SELECT c.email
-        FROM anagrafiche_contatti c
-        WHERE c.linked_user_id = u.id
-          AND COALESCE(c.attivo, 1) = 1
-          AND c.email IS NOT NULL
-          AND TRIM(c.email) <> ''
-        ORDER BY c.id DESC
-        LIMIT 1
-      ) AS contact_email
-      ,
-      (
-        SELECT a.email
-        FROM anagrafiche_contatti c
-        JOIN anagrafiche a ON a.id = c.anagrafica_id
-        WHERE c.linked_user_id = u.id
-          AND COALESCE(c.attivo, 1) = 1
-          AND a.email IS NOT NULL
-          AND TRIM(a.email) <> ''
-        ORDER BY c.id DESC
-        LIMIT 1
-      ) AS anagrafica_email
-    FROM utenti u
-    WHERE u.attivo = 1 AND u.id IN (${placeholders})
-  `).all(...ids);
-  return rows
-    .map(row => ({ id: row.id, nome: row.nome, email: (row.user_email || row.contact_email || row.anagrafica_email || '').trim() }))
-    .filter(row => !!row.email);
+// Destinatari delle notifiche interne.
+//
+// La notifica in app resta per tutti: e' dentro il CRM e non disturba
+// nessuno. La **mail** invece parte verso una casella sola, quella indicata
+// qui, perche' e' l'unico modo per non trasformare ogni cambio di stato in
+// una circolare a sette persone - tre delle quali, in produzione, hanno un
+// indirizzo fuori dal dominio aziendale.
+//
+// Se serve piu' di un destinatario si scrivono gli indirizzi, separati da
+// virgola. Non esiste piu' un valore che significhi "tutti": chi riceve va
+// nominato, cosi' una casella nuova ci finisce dentro solo di proposito.
+function internalNotificationRecipients() {
+  const configurato = String(getSetting('notifications.internal_email', 'info@horygon.com') || '').trim();
+  const indirizzi = configurato
+    .split(',')
+    .map((voce) => voce.trim())
+    .filter((voce) => voce.includes('@'));
+  return indirizzi.length ? [...new Set(indirizzi)] : ['info@horygon.com'];
 }
 
 async function sendMailToRecipients(senderUserId, recipients = [], subject, text, attachments = []) {
@@ -823,56 +809,39 @@ async function notifyUsersWithEmail({
   });
   const recipients = notificationTargets.map(target => target.userId);
   let email = { sent: 0, failed: 0, blocked: 0, skipped: true };
-  if (emailSettingKey && getSetting(emailSettingKey, '0') === '1' && recipients.length) {
-    const resolvedRecipients = resolveUserNotificationEmails(recipients);
-    const resolvedIds = new Set(resolvedRecipients.map(recipient => Number(recipient.id)));
-    const unresolvedTargets = notificationTargets.filter(target => !resolvedIds.has(Number(target.userId)));
-    if (unresolvedTargets.length) {
-      writeSystemLog({
-        livello: 'warning',
-        origine: 'notifications.notifyUsersWithEmail',
-        utente_id: senderUserId || null,
-        messaggio: 'Destinatari senza email risolvibile per invio notifica',
-        dettagli: {
-          tipo,
-          titolo,
-          requestedUserIds: recipients,
-          unresolvedUserIds: unresolvedTargets.map(target => target.userId),
-          emailSettingKey
-        }
-      });
-    }
-    notificationTargets
-      .filter(target => !resolvedIds.has(Number(target.userId)))
-      .forEach(target => {
-        if (target.notificationId) {
-          db.prepare('UPDATE notifiche_app SET invio_email_tentato = 1, invio_email_ok = 0 WHERE id = ?').run(target.notificationId);
-        }
-      });
-    for (const recipient of resolvedRecipients) {
-      const target = notificationTargets.find(item => Number(item.userId) === Number(recipient.id));
-      let ok = 0;
+  if (emailSettingKey && getSetting(emailSettingKey, '0') === '1' && notificationTargets.length) {
+    // Una notifica interna produce **una** mail, alla casella aziendale, non
+    // una a testa. Chi deve mandare qualcosa a un cliente lo fa dal pulsante
+    // Invia sul documento, che e' un gesto voluto.
+    const destinatari = internalNotificationRecipients();
+    const oggetto = emailSubject || `[Horygon] ${titolo}`;
+    const corpo = emailText || `${titolo}\n\n${messaggio || ''}`;
+    let esitoInvio = 0;
+    for (const indirizzo of destinatari) {
       try {
-        const esito = await sendMail(
-          senderUserId,
-          recipient.email,
-          emailSubject || `[Horygon] ${titolo}`,
-          emailText || `${titolo}\n\n${messaggio || ''}`
-        );
+        const esito = await sendMail(senderUserId, indirizzo, oggetto, corpo);
         // La notifica in app resta, ma senza flag di invio: non risulta
         // tentata, perche' davvero non lo e' stata.
         if (esito?.blocked) { email.blocked += 1; continue; }
-        ok = 1;
+        esitoInvio = 1;
         email.sent += 1;
       } catch (e) {
-        logGoogleError('notifications.notifyUsersWithEmail', e, { senderUserId, to: recipient.email, title: titolo, userId: recipient.id });
+        logGoogleError('notifications.notifyUsersWithEmail', e, { senderUserId, to: indirizzo, title: titolo });
         email.failed += 1;
       }
-      if (target?.notificationId) {
-        db.prepare('UPDATE notifiche_app SET invio_email_tentato = 1, invio_email_ok = ? WHERE id = ?').run(ok, target.notificationId);
-      }
+    }
+    // Le notifiche in app sono una per utente, la mail e' una sola: tutte
+    // portano l'esito di quell'unico invio, altrimenti il dispatcher delle
+    // notifiche arretrate le riprenderebbe una per una e le rimanderebbe.
+    if (email.sent || email.failed) {
+      notificationTargets.forEach((target) => {
+        if (!target.notificationId) return;
+        db.prepare('UPDATE notifiche_app SET invio_email_tentato = 1, invio_email_ok = ? WHERE id = ?')
+          .run(esitoInvio, target.notificationId);
+      });
     }
     email.skipped = false;
+    email.recipients = destinatari;
   }
   return { notifiedUsers: recipients.length, email };
 }
@@ -901,20 +870,26 @@ async function dispatchPendingNotificationEmails(senderUserId) {
     LIMIT 20
   `).all();
   let sent = 0;
+  // Anche qui la mail va alla casella interna, non all'indirizzo personale
+  // dell'utente a cui la notifica e' intestata: la notifica resta sua, la
+  // posta e' una sola.
+  const destinatari = internalNotificationRecipients();
   for (const row of rows) {
     let ok = 0;
-    const recipient = resolveUserNotificationEmails([row.user_id])[0];
-    try {
-      if (!recipient?.email) throw new Error('Email destinatario non trovata');
-      const esito = await sendMail(senderUserId, recipient.email, `[Horygon] ${row.titolo}`, `${row.titolo}\n\n${row.messaggio || ''}`);
-      // Senza il flag la notifica resta in coda e verra' ripresa quando gli
-      // invii sono di nuovo permessi: un test non deve consumarla.
-      if (esito?.blocked) continue;
-      ok = 1;
-      sent += 1;
-    } catch (e) {
-      logGoogleError('notifications.dispatchPendingEmail', e, { senderUserId, notification_id: row.id, to: recipient?.email || null, title: row.titolo, userId: row.user_id });
+    let bloccata = false;
+    for (const indirizzo of destinatari) {
+      try {
+        const esito = await sendMail(senderUserId, indirizzo, `[Horygon] ${row.titolo}`, `${row.titolo}\n\n${row.messaggio || ''}`);
+        // Senza il flag la notifica resta in coda e verra' ripresa quando gli
+        // invii sono di nuovo permessi: un test non deve consumarla.
+        if (esito?.blocked) { bloccata = true; continue; }
+        ok = 1;
+        sent += 1;
+      } catch (e) {
+        logGoogleError('notifications.dispatchPendingEmail', e, { senderUserId, notification_id: row.id, to: indirizzo, title: row.titolo, userId: row.user_id });
+      }
     }
+    if (bloccata && !ok) continue;
     db.prepare('UPDATE notifiche_app SET invio_email_tentato = 1, invio_email_ok = ? WHERE id = ?').run(ok, row.id);
   }
   return { sent };

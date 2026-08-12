@@ -676,16 +676,22 @@ async function renderFatturaPdf({ row, righe = [], riepilogo = [] }) {
 
   y += 90;
   const identificativo = row.partita_iva || row.piva || row.codice_fiscale || row.cf || '-';
-  drawInfoBox(doc, colors, theme.accent, 40, y, 118, 54, 'Documento', row.tipo_esteso || row.tipo_documento || 'Fattura', theme.fill);
-  drawInfoBox(doc, colors, theme.accent, 168, y, 128, 54, 'P.IVA / C.F.', identificativo, theme.fill);
-  drawInfoBox(doc, colors, theme.accent, 306, y, 108, 54, 'Pagamento', row.stato_pagamento || '-', theme.fill);
-  drawInfoBox(doc, colors, theme.accent, 424, y, 131, 54, 'Riferimenti', [
+  const riferimenti = [
     row.codice_ordine ? `Ordine ${row.codice_ordine}` : null,
     row.cig ? `CIG ${row.cig}` : null,
     row.cup ? `CUP ${row.cup}` : null
-  ].filter(Boolean).join('\n') || 'Nessuno', theme.fill);
+  ].filter(Boolean).join('\n') || 'Nessuno';
+  // I riferimenti sono la casella che cresce: numero d'ordine, CIG e CUP sono
+  // tre righe, e il numero d'ordine da solo ne occupa due. Con l'altezza fissa
+  // a 54 il contenuto usciva dal bordo del riquadro.
+  doc.font('Helvetica').fontSize(10);
+  const altezzaDati = Math.max(54, 31 + doc.heightOfString(riferimenti, { width: 111 }));
+  drawInfoBox(doc, colors, theme.accent, 40, y, 118, altezzaDati, 'Documento', row.tipo_esteso || row.tipo_documento || 'Fattura', theme.fill);
+  drawInfoBox(doc, colors, theme.accent, 168, y, 128, altezzaDati, 'P.IVA / C.F.', identificativo, theme.fill);
+  drawInfoBox(doc, colors, theme.accent, 306, y, 108, altezzaDati, 'Pagamento', row.stato_pagamento || '-', theme.fill);
+  drawInfoBox(doc, colors, theme.accent, 424, y, 131, altezzaDati, 'Riferimenti', riferimenti, theme.fill);
 
-  y += 74;
+  y += altezzaDati + 20;
   y = drawRowsTable(doc, theme, {
     ...frame,
     y,
@@ -701,18 +707,20 @@ async function renderFatturaPdf({ row, righe = [], riepilogo = [] }) {
     // presume, altrimenti due righe di testo escono dalla loro cornice.
     rowHeight: (r) => {
       doc.font('Helvetica').fontSize(8.3);
-      return Math.max(26, 14 + doc.heightOfString(String(r.descrizione || r.nome || '-'), { width: 176 }));
+      return Math.max(26, 14 + doc.heightOfString(String(r.descrizione || r.nome || '-'), { width: 162 }));
     },
+    // Otto punti di distanza fra una colonna e l'altra: con quattro, una
+    // descrizione che riempie la sua casella finiva attaccata alla quantita'.
     columns: [
-      { label: 'Codice', x: 8, width: 54, value: (r) => r.codice_articolo || r.codice_interno || '-' },
-      { label: 'Descrizione', x: 66, width: 176, value: (r) => r.descrizione || r.nome || '-' },
-      { label: 'Q.tà', x: 246, width: 32, align: 'right', value: (r) => Number(r.quantita || 0).toFixed(2) },
-      { label: 'Prezzo', x: 282, width: 56, align: 'right', value: (r) => Number(r.prezzo_unitario || 0).toFixed(2) },
-      { label: 'Imponibile', x: 342, width: 60, align: 'right', value: (r) => Number(r.imponibile || 0).toFixed(2) },
+      { label: 'Codice', x: 8, width: 52, value: (r) => r.codice_articolo || r.codice_interno || '-' },
+      { label: 'Descrizione', x: 68, width: 162, value: (r) => r.descrizione || r.nome || '-' },
+      { label: 'Q.tà', x: 238, width: 34, align: 'right', value: (r) => Number(r.quantita || 0).toFixed(2) },
+      { label: 'Prezzo', x: 280, width: 56, align: 'right', value: (r) => Number(r.prezzo_unitario || 0).toFixed(2) },
+      { label: 'Imponibile', x: 344, width: 58, align: 'right', value: (r) => Number(r.imponibile || 0).toFixed(2) },
       // Su una riga con Natura la percentuale non vuol dire niente: si stampa
       // il codice, che e' l'informazione fiscale vera.
-      { label: 'IVA', x: 406, width: 38, align: 'right', value: (r) => r.natura_iva || `${Number(r.aliquota_iva || 0).toFixed(0)}%` },
-      { label: 'Totale', x: 448, width: 59, align: 'right', value: (r) => Number(r.totale_riga || 0).toFixed(2) }
+      { label: 'IVA', x: 410, width: 34, align: 'right', value: (r) => r.natura_iva || `${Number(r.aliquota_iva || 0).toFixed(0)}%` },
+      { label: 'Totale', x: 452, width: 55, align: 'right', value: (r) => Number(r.totale_riga || 0).toFixed(2) }
     ]
   });
 
