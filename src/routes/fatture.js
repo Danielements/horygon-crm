@@ -44,7 +44,28 @@ function prepareInvoiceLines(righe = [], esigibilitaIva = null) {
 // Lista fatture
 router.get('/', requirePermesso('fatture', 'read'), (req, res) => {
   const { tipo, stato, direzione } = req.query;
-  let sql = `SELECT f.*, COALESCE(a.ragione_sociale, f.cliente_fornitore_label) AS ragione_sociale FROM fatture f LEFT JOIN anagrafiche a ON a.id = f.anagrafica_id WHERE 1=1`;
+  // Lo stato verso SdI si legge dai flussi e dalle notifiche, non dalla sola
+  // colonna `stato_sdi`: quella dice a che punto e' la generazione, non se il
+  // documento e' partito ne' se e' tornata una ricevuta.
+  let sql = `SELECT f.*,
+      COALESCE(a.ragione_sociale, f.cliente_fornitore_label) AS ragione_sociale,
+      (SELECT COUNT(*) FROM fatture_sdi_flussi fl
+        WHERE fl.fattura_id = f.id AND COALESCE(fl.direzione,'outbound') = 'outbound') AS sdi_flussi,
+      (SELECT COUNT(*) FROM fatture_sdi_flussi fl
+        WHERE fl.fattura_id = f.id AND COALESCE(fl.direzione,'outbound') = 'outbound'
+          AND fl.stato = 'firma_richiesta') AS sdi_da_firmare,
+      (SELECT COUNT(*) FROM fatture_sdi_flussi fl
+        WHERE fl.fattura_id = f.id AND COALESCE(fl.direzione,'outbound') = 'outbound'
+          AND (fl.inviato_il IS NOT NULL OR fl.identificativo_sdi IS NOT NULL)) AS sdi_inviati,
+      (SELECT fl.identificativo_sdi FROM fatture_sdi_flussi fl
+        WHERE fl.fattura_id = f.id AND fl.identificativo_sdi IS NOT NULL
+        ORDER BY fl.id DESC LIMIT 1) AS sdi_identificativo,
+      (SELECT COUNT(*) FROM fatture_sdi_notifiche nt WHERE nt.fattura_id = f.id) AS sdi_notifiche,
+      (SELECT nt.tipo_notifica FROM fatture_sdi_notifiche nt
+        WHERE nt.fattura_id = f.id ORDER BY nt.id DESC LIMIT 1) AS sdi_ultima_notifica,
+      (SELECT nt.stato_normalizzato FROM fatture_sdi_notifiche nt
+        WHERE nt.fattura_id = f.id ORDER BY nt.id DESC LIMIT 1) AS sdi_ultimo_esito
+    FROM fatture f LEFT JOIN anagrafiche a ON a.id = f.anagrafica_id WHERE 1=1`;
   const params = [];
   if (tipo) { sql += ' AND f.tipo = ?'; params.push(tipo); }
   if (direzione) { sql += ' AND COALESCE(f.direzione, CASE WHEN f.tipo = "emessa" THEN "attiva" ELSE "passiva" END) = ?'; params.push(direzione); }
@@ -101,6 +122,13 @@ function motivoNonEliminabile(fattura) {
     return 'Le fatture ricevute non si eliminano: sono documenti altrui gia acquisiti.';
   }
   if (fattura.sdi_id) {
+    // Un identificativo SdI vero e' numerico. Quando non lo e', quasi sempre
+    // e' il Codice Univoco Ufficio del cliente finito nel campo sbagliato, e
+    // dirlo evita di far cercare una trasmissione che non c'e' mai stata.
+    if (!/^\d+$/.test(String(fattura.sdi_id).trim())) {
+      return `Il campo Identificativo SdI contiene "${fattura.sdi_id}", che non e un identificativo SdI (quelli sono numerici e li assegna SdI). `
+        + 'Finche resta valorizzato la fattura risulta trasmessa: se e il Codice Univoco Ufficio del cliente, svuota il campo dalla scheda della fattura e riprova.';
+    }
     return `La fattura ha un identificativo SdI (${fattura.sdi_id}): e gia stata trasmessa e va rettificata con una nota di credito.`;
   }
   const trasmesso = db.prepare(`

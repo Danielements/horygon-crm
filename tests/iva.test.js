@@ -592,6 +592,34 @@ test('modificare una fattura non le stacca l ordine di origine', async () => {
   db.prepare('DELETE FROM fatture WHERE id = ?').run(fattura.fattura_id);
 });
 
+// Modificare il CIG di un ordine gia' consegnato falliva con "Giacenza
+// insufficiente": il salvataggio rifaceva la prenotazione di magazzino per
+// merce che era gia' uscita con il DDT.
+test('modificare un ordine consegnato non rimette in discussione la giacenza', async () => {
+  const prodottoId = creaProdotto('MAG', IVA22.id);
+  const ordine = await call('POST', '/api/ordini', {
+    codice_ordine: `${MARKER}-ORD-MAG`, tipo: 'vendita', data_ordine: '2026-08-12',
+    righe: [{ prodotto_id: prodottoId, quantita: 900, prezzo_unitario: 1 }]
+  });
+  await call('PATCH', `/api/ordini/${ordine.id}/stato`, { stato: 'consegnato' });
+
+  // La merce esce davvero, come farebbe il DDT: la giacenza va a zero.
+  db.prepare(`
+    INSERT INTO magazzino_movimenti (prodotto_id, tipo, quantita, riferimento_tipo, note)
+    VALUES (?, 'scarico', ?, 'test', ?)
+  `).run(prodottoId, 100, `${MARKER} uscita merce`);
+  db.prepare('DELETE FROM magazzino_movimenti WHERE riferimento_tipo = ? AND riferimento_id = ?').run('ordine', ordine.id);
+
+  // Salvataggio che tocca solo il CIG, con le righe invariate.
+  const esito = await call('PUT', `/api/ordini/${ordine.id}`, {
+    codice_ordine: `${MARKER}-ORD-MAG`, tipo: 'vendita', data_ordine: '2026-08-12',
+    cig: 'B1C2D3E4F5',
+    righe: [{ prodotto_id: prodottoId, quantita: 900, prezzo_unitario: 1, regola_iva_id: IVA22.id }]
+  });
+  assert.equal(esito.magazzino_aggiornato, false, 'un ordine consegnato non deve toccare il magazzino');
+  assert.equal(db.prepare('SELECT cig FROM ordini WHERE id = ?').get(ordine.id).cig, 'B1C2D3E4F5');
+});
+
 // Si fattura da un ordine confermato in poi: e' l'ordine gia' consegnato quello
 // che si fattura piu' spesso, e prima veniva rifiutato.
 test('un ordine consegnato si fattura, uno solo ricevuto no', async () => {

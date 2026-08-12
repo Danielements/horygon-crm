@@ -267,10 +267,23 @@ router.put('/:id', requirePermesso('ordini', 'edit'), (req, res) => {
     return res.status(400).json({ error: `Ordine collegato al DDT ${linkedDdt.numero_ddt || linkedDdt.id}` });
   }
 
+  // Un ordine oltre la conferma non rimette in discussione il magazzino.
+  //
+  // La merce e' in viaggio o gia' consegnata, e il movimento vero lo ha fatto
+  // il DDT. Rifare la prenotazione a ogni salvataggio significa chiedere di
+  // nuovo pezzi che sono gia' usciti: modificare il CIG di un ordine
+  // consegnato falliva con "Giacenza insufficiente" per merce gia' partita.
+  const STATI_SENZA_MAGAZZINO = ['in_lavorazione', 'spedito', 'consegnato', 'annullato'];
+  const toccaMagazzino = !STATI_SENZA_MAGAZZINO.includes(String(existing.stato || '').toLowerCase());
+
   try {
     const cleanRighe = normalizeOrdineRighe(b.righe);
     db.exec('BEGIN');
-    db.prepare('DELETE FROM magazzino_movimenti WHERE riferimento_tipo = ? AND riferimento_id = ?').run('ordine', ordineId);
+    // I movimenti si cancellano solo se poi si ricreano: toglierli e basta
+    // farebbe risalire la giacenza di merce gia' spedita.
+    if (toccaMagazzino) {
+      db.prepare('DELETE FROM magazzino_movimenti WHERE riferimento_tipo = ? AND riferimento_id = ?').run('ordine', ordineId);
+    }
     db.prepare('DELETE FROM ordini_righe WHERE ordine_id = ?').run(ordineId);
     db.prepare(`
       UPDATE ordini
@@ -297,10 +310,10 @@ router.put('/:id', requirePermesso('ordini', 'edit'), (req, res) => {
     );
     if (cleanRighe.length) {
       insertOrdineRighe(ordineId, cleanRighe);
-      syncMovimentiFromOrdine(ordineId, s(b.tipo), cleanRighe);
+      if (toccaMagazzino) syncMovimentiFromOrdine(ordineId, s(b.tipo), cleanRighe);
     }
     db.exec('COMMIT');
-    res.json({ id: ordineId });
+    res.json({ id: ordineId, magazzino_aggiornato: toccaMagazzino });
   } catch (e) {
     try { db.exec('ROLLBACK'); } catch {}
     res.status(400).json({ error: e.message });

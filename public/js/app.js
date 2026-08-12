@@ -3810,16 +3810,46 @@ function formatIvaValue(value) {
 
 // Lo stato SdI e' un'informazione diversa dallo stato di pagamento: una fattura
 // puo' essere "emessa" in contabilita' e ferma in attesa di firma verso SdI.
+// Dice a colpo d'occhio dove sta la fattura nel percorso verso SdI.
+//
+// La domanda vera e' "e' partita, e cosa ha risposto SdI": la colonna
+// `stato_sdi` da sola non lo dice, perche' racconta la generazione del file.
+// Qui si guardano i flussi e le notifiche ricevute.
 function renderStatoSdiBadge(f) {
-  const stato = String(f.stato_sdi || '');
-  if (!stato) return '';
-  const etichette = {
-    firma_richiesta: ['Attende firma', 'badge-scaduta'],
-    firma_verificata: ['Firmata', 'badge-fornitore']
+  if (f.tipo !== 'emessa') return '';
+
+  const flussi = Number(f.sdi_flussi || 0);
+  const inviati = Number(f.sdi_inviati || 0);
+  const daFirmare = Number(f.sdi_da_firmare || 0);
+  const notifiche = Number(f.sdi_notifiche || 0);
+
+  const badge = (testo, classe, titolo) =>
+    `<span class="badge ${classe}" style="margin-left:4px" title="${escapeAttr(titolo)}">${escapeHtml(testo)}</span>`;
+
+  if (!flussi) return badge('Non inviata', 'badge-cliente', 'Nessun XML generato: la fattura non e ancora entrata nel percorso SdI');
+  if (!inviati) {
+    return daFirmare
+      ? badge('Da firmare', 'badge-scaduta', 'XML generato, in attesa del file firmato: non e ancora stata trasmessa')
+      : badge('Pronta, non inviata', 'badge-cliente', 'XML generato ma mai trasmesso a SdI');
+  }
+
+  // Trasmessa: da qui in poi conta cosa ha risposto SdI.
+  const esiti = {
+    consegnata: ['Consegnata', 'badge-pagata'],
+    scartata: ['Scartata', 'badge-scaduta'],
+    non_consegnata: ['Non consegnata', 'badge-scaduta'],
+    accettata: ['Accettata', 'badge-pagata'],
+    rifiutata: ['Rifiutata', 'badge-scaduta'],
+    decorrenza_termini: ['Decorrenza termini', 'badge-pagata']
   };
-  const [label, cls] = etichette[stato]
-    || [stato.replace(/_/g, ' '), /^inviato_/.test(stato) ? 'badge-pagata' : 'badge-cliente'];
-  return `<span class="badge ${cls}" style="margin-left:4px" title="Stato SdI: ${escapeHtml(stato)}">${escapeHtml(label)}</span>`;
+  const esito = esiti[String(f.sdi_ultimo_esito || '')];
+  const identificativo = f.sdi_identificativo ? ` (IdSdI ${f.sdi_identificativo})` : '';
+  if (esito) {
+    return badge(esito[0], esito[1], `${f.sdi_ultima_notifica || esito[0]}${identificativo}`);
+  }
+  return notifiche
+    ? badge('Inviata', 'badge-fornitore', `Trasmessa, ultima notifica: ${f.sdi_ultima_notifica || '-'}${identificativo}`)
+    : badge('Inviata, nessuna ricevuta', 'badge-fornitore', `Trasmessa a SdI${identificativo}, nessuna notifica ancora ricevuta`);
 }
 
 function renderFattureRows(targetId, rows) {
@@ -3843,9 +3873,8 @@ function renderFattureRows(targetId, rows) {
       ${f.xml_path ? `<button class="btn btn-outline btn-sm" onclick="openFatturaXml(${f.id})" title="Apri XML">XML</button>` : ''}
       ${f.tipo === 'emessa' ? `<button class="btn ${f.stato_sdi === 'firma_richiesta' ? 'btn-accent' : 'btn-outline'} btn-sm" onclick="openSdiFirmaModal(${f.id})" title="Ciclo di firma e invio a SdI">&#128278; Firma / Invio</button>` : ''}
       ${f.tipo === 'emessa' && f.tipo_documento !== 'nota_credito' ? `<button class="btn btn-outline btn-sm" onclick="creaNotaCredito(${f.id})" title="Nota di credito a storno di questa fattura">Nota credito</button>` : ''}
-      ${f.tipo === 'emessa' && f.source === 'CRM' && !f.sdi_id ? `<button class="btn btn-danger btn-sm" onclick="eliminaFattura(${f.id}, ${JSON.stringify(String(f.numero || f.id))})" title="Elimina: possibile solo finche non e stata trasmessa">Elimina</button>` : ''}
-      ${f.tipo === 'emessa' ? `<button class="btn btn-outline btn-sm" onclick="testSendFatturaSdi(${f.id})">Genera XML TEST</button><button class="btn btn-accent btn-sm" onclick="testTransmitFatturaSdi(${f.id})">Invia a SdI TEST</button>` : ''}
-      ${f.tipo === 'ricevuta' ? `<button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC01')">Accetta SdI TEST</button><button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC02')">Rifiuta SdI TEST</button>` : ''}
+      ${f.tipo === 'emessa' && f.source === 'CRM' ? `<button class="btn btn-danger btn-sm" onclick="eliminaFattura(${f.id}, ${JSON.stringify(String(f.numero || f.id))})" title="Elimina: possibile solo finche non e stata trasmessa al SdI">Elimina</button>` : ''}
+      ${f.tipo === 'ricevuta' ? `<button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC01')" title="Comunica a SdI l accettazione della fattura ricevuta">Accetta</button><button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC02')" title="Comunica a SdI il rifiuto della fattura ricevuta">Rifiuta</button>` : ''}
     </div></td></tr>`).join('');
 }
 
@@ -3905,41 +3934,15 @@ async function loadFatture() {
   return loadFattureBySection('fatture-attive');
 }
 
-async function testSendFatturaSdi(id) {
-  try {
-    const result = await api('POST', `/sdi/fatture/${id}/test-send`, {});
-    toast(`XML SDI generato: ${result?.filename || 'ok'}`, 'success');
-    const active = document.querySelector('.section.active')?.id?.replace('section-', '') || 'fatture-attive';
-    if (['fatture-attive', 'fatture-passive', 'fatture-fuori-campo'].includes(active)) {
-      loadFattureBySection(active);
-    }
-  } catch (e) {
-    toast(e.message || 'Errore generazione XML SDI', 'error');
-  }
-}
-
-async function testTransmitFatturaSdi(id) {
-  if (!confirm('Inviare davvero questa fattura a SdI in ambiente TEST?')) return;
-  try {
-    const result = await api('POST', `/sdi/fatture/${id}/test-transmit`, {});
-    const sdiId = result?.transmission?.identificativoSdi;
-    toast(sdiId ? `Fattura inviata a SdI TEST: ${sdiId}` : 'Fattura inviata a SdI TEST', 'success');
-    const active = document.querySelector('.section.active')?.id?.replace('section-', '') || 'fatture-attive';
-    if (['fatture-attive', 'fatture-passive', 'fatture-fuori-campo'].includes(active)) {
-      loadFattureBySection(active);
-    }
-  } catch (e) {
-    toast(e.message || 'Errore invio a SdI TEST', 'error');
-  }
-}
-
 async function testEsitoCommittenteSdi(id, esito) {
   const label = esito === 'EC02' ? 'rifiutare' : 'accettare';
-  if (!confirm(`Inviare davvero a SdI in ambiente TEST l'esito per ${label} questa fattura ricevuta?`)) return;
+  // La dicitura resta perche' e' vera: questa comunicazione passa ancora
+  // dall'endpoint di prova. Toglierla farebbe credere che sia un esito reale.
+  if (!confirm(`Comunicare a SdI l'esito per ${label} questa fattura ricevuta?\n\nParte sul canale di prova (esito-committente-test).`)) return;
   try {
     const descrizione = esito === 'EC02' ? 'Rifiuto di test da CRM Horygon' : '';
     const result = await api('POST', `/sdi/fatture/${id}/esito-committente-test`, { esito, descrizione });
-    toast(`Esito committente ${esito} inviato a SdI TEST: ${result?.esitoRisposta || 'ok'}`, 'success');
+    toast(`Esito ${esito} comunicato sul canale di prova: ${result?.esitoRisposta || 'ok'}`, 'success');
     const active = document.querySelector('.section.active')?.id?.replace('section-', '') || 'fatture-passive';
     if (['fatture-attive', 'fatture-passive', 'fatture-fuori-campo'].includes(active)) {
       loadFattureBySection(active);
