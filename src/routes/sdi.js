@@ -436,6 +436,53 @@ router.get('/status', requirePermesso('fatture', 'read'), (req, res) => {
 // Invio unificato test/produzione. La conferma esplicita e' un guardrail
 // operativo HORYGON, non un requisito SdI: con policy MANUAL_CONFIRMATION ogni
 // invio in produzione richiede confirm=true.
+// Genera l'XML nella modalita' del canale, senza trasmettere.
+//
+// E' il primo passo del ciclo di firma esterna, e prima non esisteva: c'era
+// `test-send`, che forza la modalita' test, e `send`, che genera e spedisce
+// in un colpo solo. Con la firma esterna serve il passaggio in mezzo, perche'
+// fra la generazione e l'invio ci sta una persona con un PIN e un OTP.
+//
+// Genera senza spedire, ma non e' gratis: alloca un progressivo e un nome
+// file, che non si riusano. Farlo due volte lascia due documenti da firmare,
+// ed e' per questo che l'interfaccia li mostra entrambi invece di nasconderne
+// uno.
+router.post('/fatture/:id/genera', requirePermesso('fatture', 'edit'), async (req, res) => {
+  const route = `/api/sdi/fatture/${req.params.id}/genera`;
+  const mode = normalizeMode(getSetting('sdi.mode', 'test'));
+  try {
+    const result = await generateOutboundXmlForInvoice(req.params.id, { mode });
+    writeAudit({
+      utente_id: req.user.id,
+      azione: 'sdi.fattura.genera',
+      entita_tipo: 'fattura',
+      entita_id: Number(req.params.id),
+      dettagli: { mode, flowId: result.flowId, filename: result.filename, firmaRichiesta: result.firmaRichiesta }
+    });
+    writeSystemLog({
+      livello: 'info',
+      origine: 'sdi.genera',
+      route,
+      metodo: 'POST',
+      utente_id: req.user.id,
+      messaggio: `XML SDI generato in modalita ${mode} per fattura ${req.params.id}`,
+      dettagli: { flowId: result.flowId, filename: result.filename, hash: result.hash, firmaRichiesta: result.firmaRichiesta }
+    });
+    res.json({ ok: true, mode, ...result });
+  } catch (error) {
+    writeSystemLog({
+      livello: 'error',
+      origine: 'sdi.genera',
+      route,
+      metodo: 'POST',
+      utente_id: req.user.id,
+      messaggio: error.message,
+      stack: error.stack || null
+    });
+    res.status(400).json({ error: error.message });
+  }
+});
+
 router.post('/fatture/:id/send', requirePermesso('fatture', 'edit'), async (req, res) => {
   const requestedMode = normalizeMode(req.body?.mode || 'test');
   const route = `/api/sdi/fatture/${req.params.id}/send`;

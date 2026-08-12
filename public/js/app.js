@@ -3841,7 +3841,7 @@ function renderFattureRows(targetId, rows) {
       <button class="btn btn-outline btn-sm" onclick="previewFattura(${f.id})" title="Anteprima fattura">&#128065;</button>
       <button class="btn btn-outline btn-sm" onclick="openApiPdf('/fatture/${f.id}/pdf-cortesia')" title="Copia di cortesia in PDF">PDF</button>
       ${f.xml_path ? `<button class="btn btn-outline btn-sm" onclick="openFatturaXml(${f.id})" title="Apri XML">XML</button>` : ''}
-      ${f.tipo === 'emessa' && f.stato_sdi ? `<button class="btn ${f.stato_sdi === 'firma_richiesta' ? 'btn-accent' : 'btn-outline'} btn-sm" onclick="openSdiFirmaModal(${f.id})" title="Ciclo di firma e invio a SdI">&#128278; Firma / Invio</button>` : ''}
+      ${f.tipo === 'emessa' ? `<button class="btn ${f.stato_sdi === 'firma_richiesta' ? 'btn-accent' : 'btn-outline'} btn-sm" onclick="openSdiFirmaModal(${f.id})" title="Ciclo di firma e invio a SdI">&#128278; Firma / Invio</button>` : ''}
       ${f.tipo === 'emessa' ? `<button class="btn btn-outline btn-sm" onclick="testSendFatturaSdi(${f.id})">Genera XML TEST</button><button class="btn btn-accent btn-sm" onclick="testTransmitFatturaSdi(${f.id})">Invia a SdI TEST</button>` : ''}
       ${f.tipo === 'ricevuta' ? `<button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC01')">Accetta SdI TEST</button><button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC02')">Rifiuta SdI TEST</button>` : ''}
     </div></td></tr>`).join('');
@@ -4364,6 +4364,25 @@ async function openSdiFirmaModal(fatturaId) {
   }
 }
 
+async function generaXmlFattura(fatturaId) {
+  try {
+    const esito = await api('POST', `/sdi/fatture/${fatturaId}/genera`, {});
+    toast(
+      esito?.firmaRichiesta
+        ? `XML generato: ${esito.filename}. Ora va firmato.`
+        : `XML generato: ${esito.filename}`,
+      'success'
+    );
+    // Si rilegge lo stato invece di indovinarlo: il flusso appena creato porta
+    // nome file, progressivo e stato della firma.
+    await openSdiFirmaModal(fatturaId);
+    const attiva = document.querySelector('.section.active')?.id?.replace('section-', '') || 'fatture-attive';
+    if (['fatture-attive', 'fatture-passive', 'fatture-fuori-campo'].includes(attiva)) loadFattureBySection(attiva);
+  } catch (e) {
+    toast(e.message || 'Errore nella generazione dell XML', 'error');
+  }
+}
+
 function sdiFirmaFlussi() {
   const state = sdiFirmaState || {};
   return [state.flusso, ...(state.altriInAttesaDiFirma || [])].filter(Boolean);
@@ -4382,9 +4401,20 @@ function renderSdiFirmaBody() {
   const flow = flussi.find(f => f.id === sdiFirmaFlowId) || flussi[0] || null;
 
   if (!flow) {
+    // Prima qui c'era solo la frase "genera prima l'XML", senza niente da
+    // premere: il ciclo di firma non aveva un ingresso.
     body.innerHTML = `
       <p>Nessun flusso SdI generato per la fattura <strong>${escapeHtml(state.numero || '-')}</strong>.</p>
-      <p style="color:var(--text-muted);font-size:13px">Genera prima l'XML: solo allora il documento puo' essere firmato e trasmesso.</p>`;
+      <p style="color:var(--text-muted);font-size:13px">
+        La generazione produce l'XML e, se il formato lo richiede, lo mette in attesa di firma.
+        Canale attualmente in modalita' <strong>${escapeHtml(state.modoCanale || 'test')}</strong>.
+      </p>
+      <p style="color:var(--text-muted);font-size:13px">
+        Alloca un progressivo e un nome file, che non si riusano: generare due volte lascia due documenti da firmare.
+      </p>
+      <div class="modal-actions">
+        <button class="btn btn-accent" onclick="generaXmlFattura(${escapeAttr(state.fatturaId)})">Genera XML</button>
+      </div>`;
     return;
   }
 
