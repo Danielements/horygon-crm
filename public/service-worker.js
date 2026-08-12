@@ -1,4 +1,13 @@
-const HORYGON_CACHE = 'horygon-crm-shell-v2';
+// Il nome della cache va cambiato a ogni rilascio che tocca il frontend:
+// l'handler `activate` cancella tutte le cache con un nome diverso da questo,
+// ed e' l'unico modo per far dimenticare al browser gli asset vecchi.
+//
+// Senza questo passaggio index.html arriva aggiornato (e' network-first) e
+// app.js no (e' cache-first sulla URL con il ?v=), quindi il markup nuovo
+// chiama funzioni che nello script vecchio non esistono e l'interfaccia si
+// rompe in modi che non si spiegano guardando il server, dove il file giusto
+// c'e'. E' successo il 12.08.2026 con il picker del cliente in fattura.
+const HORYGON_CACHE = 'horygon-crm-shell-v3';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
@@ -44,6 +53,29 @@ self.addEventListener('fetch', event => {
           return response;
         })
         .catch(() => caches.match('/index.html'))
+    );
+    return;
+  }
+
+  // Codice e fogli di stile: prima la rete, la cache solo come rete di
+  // sicurezza per l'uso offline.
+  //
+  // Con la strategia cache-first bastava dimenticare di cambiare il `?v=` in
+  // index.html perche' un rilascio restasse invisibile per sempre: il browser
+  // continuava a servire lo script vecchio da una URL identica, mentre
+  // index.html arrivava aggiornato. Qui la freschezza non dipende piu' dal
+  // ricordarsi di una cosa.
+  if (url.pathname.startsWith('/js/') || url.pathname.startsWith('/css/')) {
+    event.respondWith(
+      fetch(request)
+        .then(response => {
+          if (response && response.status === 200 && response.type === 'basic') {
+            const clone = response.clone();
+            caches.open(HORYGON_CACHE).then(cache => cache.put(request, clone));
+          }
+          return response;
+        })
+        .catch(() => caches.match(request))
     );
     return;
   }
