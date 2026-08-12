@@ -270,6 +270,44 @@ test('PA invoice carries CIG, CUP and split payment and validates against the FP
   assert.match(xml, /<Imposta>220\.00<\/Imposta>\s*<EsigibilitaIVA>S<\/EsigibilitaIVA>/);
 });
 
+test('a credit note is a TD04 that cites the invoice it reverses, in schema order', async () => {
+  const payload = buildInvoicePayload(
+    makeAeronauticaInvoice({
+      numero: '7/2026',
+      numero_documento: '7/2026',
+      tipo_documento: 'nota_credito',
+      riferimento_numero: '6',
+      riferimento_data: '2026-06-25'
+    }),
+    makeOrdinaryPayload('FPA12').company,
+    makeAeronauticaCustomer(),
+    { mode: 'test', progressivo: 'H0052' }
+  );
+  assert.equal(payload.tipoDocumento, 'TD04');
+  assert.deepEqual(payload.datiFattureCollegate, { idDocumento: '6', data: '2026-06-25' });
+
+  const xml = buildOrdinaryInvoiceXml(payload);
+  const result = await validateInvoiceXml({ xml, format: 'FPA12' });
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
+
+  // DatiFattureCollegate segue DatiOrdineAcquisto dentro DatiGenerali: in
+  // DatiGeneraliType l'ordine e' DatiGeneraliDocumento, DatiOrdineAcquisto,
+  // DatiContratto, DatiConvenzione, DatiRicezione, DatiFattureCollegate.
+  assert.match(xml, /<\/DatiOrdineAcquisto>\s*<DatiFattureCollegate>/);
+  assert.match(xml, /<DatiFattureCollegate>\s*<IdDocumento>6<\/IdDocumento>\s*<Data>2026-06-25<\/Data>/);
+});
+
+test('an invoice with no reference carries no DatiFattureCollegate', async () => {
+  const payload = buildInvoicePayload(
+    makeAeronauticaInvoice(),
+    makeOrdinaryPayload('FPA12').company,
+    makeAeronauticaCustomer(),
+    { mode: 'test', progressivo: 'H0053' }
+  );
+  assert.equal(payload.datiFattureCollegate, null);
+  assert.equal(buildOrdinaryInvoiceXml(payload).includes('<DatiFattureCollegate>'), false);
+});
+
 test('PA invoice without CIG omits the correlated document block', async () => {
   const payload = buildInvoicePayload(
     makeAeronauticaInvoice({ cig: null, cup: null }),

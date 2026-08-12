@@ -83,11 +83,15 @@ function loadInvoice(fatturaId) {
       a.tipo AS cliente_tipo,
       p.codice_univoco_sdi AS cliente_codice_univoco_pa,
       o.codice_ordine AS ordine_codice,
-      o.data_ordine AS ordine_data
+      o.data_ordine AS ordine_data,
+      rif.numero_documento AS riferimento_numero,
+      rif.numero AS riferimento_numero_fallback,
+      rif.data AS riferimento_data
     FROM fatture f
     LEFT JOIN anagrafiche a ON a.id = f.anagrafica_id
     LEFT JOIN pa_dettagli p ON p.anagrafica_id = a.id
     LEFT JOIN ordini o ON o.id = f.ordine_id
+    LEFT JOIN fatture rif ON rif.id = f.fattura_riferimento_id
     WHERE f.id = ?
   `).get(fatturaId);
   if (!invoice) return null;
@@ -268,6 +272,7 @@ function buildInvoicePayload(invoice, company, customer, options = {}) {
     causali: [],
     esigibilitaIva,
     datiOrdineAcquisto: buildDatiOrdineAcquisto(invoice, numero),
+    datiFattureCollegate: buildDatiFattureCollegate(invoice),
     lines,
     riepilogo,
     payment: buildPaymentPayload(invoice, totaleDocumento)
@@ -307,6 +312,18 @@ function buildDatiOrdineAcquisto(invoice, numeroFattura) {
     data: normalizeDate(invoice.ordine_data) || undefined,
     codiceCup: cup || undefined,
     codiceCig: cig || undefined
+  };
+}
+
+// La fattura che una nota di credito rettifica. Vale solo se il collegamento
+// c'e': una nota emessa a mano senza riferimento resta valida per lo schema,
+// ma chi la riceve non sa a quale documento si riferisce.
+function buildDatiFattureCollegate(invoice) {
+  const numero = String(invoice.riferimento_numero || invoice.riferimento_numero_fallback || '').trim();
+  if (!numero) return null;
+  return {
+    idDocumento: numero.slice(0, 20),
+    data: normalizeDate(invoice.riferimento_data) || undefined
   };
 }
 

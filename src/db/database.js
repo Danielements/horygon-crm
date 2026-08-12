@@ -366,7 +366,11 @@ function ensureColumn(table, definition) {
   "cup TEXT",
   // Esigibilita' IVA risolta al momento della generazione: I immediata,
   // D differita, S scissione dei pagamenti.
-  "esigibilita_iva TEXT"
+  "esigibilita_iva TEXT",
+  // Documento a cui questo si riferisce: una nota di credito senza il numero e
+  // la data della fattura che rettifica non dice a cosa si riferisce, e finisce
+  // in DatiFattureCollegate.
+  "fattura_riferimento_id INTEGER"
 ].forEach(col => ensureColumn('fatture', col));
 
 [

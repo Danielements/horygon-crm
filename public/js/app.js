@@ -3842,6 +3842,8 @@ function renderFattureRows(targetId, rows) {
       <button class="btn btn-outline btn-sm" onclick="openApiPdf('/fatture/${f.id}/pdf-cortesia')" title="Copia di cortesia in PDF">PDF</button>
       ${f.xml_path ? `<button class="btn btn-outline btn-sm" onclick="openFatturaXml(${f.id})" title="Apri XML">XML</button>` : ''}
       ${f.tipo === 'emessa' ? `<button class="btn ${f.stato_sdi === 'firma_richiesta' ? 'btn-accent' : 'btn-outline'} btn-sm" onclick="openSdiFirmaModal(${f.id})" title="Ciclo di firma e invio a SdI">&#128278; Firma / Invio</button>` : ''}
+      ${f.tipo === 'emessa' && f.tipo_documento !== 'nota_credito' ? `<button class="btn btn-outline btn-sm" onclick="creaNotaCredito(${f.id})" title="Nota di credito a storno di questa fattura">Nota credito</button>` : ''}
+      ${f.tipo === 'emessa' && f.source === 'CRM' && !f.sdi_id ? `<button class="btn btn-danger btn-sm" onclick="eliminaFattura(${f.id}, ${JSON.stringify(String(f.numero || f.id))})" title="Elimina: possibile solo finche non e stata trasmessa">Elimina</button>` : ''}
       ${f.tipo === 'emessa' ? `<button class="btn btn-outline btn-sm" onclick="testSendFatturaSdi(${f.id})">Genera XML TEST</button><button class="btn btn-accent btn-sm" onclick="testTransmitFatturaSdi(${f.id})">Invia a SdI TEST</button>` : ''}
       ${f.tipo === 'ricevuta' ? `<button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC01')">Accetta SdI TEST</button><button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC02')">Rifiuta SdI TEST</button>` : ''}
     </div></td></tr>`).join('');
@@ -3852,6 +3854,35 @@ function renderFattureRows(targetId, rows) {
 // parte.
 async function editFattura(id) {
   await openModal('modal-fattura', id);
+}
+
+// Il pulsante compare solo sulle fatture emesse dal CRM e mai trasmesse, ma la
+// decisione vera la prende il server: qui si chiede solo conferma.
+async function eliminaFattura(id, numero) {
+  if (!confirm(`Eliminare la fattura ${numero}?\n\nSi puo' solo finche' non e' stata trasmessa al SdI. Dopo, si rettifica con una nota di credito.`)) return;
+  try {
+    await api('DELETE', `/fatture/${id}`);
+    toast('Fattura eliminata', 'success');
+    ricaricaSezioneFatture();
+  } catch (e) {
+    toast(e.message || 'Eliminazione non riuscita', 'error');
+  }
+}
+
+async function creaNotaCredito(id) {
+  if (!confirm('Creare una nota di credito a storno di questa fattura?\n\nRiprende righe, importi e trattamento IVA dell originale, e prende il numero successivo della serie.')) return;
+  try {
+    const esito = await api('POST', `/fatture/${id}/nota-credito`, {});
+    toast(`Nota di credito ${esito.numero} creata`, 'success');
+    ricaricaSezioneFatture();
+  } catch (e) {
+    toast(e.message || 'Creazione non riuscita', 'error');
+  }
+}
+
+function ricaricaSezioneFatture() {
+  const attiva = document.querySelector('.section.active')?.id?.replace('section-', '') || 'fatture-attive';
+  loadFattureBySection(['fatture-attive', 'fatture-passive', 'fatture-fuori-campo'].includes(attiva) ? attiva : 'fatture-attive');
 }
 
 async function loadFattureBySection(section) {

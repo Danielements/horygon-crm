@@ -11,6 +11,7 @@ const { importInvoiceXml } = require('../services/fattura-import');
 const { calcolaTotaliDocumento } = require('../services/iva');
 const { createFatturaPdfBuffer } = require('../services/document-pdf');
 const { nextNumeroFattura } = require('../services/fattura-numerazione');
+const { writeAudit } = require('../services/audit');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -81,6 +82,154 @@ router.get('/:id/pdf-cortesia', requirePermesso('fatture', 'read'), async (req, 
     res.send(pdf.buffer);
   } catch (e) {
     res.status(404).json({ error: e.message });
+  }
+});
+
+// Una fattura si elimina solo finche' non e' uscita.
+//
+// Il discrimine non e' lo stato in interfaccia ma il fatto che di quel
+// documento esista traccia al SdI: un flusso trasmesso, un identificativo, un
+// numero SdI. Da quel momento la fattura e' un documento fiscale e si rettifica
+// con una nota di credito, non si cancella. Le fatture ricevute o scaricate
+// dallo storico non si toccano proprio: quelle non sono nostre.
+function motivoNonEliminabile(fattura) {
+  if (!fattura) return 'Fattura non trovata';
+  if (fattura.source && fattura.source !== 'CRM') {
+    return `Questa fattura proviene da ${fattura.source} e non e' un documento emesso da qui: non puo essere eliminata.`;
+  }
+  if (fattura.tipo !== 'emessa') {
+    return 'Le fatture ricevute non si eliminano: sono documenti altrui gia acquisiti.';
+  }
+  if (fattura.sdi_id) {
+    return `La fattura ha un identificativo SdI (${fattura.sdi_id}): e gia stata trasmessa e va rettificata con una nota di credito.`;
+  }
+  const trasmesso = db.prepare(`
+    SELECT id, nome_file, identificativo_sdi, stato
+    FROM fatture_sdi_flussi
+    WHERE fattura_id = ? AND COALESCE(direzione, 'outbound') = 'outbound'
+      AND (identificativo_sdi IS NOT NULL OR inviato_il IS NOT NULL)
+    LIMIT 1
+  `).get(fattura.id);
+  if (trasmesso) {
+    return `Il flusso ${trasmesso.nome_file || trasmesso.id} risulta trasmesso al SdI: la fattura va rettificata con una nota di credito.`;
+  }
+  return null;
+}
+
+router.delete('/:id', requirePermesso('fatture', 'delete'), (req, res) => {
+  const fattura = db.prepare('SELECT id, numero, tipo, source, sdi_id FROM fatture WHERE id = ?').get(req.params.id);
+  if (!fattura) return res.status(404).json({ error: 'Fattura non trovata' });
+  const motivo = motivoNonEliminabile(fattura);
+  if (motivo) return res.status(409).json({ error: motivo });
+
+  const notaCollegata = db.prepare('SELECT id, numero FROM fatture WHERE fattura_riferimento_id = ? LIMIT 1').get(fattura.id);
+  if (notaCollegata) {
+    return res.status(409).json({
+      error: `Esiste la nota di credito ${notaCollegata.numero || notaCollegata.id} che si riferisce a questa fattura: eliminare prima quella.`
+    });
+  }
+
+  try {
+    db.exec('BEGIN');
+    // I flussi mai trasmessi se ne vanno con la fattura; il progressivo che
+    // avevano allocato resta bruciato, perche' un nome file gia' proposto al
+    // SdI non si riusa comunque.
+    db.prepare('DELETE FROM fatture_sdi_flussi WHERE fattura_id = ?').run(fattura.id);
+    db.prepare('DELETE FROM fatture_righe WHERE fattura_id = ?').run(fattura.id);
+    db.prepare('DELETE FROM fatture_iva_riepilogo WHERE fattura_id = ?').run(fattura.id);
+    db.prepare('DELETE FROM fatture WHERE id = ?').run(fattura.id);
+    db.exec('COMMIT');
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch {}
+    return res.status(400).json({ error: e.message });
+  }
+
+  writeAudit({
+    utente_id: req.user.id,
+    azione: 'fattura_eliminata',
+    entita_tipo: 'fattura',
+    entita_id: fattura.id,
+    dettagli: { numero: fattura.numero, tipo: fattura.tipo, source: fattura.source }
+  });
+  res.json({ ok: true });
+});
+
+// Nota di credito a storno di una fattura emessa.
+//
+// Ne ricopia righe e riepilogo con gli importi positivi: nel tracciato la nota
+// di credito e' un TD04 e non porta segni meno, e' il tipo documento a dire che
+// storna. Prende un numero della stessa serie e resta collegata all'originale,
+// che finisce in DatiFattureCollegate.
+router.post('/:id/nota-credito', requirePermesso('fatture', 'edit'), (req, res) => {
+  const originale = db.prepare('SELECT * FROM fatture WHERE id = ?').get(req.params.id);
+  if (!originale) return res.status(404).json({ error: 'Fattura non trovata' });
+  if (originale.tipo !== 'emessa') {
+    return res.status(400).json({ error: 'La nota di credito si emette a storno di una fattura emessa' });
+  }
+  const esistente = db.prepare('SELECT id, numero FROM fatture WHERE fattura_riferimento_id = ? LIMIT 1').get(originale.id);
+  if (esistente) {
+    return res.status(409).json({ error: `Esiste gia la nota di credito ${esistente.numero || esistente.id} per questa fattura` });
+  }
+
+  const righe = db.prepare('SELECT * FROM fatture_righe WHERE fattura_id = ? ORDER BY id').all(originale.id);
+  if (!righe.length) return res.status(400).json({ error: 'La fattura non ha righe da stornare' });
+  const riepilogo = db.prepare('SELECT * FROM fatture_iva_riepilogo WHERE fattura_id = ? ORDER BY id').all(originale.id);
+
+  const data = String(req.body?.data || '').trim() || new Date().toISOString().slice(0, 10);
+  const numero = nextNumeroFattura({ data }).numero;
+
+  try {
+    db.exec('BEGIN');
+    const creata = db.prepare(`
+      INSERT INTO fatture (
+        numero, numero_documento, tipo, direzione, tipo_documento, anagrafica_id, ordine_id, data,
+        imponibile, iva, totale, stato, stato_pagamento, valuta, partita_iva, codice_fiscale, note,
+        origine_importazione, cig, cup, esigibilita_iva, fattura_riferimento_id
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      numero, numero, 'emessa', 'attiva', 'nota_credito',
+      originale.anagrafica_id, originale.ordine_id, data,
+      originale.imponibile, originale.iva, originale.totale,
+      'ricevuta', 'da_pagare', originale.valuta || 'EUR',
+      originale.partita_iva, originale.codice_fiscale,
+      String(req.body?.note || '').trim() || `Storno della fattura ${originale.numero_documento || originale.numero}`,
+      'nota_credito', originale.cig, originale.cup, originale.esigibilita_iva, originale.id
+    );
+    const notaId = Number(creata.lastInsertRowid);
+
+    const insRiga = db.prepare(`
+      INSERT INTO fatture_righe (
+        fattura_id, prodotto_id, descrizione, quantita, prezzo_unitario, sconto, imponibile,
+        aliquota_iva, natura_iva, importo_iva, totale_riga, regola_iva_id, codice_iva, riferimento_normativo
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `);
+    // Lo snapshot fiscale si copia, non si ricalcola: la nota deve stornare
+    // esattamente il trattamento con cui la fattura era stata emessa, anche se
+    // nel frattempo la regola IVA e' cambiata.
+    righe.forEach((r) => insRiga.run(
+      notaId, r.prodotto_id, r.descrizione, r.quantita, r.prezzo_unitario, r.sconto,
+      r.imponibile, r.aliquota_iva, r.natura_iva, r.importo_iva, r.totale_riga,
+      r.regola_iva_id, r.codice_iva, r.riferimento_normativo
+    ));
+
+    const insIva = db.prepare(`
+      INSERT INTO fatture_iva_riepilogo (fattura_id, aliquota_iva, natura_iva, imponibile, imposta, riferimento_normativo)
+      VALUES (?,?,?,?,?,?)
+    `);
+    riepilogo.forEach((r) => insIva.run(notaId, r.aliquota_iva, r.natura_iva, r.imponibile, r.imposta, r.riferimento_normativo));
+    db.exec('COMMIT');
+
+    writeAudit({
+      utente_id: req.user.id,
+      azione: 'nota_credito_creata',
+      entita_tipo: 'fattura',
+      entita_id: notaId,
+      dettagli: { numero, storna: originale.numero_documento || originale.numero, fattura_id: originale.id, totale: originale.totale }
+    });
+    res.json({ ok: true, fattura_id: notaId, numero });
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch {}
+    res.status(400).json({ error: e.message });
   }
 });
 
@@ -160,14 +309,23 @@ router.put('/:id', requirePermesso('fatture', 'edit'), (req, res) => {
   const { numero, tipo, direzione, tipo_documento, anagrafica_id, ordine_id, data, scadenza, data_ricezione, imponibile, iva, totale, sdi_id, stato, stato_pagamento, valuta, partita_iva, codice_fiscale, note, righe, riepilogo_iva, cig, cup, esigibilita_iva } = req.body;
   try {
     const hashDocumento = buildDocumentHash({ numero, data, partita_iva, totale });
+    // I valori si normalizzano a null: un campo assente dal corpo della
+    // richiesta arriva come undefined, che SQLite non sa legare, e la modifica
+    // falliva con un errore che parlava di "parametro 5".
     const duplicate = db.prepare(`
       SELECT id FROM fatture
       WHERE id <> ?
         AND (hash_documento = ?
           OR (numero = ? AND COALESCE(data,'') = COALESCE(?, '') AND COALESCE(partita_iva,'') = COALESCE(?, '') AND COALESCE(totale,0) = COALESCE(?,0)))
       LIMIT 1
-    `).get(req.params.id, hashDocumento, numero, data, partita_iva, totale);
+    `).get(req.params.id, sqlNullable(hashDocumento), sqlNullable(numero), sqlNullable(data), sqlNullable(partita_iva), sqlNullable(totale));
     if (duplicate) return res.status(400).json({ error: 'Esiste gia una fattura con gli stessi riferimenti' });
+    // Il collegamento all'ordine non e' un campo del modale: se non arriva
+    // nella richiesta va conservato, non azzerato. Rinumerare la fattura 6
+    // dall'interfaccia le aveva staccato l'ordine di origine, e con quello il
+    // riferimento che finisce in DatiOrdineAcquisto.
+    const attuale = db.prepare('SELECT ordine_id FROM fatture WHERE id = ?').get(req.params.id);
+    const ordineCollegato = ordine_id === undefined ? (attuale?.ordine_id ?? null) : sqlNullable(ordine_id);
     db.prepare(`UPDATE fatture SET
       numero=?, numero_documento=?, tipo=?, direzione=?, tipo_documento=?, anagrafica_id=?, ordine_id=?, data=?, scadenza=?, data_ricezione=?,
       imponibile=?, iva=?, totale=?, sdi_id=?, stato=?, stato_pagamento=?, valuta=?, partita_iva=?, codice_fiscale=?, note=?, hash_documento=?,
@@ -175,7 +333,7 @@ router.put('/:id', requirePermesso('fatture', 'edit'), (req, res) => {
       WHERE id=?
     `).run(
       sqlNullable(numero), sqlNullable(numero), sqlNullable(tipo), direzione || (tipo === 'emessa' ? 'attiva' : 'passiva'), tipo_documento || 'fattura',
-      sqlNullable(anagrafica_id), sqlNullable(ordine_id), sqlNullable(data), sqlNullable(scadenza), data_ricezione || null,
+      sqlNullable(anagrafica_id), ordineCollegato, sqlNullable(data), sqlNullable(scadenza), data_ricezione || null,
       sqlNullable(imponibile), sqlNullable(iva), sqlNullable(totale), sqlNullable(sdi_id), stato || 'ricevuta', stato_pagamento || 'da_pagare', valuta || 'EUR',
       partita_iva || null, codice_fiscale || null, sqlNullable(note), hashDocumento,
       sqlNullable(cig), sqlNullable(cup), sqlNullable(esigibilita_iva), req.params.id

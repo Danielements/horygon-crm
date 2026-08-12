@@ -56,6 +56,7 @@ function makeApp() {
   app.use(express.json());
   app.use('/api/preventivi', require('../src/routes/preventivi'));
   app.use('/api/ordini', require('../src/routes/ordini'));
+  app.use('/api/fatture', require('../src/routes/fatture'));
   return app;
 }
 
@@ -552,6 +553,96 @@ test('le righe dell intestazione non si sovrappongono nemmeno con un numero lung
       `"${voci[i - 1].testo}" finisce a ${Math.round(voci[i - 1].basso)} e "${voci[i].testo}" comincia a ${Math.round(voci[i].y)}`
     );
   }
+});
+
+// Rinumerare la fattura dall'interfaccia le staccava l'ordine di origine: il
+// modale non ha un campo per l'ordine, quindi il PUT arrivava senza e lo
+// azzerava. Senza quel collegamento il riferimento in DatiOrdineAcquisto
+// diventa il numero della fattura stessa.
+test('modificare una fattura non le stacca l ordine di origine', async () => {
+  const prodottoId = creaProdotto('LINK', IVA22.id);
+  const ordine = await call('POST', '/api/ordini', {
+    codice_ordine: `${MARKER}-ORD-LINK`,
+    tipo: 'vendita',
+    data_ordine: '2026-08-12',
+    righe: [{ prodotto_id: prodottoId, quantita: 1, prezzo_unitario: 100 }]
+  });
+  await call('PATCH', `/api/ordini/${ordine.id}/stato`, { stato: 'confermato' });
+  const fattura = await call('POST', `/api/ordini/${ordine.id}/convert-to-fattura`, {});
+
+  const prima = db.prepare('SELECT ordine_id, numero FROM fatture WHERE id = ?').get(fattura.fattura_id);
+  assert.equal(prima.ordine_id, ordine.id, 'la conversione deve collegare la fattura all ordine');
+
+  // Salvataggio come lo manda il modale: senza ordine_id.
+  await call('PUT', `/api/fatture/${fattura.fattura_id}`, {
+    numero: `${prima.numero}-bis`,
+    tipo: 'emessa',
+    data: '2026-08-12',
+    imponibile: 100,
+    iva: 22,
+    totale: 122,
+    righe: [{ descrizione: 'Riga', quantita: 1, prezzo_unitario: 100, regola_iva_id: IVA22.id }]
+  });
+
+  const dopo = db.prepare('SELECT ordine_id FROM fatture WHERE id = ?').get(fattura.fattura_id);
+  assert.equal(dopo.ordine_id, ordine.id, 'l ordine collegato deve sopravvivere alla modifica');
+
+  db.prepare('DELETE FROM fatture_righe WHERE fattura_id = ?').run(fattura.fattura_id);
+  db.prepare('DELETE FROM fatture_iva_riepilogo WHERE fattura_id = ?').run(fattura.fattura_id);
+  db.prepare('DELETE FROM fatture WHERE id = ?').run(fattura.fattura_id);
+});
+
+test('una fattura mai trasmessa si elimina, una con identificativo SdI no', async () => {
+  const prodottoId = creaProdotto('DEL', IVA22.id);
+  const ordine = await call('POST', '/api/ordini', {
+    codice_ordine: `${MARKER}-ORD-DEL`, tipo: 'vendita', data_ordine: '2026-08-12',
+    righe: [{ prodotto_id: prodottoId, quantita: 1, prezzo_unitario: 100 }]
+  });
+  await call('PATCH', `/api/ordini/${ordine.id}/stato`, { stato: 'confermato' });
+  const fattura = await call('POST', `/api/ordini/${ordine.id}/convert-to-fattura`, {});
+
+  // Con un identificativo SdI il documento e' uscito: si rettifica, non si cancella.
+  db.prepare('UPDATE fatture SET sdi_id = ? WHERE id = ?').run('123456789', fattura.fattura_id);
+  await assert.rejects(
+    () => call('DELETE', `/api/fatture/${fattura.fattura_id}`),
+    (errore) => /409/.test(errore.message) && /nota di credito/i.test(errore.message)
+  );
+
+  db.prepare('UPDATE fatture SET sdi_id = NULL WHERE id = ?').run(fattura.fattura_id);
+  await call('DELETE', `/api/fatture/${fattura.fattura_id}`);
+  assert.equal(db.prepare('SELECT id FROM fatture WHERE id = ?').get(fattura.fattura_id), undefined);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM fatture_righe WHERE fattura_id = ?').get(fattura.fattura_id).n, 0);
+});
+
+test('la nota di credito storna la fattura e la cita in DatiFattureCollegate', async () => {
+  const prodottoId = creaProdotto('NC', IVA22.id);
+  const ordine = await call('POST', '/api/ordini', {
+    codice_ordine: `${MARKER}-ORD-NC`, tipo: 'vendita', data_ordine: '2026-08-12',
+    righe: [{ prodotto_id: prodottoId, quantita: 2, prezzo_unitario: 100 }]
+  });
+  await call('PATCH', `/api/ordini/${ordine.id}/stato`, { stato: 'confermato' });
+  const fattura = await call('POST', `/api/ordini/${ordine.id}/convert-to-fattura`, {});
+
+  const nota = await call('POST', `/api/fatture/${fattura.fattura_id}/nota-credito`, { data: '2026-09-01' });
+  const riga = db.prepare('SELECT * FROM fatture WHERE id = ?').get(nota.fattura_id);
+  assert.equal(riga.tipo_documento, 'nota_credito');
+  assert.equal(riga.fattura_riferimento_id, fattura.fattura_id);
+  // Gli importi restano positivi: e' il tipo documento a dire che storna.
+  assert.equal(riga.totale, 244);
+  assert.equal(riga.numero !== fattura.numero, true, 'la nota prende un numero suo della serie');
+  // Lo snapshot fiscale e' copiato, non ricalcolato.
+  const rigaNota = db.prepare('SELECT aliquota_iva, codice_iva FROM fatture_righe WHERE fattura_id = ?').get(nota.fattura_id);
+  assert.equal(rigaNota.aliquota_iva, 22);
+  assert.equal(rigaNota.codice_iva, 'IVA22');
+
+  // Una seconda nota sulla stessa fattura non deve nascere.
+  await assert.rejects(() => call('POST', `/api/fatture/${fattura.fattura_id}/nota-credito`, {}), /409/);
+  // E la fattura stornata non si elimina finche' la nota esiste.
+  await assert.rejects(() => call('DELETE', `/api/fatture/${fattura.fattura_id}`), /nota di credito/i);
+
+  db.prepare('DELETE FROM fatture_righe WHERE fattura_id IN (?,?)').run(nota.fattura_id, fattura.fattura_id);
+  db.prepare('DELETE FROM fatture_iva_riepilogo WHERE fattura_id IN (?,?)').run(nota.fattura_id, fattura.fattura_id);
+  db.prepare('DELETE FROM fatture WHERE id IN (?,?)').run(nota.fattura_id, fattura.fattura_id);
 });
 
 test('la copia di cortesia in PDF si genera e riporta i totali', async () => {

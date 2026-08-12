@@ -111,6 +111,7 @@ function buildOrdinaryInvoiceXml(payload) {
         ${(payload.causali || []).map((causale) => `<Causale>${xmlEscape(causale)}</Causale>`).join('\n        ')}
       </DatiGeneraliDocumento>
       ${renderDatiOrdineAcquisto(payload.datiOrdineAcquisto)}
+      ${renderDatiFattureCollegate(payload.datiFattureCollegate)}
     </DatiGenerali>
     <DatiBeniServizi>
 ${bodyLines}
@@ -314,6 +315,21 @@ function renderDatiOrdineAcquisto(order) {
         ${order.codiceCup ? `<CodiceCUP>${xmlEscape(order.codiceCup)}</CodiceCUP>` : ''}
         ${order.codiceCig ? `<CodiceCIG>${xmlEscape(order.codiceCig)}</CodiceCIG>` : ''}
       </DatiOrdineAcquisto>`;
+}
+
+// DatiFattureCollegate: la fattura che una nota di credito rettifica.
+//
+// Sta in DatiGeneraliType dopo DatiRicezione e prima di DatiSAL, quindi subito
+// dopo DatiOrdineAcquisto fra quelli che questo builder emette. Stesso tipo dei
+// documenti correlati, quindi stesso ordine di figli e stesso IdDocumento
+// obbligatorio: senza numero e data della fattura di origine la nota non dice
+// a cosa si riferisce, e chi la riceve non sa cosa storna.
+function renderDatiFattureCollegate(riferimento) {
+  if (!riferimento || !riferimento.idDocumento) return '';
+  return `<DatiFattureCollegate>
+        <IdDocumento>${xmlEscape(riferimento.idDocumento)}</IdDocumento>
+        ${riferimento.data ? `<Data>${riferimento.data}</Data>` : ''}
+      </DatiFattureCollegate>`;
 }
 
 // ScontoMaggiorazioneType: Tipo (SC/MG), Percentuale, Importo.
