@@ -14,6 +14,8 @@ const {
   validateRegolaIva
 } = require('../src/services/iva');
 const { backfillSnapshotIva } = require('../src/db/backfill-iva');
+const { nextNumeroFattura } = require('../src/services/fattura-numerazione');
+const { createFatturaPdfBuffer } = require('../src/services/document-pdf');
 
 // --- ambiente ---------------------------------------------------------------
 //
@@ -329,6 +331,49 @@ test('caso F: l IVA corretta a mano sulla riga ordine e quella che finisce in fa
   );
 });
 
+// --- numerazione fiscale ---------------------------------------------------
+
+test('il numero fattura continua la serie dell anno, non copia il codice ordine', () => {
+  const anno = '2091'; // anno senza fatture, per non dipendere dallo storico
+  const primo = nextNumeroFattura({ data: `${anno}-03-01` });
+  assert.equal(primo.numero, '1');
+
+  db.prepare(`
+    INSERT INTO fatture (numero, numero_documento, tipo, direzione, data, imponibile, iva, totale)
+    VALUES (?,?,'emessa','attiva',?,0,0,0)
+  `).run(`7`, `7`, `${anno}-05-01`);
+  try {
+    const dopo = nextNumeroFattura({ data: `${anno}-06-01` });
+    assert.equal(dopo.numero, '8', 'riparte dal massimo della serie, non dal conteggio');
+    // Un numero occupato non produce un duplicato.
+    db.prepare(`
+      INSERT INTO fatture (numero, numero_documento, tipo, direzione, data, imponibile, iva, totale)
+      VALUES (?,?,'emessa','attiva',?,0,0,0)
+    `).run('8', '8', `${anno}-07-01`);
+    assert.equal(nextNumeroFattura({ data: `${anno}-08-01` }).numero, '9');
+  } finally {
+    db.prepare("DELETE FROM fatture WHERE data LIKE ?").run(`${anno}-%`);
+  }
+});
+
+test('la fattura generata da un ordine prende un numero della serie', async () => {
+  const prodottoId = creaProdotto('NUM', IVA22.id);
+  const ordine = await call('POST', '/api/ordini', {
+    codice_ordine: `${MARKER}-ORD-NUMERAZIONE-LUNGHISSIMO-2026`,
+    tipo: 'vendita',
+    data_ordine: '2026-08-12',
+    righe: [{ prodotto_id: prodottoId, quantita: 1, prezzo_unitario: 100 }]
+  });
+  await call('PATCH', `/api/ordini/${ordine.id}/stato`, { stato: 'confermato' });
+  const fattura = await call('POST', `/api/ordini/${ordine.id}/convert-to-fattura`, {});
+  // Prima usciva "FAT-2026-RD-PREV-...", cioe' il codice dell'ordine troncato.
+  assert.match(String(fattura.numero), /^\d+$/, `numero non progressivo: ${fattura.numero}`);
+  assert.equal(String(fattura.numero).includes('ORD'), false);
+  db.prepare('DELETE FROM fatture_righe WHERE fattura_id = ?').run(fattura.fattura_id);
+  db.prepare('DELETE FROM fatture_iva_riepilogo WHERE fattura_id = ?').run(fattura.fattura_id);
+  db.prepare('DELETE FROM fatture WHERE id = ?').run(fattura.fattura_id);
+});
+
 // --- migrazione dello storico ----------------------------------------------
 
 test('la migrazione deduce l aliquota dalla testata, lascia vuoto quando non e deducibile e non tocca i totali', () => {
@@ -397,6 +442,27 @@ test('la migrazione non ripassa sulle righe gia allineate', () => {
   const riga = db.prepare('SELECT aliquota_iva, codice_iva FROM ordini_righe WHERE ordine_id = ?').get(ordineId);
   assert.equal(riga.aliquota_iva, 10);
   assert.equal(riga.codice_iva, 'IVA10');
+});
+
+test('la copia di cortesia in PDF si genera e riporta i totali', async () => {
+  const prodotto22 = creaProdotto('PDF22', IVA22.id);
+  const prodottoN4 = creaProdotto('PDFN4', N4.id);
+  const ordine = await call('POST', '/api/ordini', {
+    codice_ordine: `${MARKER}-ORD-PDF`,
+    tipo: 'vendita',
+    data_ordine: '2026-08-12',
+    righe: [
+      { prodotto_id: prodotto22, quantita: 1, prezzo_unitario: 100 },
+      { prodotto_id: prodottoN4, quantita: 1, prezzo_unitario: 200 }
+    ]
+  });
+  await call('PATCH', `/api/ordini/${ordine.id}/stato`, { stato: 'confermato' });
+  const fattura = await call('POST', `/api/ordini/${ordine.id}/convert-to-fattura`, {});
+
+  const pdf = await createFatturaPdfBuffer(fattura.fattura_id);
+  assert.equal(pdf.buffer.subarray(0, 5).toString('latin1'), '%PDF-', 'non e un PDF');
+  assert.equal(pdf.buffer.length > 1000, true);
+  assert.match(pdf.filename, /^fattura-.*\.pdf$/);
 });
 
 test('una fattura da ordine a IVA mista produce un riepilogo per trattamento', async () => {

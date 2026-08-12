@@ -498,15 +498,15 @@ function ensureAccountingSections() {
   if (filter) filter.remove();
   const tbody = document.getElementById('fatture-body');
   if (tbody) tbody.id = 'fatture-attive-body';
+  // L'intestazione della tabella fatture viene completata qui perche' la
+  // sezione in index.html e' una sola e viene clonata per attive, passive e
+  // fuori campo. L'ordine e' quello di lettura di un documento: imponibile,
+  // imposta, e **il totale in fondo**, che e' il numero che si cerca.
   const theadRow = base.querySelector('thead tr');
-  if (theadRow && !theadRow.dataset.ivaAdded) {
-    const statoTh = theadRow.children[5];
-    const ivaTh = document.createElement('th');
-    ivaTh.textContent = 'IVA';
-    theadRow.insertBefore(ivaTh, statoTh);
-    const sdiTh = document.createElement('th');
-    sdiTh.textContent = 'SDI';
-    theadRow.appendChild(sdiTh);
+  if (theadRow && theadRow.dataset.colonneImporti !== '1') {
+    const intestazioni = ['Numero', 'Tipo', 'Fornitore/Cliente', 'Data', 'Imponibile', 'IVA', 'Totale', 'Stato', 'Cambia stato', 'Azioni'];
+    theadRow.innerHTML = intestazioni.map((testo) => `<th>${testo}</th>`).join('');
+    theadRow.dataset.colonneImporti = '1';
     theadRow.dataset.ivaAdded = '1';
   }
   base.dataset.accountingSplit = '1';
@@ -3822,14 +3822,16 @@ function renderFattureRows(targetId, rows) {
     <tr><td><strong>${f.numero}</strong></td>
     <td><span class="badge badge-${f.tipo==='ricevuta'?'fornitore':'cliente'}">${f.tipo}</span></td>
     <td>${f.ragione_sociale||'-'}</td><td>${f.data||'-'}</td>
-    <td>${f.totale ? 'EUR '+Number(f.totale).toFixed(2) : '-'}</td>
+    <td>${f.imponibile != null ? 'EUR '+Number(f.imponibile).toFixed(2) : '-'}</td>
     <td>${formatIvaValue(f.iva)}</td>
+    <td><strong>${f.totale != null ? 'EUR '+Number(f.totale).toFixed(2) : '-'}</strong></td>
     <td><span class="badge badge-${f.stato}">${f.stato}</span>${renderStatoSdiBadge(f)}</td>
     <td><select class="btn btn-outline btn-sm" onchange="cambiaStatoFattura(${f.id},this.value)">
       ${['ricevuta','pagata','scaduta','annullata'].map(s=>`<option value="${s}"${f.stato===s?' selected':''}>${s}</option>`).join('')}
     </select></td>
     <td><div style="display:flex;gap:6px;flex-wrap:wrap">
       <button class="btn btn-outline btn-sm" onclick="previewFattura(${f.id})" title="Anteprima fattura">&#128065;</button>
+      <button class="btn btn-outline btn-sm" onclick="openApiPdf('/fatture/${f.id}/pdf-cortesia')" title="Copia di cortesia in PDF">PDF</button>
       ${f.xml_path ? `<button class="btn btn-outline btn-sm" onclick="openFatturaXml(${f.id})" title="Apri XML">XML</button>` : ''}
       ${f.tipo === 'emessa' && f.stato_sdi ? `<button class="btn ${f.stato_sdi === 'firma_richiesta' ? 'btn-accent' : 'btn-outline'} btn-sm" onclick="openSdiFirmaModal(${f.id})" title="Ciclo di firma e invio a SdI">&#128278; Firma / Invio</button>` : ''}
       ${f.tipo === 'emessa' ? `<button class="btn btn-outline btn-sm" onclick="testSendFatturaSdi(${f.id})">Genera XML TEST</button><button class="btn btn-accent btn-sm" onclick="testTransmitFatturaSdi(${f.id})">Invia a SdI TEST</button>` : ''}

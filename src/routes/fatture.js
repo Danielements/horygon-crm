@@ -9,6 +9,8 @@ const XLSX = require('xlsx');
 const crypto = require('crypto');
 const { importInvoiceXml } = require('../services/fattura-import');
 const { calcolaTotaliDocumento } = require('../services/iva');
+const { createFatturaPdfBuffer } = require('../services/document-pdf');
+const { nextNumeroFattura } = require('../services/fattura-numerazione');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -67,6 +69,24 @@ router.get('/:id', requirePermesso('fatture', 'read'), (req, res) => {
   f.righe = db.prepare(`SELECT r.*, p.nome, p.codice_interno FROM fatture_righe r LEFT JOIN prodotti p ON p.id = r.prodotto_id WHERE r.fattura_id = ?`).all(req.params.id);
   f.riepilogo_iva = db.prepare(`SELECT * FROM fatture_iva_riepilogo WHERE fattura_id = ? ORDER BY id`).all(req.params.id);
   res.json(f);
+});
+
+// Copia di cortesia. Il documento fiscale resta l'XML: questo PDF serve a
+// leggerla, e infatti lo dice in fondo alla pagina.
+router.get('/:id/pdf-cortesia', requirePermesso('fatture', 'read'), async (req, res) => {
+  try {
+    const pdf = await createFatturaPdfBuffer(req.params.id);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename=${pdf.filename}`);
+    res.send(pdf.buffer);
+  } catch (e) {
+    res.status(404).json({ error: e.message });
+  }
+});
+
+// Prossimo numero libero della serie dell'anno, per precompilare il modale.
+router.get('/numerazione/prossimo', requirePermesso('fatture', 'read'), (req, res) => {
+  res.json(nextNumeroFattura({ data: req.query.data || null }));
 });
 
 router.get('/:id/xml', requirePermesso('fatture', 'read'), (req, res) => {

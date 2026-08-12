@@ -17,7 +17,8 @@ const LOGO_PATH_DATA = 'M156.9,94l3.4-5.8c.4-.6.4-1.4,0-2l-2.6-4.5h0s-21.1-36.7-
 const DOC_THEMES = {
   preventivo: { accent: '#c59b08', label: 'PREVENTIVO', fill: '#fff8db' },
   ordine: { accent: '#0f766e', label: 'ORDINE', fill: '#ecfeff' },
-  ddt: { accent: '#2563eb', label: 'DDT', fill: '#eff6ff' }
+  ddt: { accent: '#2563eb', label: 'DDT', fill: '#eff6ff' },
+  fattura: { accent: '#7c3aed', label: 'FATTURA', fill: '#f5f3ff' }
 };
 
 function money(value, valuta = 'EUR') {
@@ -610,10 +611,133 @@ async function createDdtPdfBuffer(id) {
   };
 }
 
+// Copia di cortesia della fattura.
+//
+// Non e' il documento fiscale: quello e' l'XML trasmesso al SdI, e questo PDF
+// non lo sostituisce ne' lo integra. Serve a chi la fattura la deve leggere -
+// il cliente, l'ufficio acquisti di una PA - e per questo porta il riepilogo
+// IVA per trattamento, che nella riga della tabella non si vede.
+async function createFatturaPdfBuffer(id) {
+  const row = db.prepare(`
+    SELECT f.*, a.ragione_sociale, a.indirizzo, a.cap, a.citta, a.provincia, a.piva, a.cf, a.email,
+           o.codice_ordine
+    FROM fatture f
+    LEFT JOIN anagrafiche a ON a.id = f.anagrafica_id
+    LEFT JOIN ordini o ON o.id = f.ordine_id
+    WHERE f.id = ?
+  `).get(id);
+  if (!row) throw new Error('Fattura non trovata');
+  const righe = db.prepare(`
+    SELECT r.*, p.nome, p.codice_interno
+    FROM fatture_righe r
+    LEFT JOIN prodotti p ON p.id = r.prodotto_id
+    WHERE r.fattura_id = ?
+    ORDER BY r.id
+  `).all(id);
+  const riepilogo = db.prepare(`
+    SELECT * FROM fatture_iva_riepilogo WHERE fattura_id = ? ORDER BY id
+  `).all(id);
+
+  const valuta = row.valuta || 'EUR';
+  const doc = new PDFDocument({ size: 'A4', margin: 40, bufferPages: true });
+  const done = bufferFromDoc(doc);
+  const theme = DOC_THEMES.fattura;
+  const headerLines = [
+    `Numero: ${row.numero_documento || row.numero || row.id}`,
+    `Data: ${row.data || '-'}`,
+    `Scadenza: ${row.scadenza || '-'}`
+  ];
+  const frame = drawCommonFrame(doc, theme, headerLines);
+  const { colors, startX } = frame;
+
+  // Su una fattura emessa il cedente siamo noi; su una ricevuta e' la
+  // controparte. Invertire le due intestazioni farebbe leggere il documento
+  // al contrario.
+  const emessa = row.tipo !== 'ricevuta';
+  const nostro = formatAddress(COMPANY_INFO.name, COMPANY_INFO.addressLine1, '04100', 'Latina', 'LT');
+  const loro = formatAddress(
+    row.ragione_sociale || row.cliente_fornitore_label,
+    row.indirizzo, row.cap, row.citta, row.provincia
+  );
+
+  let y = 156;
+  drawInfoBox(doc, colors, theme.accent, startX, y, 250, 76, emessa ? 'Cedente / prestatore' : 'Fornitore', emessa ? nostro : loro);
+  drawInfoBox(doc, colors, theme.accent, 305, y, 250, 76, emessa ? 'Cessionario / committente' : 'Cessionario', emessa ? loro : nostro);
+
+  y += 90;
+  const identificativo = row.partita_iva || row.piva || row.codice_fiscale || row.cf || '-';
+  drawInfoBox(doc, colors, theme.accent, 40, y, 118, 54, 'Documento', row.tipo_esteso || row.tipo_documento || 'Fattura', theme.fill);
+  drawInfoBox(doc, colors, theme.accent, 168, y, 128, 54, 'P.IVA / C.F.', identificativo, theme.fill);
+  drawInfoBox(doc, colors, theme.accent, 306, y, 108, 54, 'Pagamento', row.stato_pagamento || '-', theme.fill);
+  drawInfoBox(doc, colors, theme.accent, 424, y, 131, 54, 'Riferimenti', [
+    row.codice_ordine ? `Ordine ${row.codice_ordine}` : null,
+    row.cig ? `CIG ${row.cig}` : null,
+    row.cup ? `CUP ${row.cup}` : null
+  ].filter(Boolean).join('\n') || 'Nessuno', theme.fill);
+
+  y += 74;
+  y = drawRowsTable(doc, theme, {
+    ...frame,
+    y,
+    title: 'Righe fattura',
+    headerLines,
+    rows: righe,
+    columns: [
+      { label: 'Codice', x: 8, width: 62, value: (r) => r.codice_articolo || r.codice_interno || '-' },
+      { label: 'Descrizione', x: 76, width: 186, value: (r) => r.descrizione || r.nome || '-' },
+      { label: 'Q.tà', x: 268, width: 40, align: 'right', value: (r) => Number(r.quantita || 0).toFixed(2) },
+      { label: 'Prezzo', x: 314, width: 66, align: 'right', value: (r) => money(r.prezzo_unitario || 0, valuta) },
+      { label: 'Imponibile', x: 386, width: 72, align: 'right', value: (r) => money(r.imponibile || 0, valuta) },
+      // Su una riga con Natura la percentuale non vuol dire niente: si stampa
+      // il codice, che e' l'informazione fiscale vera.
+      { label: 'IVA', x: 464, width: 44, align: 'right', value: (r) => r.natura_iva || `${Number(r.aliquota_iva || 0).toFixed(0)}%` },
+      { label: 'Totale', x: 512, width: 60, align: 'right', value: (r) => money(r.totale_riga || 0, valuta) }
+    ]
+  });
+
+  y += 18;
+  const altezzaRiepilogo = 40 + Math.max(1, riepilogo.length) * 14;
+  y = ensureDocumentSpace(doc, theme, headerLines, Math.max(altezzaRiepilogo, 96) + 12, y);
+
+  const dettaglioIva = riepilogo.length
+    ? riepilogo.map((r) => {
+        const etichetta = r.natura_iva ? r.natura_iva : `${Number(r.aliquota_iva || 0).toFixed(0)}%`;
+        return `${etichetta}  imponibile ${money(r.imponibile || 0, valuta)}  imposta ${money(r.imposta || 0, valuta)}`;
+      }).join('\n')
+    : 'Nessun riepilogo IVA registrato';
+  drawInfoBox(doc, colors, theme.accent, 40, y, 250, altezzaRiepilogo, 'Riepilogo IVA', dettaglioIva);
+  drawInfoBox(doc, colors, theme.accent, 305, y, 250, altezzaRiepilogo, 'Totali', [
+    `Imponibile: ${money(row.imponibile || 0, valuta)}`,
+    `IVA: ${money(row.iva || 0, valuta)}`,
+    `Totale documento: ${money(row.totale || 0, valuta)}`
+  ].join('\n'), theme.fill);
+
+  y += altezzaRiepilogo + 14;
+  y = ensureDocumentSpace(doc, theme, headerLines, 70, y);
+  drawInfoBox(doc, colors, theme.accent, 40, y, 515, 60, 'Note', row.note || 'Nessuna nota');
+
+  y += 74;
+  y = ensureDocumentSpace(doc, theme, headerLines, 30, y);
+  doc.fillColor(colors.muted).fontSize(8)
+    .text(
+      'Copia di cortesia. L\'originale della fattura elettronica e\' il file XML trasmesso al Sistema di Interscambio.',
+      40, y, { width: 515 }
+    );
+
+  addPageNumbers(doc);
+  doc.end();
+  return {
+    buffer: await done,
+    filename: `fattura-${String(row.numero_documento || row.numero || row.id).replace(/[^A-Za-z0-9._-]+/g, '-')}.pdf`,
+    row
+  };
+}
+
 async function getDocumentPdf(kind, id) {
   if (kind === 'preventivo') return createPreventivoPdfBuffer(id);
   if (kind === 'ordine') return createOrdinePdfBuffer(id);
   if (kind === 'ddt') return createDdtPdfBuffer(id);
+  if (kind === 'fattura') return createFatturaPdfBuffer(id);
   throw new Error('Tipo documento non supportato');
 }
 
@@ -621,5 +745,6 @@ module.exports = {
   getDocumentPdf,
   createPreventivoPdfBuffer,
   createOrdinePdfBuffer,
-  createDdtPdfBuffer
+  createDdtPdfBuffer,
+  createFatturaPdfBuffer
 };

@@ -11,22 +11,12 @@ const { notifyUsersWithEmail, emailCustomerIfEnabled } = require('../services/go
 const { createOrdinePdfBuffer } = require('../services/document-pdf');
 const { writeAudit } = require('../services/audit');
 const { calcolaRiga, calcolaTotaliDocumento, snapshotIvaPerProdotto } = require('../services/iva');
+const { nextNumeroFattura } = require('../services/fattura-numerazione');
 
 const s = (v) => (v === undefined || v === '' || v === null) ? null : v;
 const n = (v) => { const p = parseFloat(v); return isNaN(p) ? null : p; };
 const i = (v) => { const p = parseInt(v); return isNaN(p) ? null : p; };
 
-function buildInvoiceNumberFromOrder(orderCode) {
-  const year = new Date().getFullYear();
-  const base = `FAT-${year}-${String(orderCode || 'ORD').replace(/[^A-Za-z0-9-]/g, '').slice(-20) || 'ORD'}`;
-  let candidate = base;
-  let suffix = 2;
-  while (db.prepare('SELECT id FROM fatture WHERE numero = ? LIMIT 1').get(candidate)) {
-    candidate = `${base}-${suffix}`;
-    suffix += 1;
-  }
-  return candidate;
-}
 
 // Righe fattura dalle righe ordine.
 //
@@ -419,8 +409,10 @@ router.post('/:id/convert-to-fattura', requirePermesso('fatture', 'edit'), (req,
   const imponibile = totali.imponibile;
   const iva = totali.iva;
   const totale = totali.totale;
-  const numeroFattura = buildInvoiceNumberFromOrder(ordine.codice_ordine || ordine.id);
   const dataFattura = s(ordine.data_ordine) || new Date().toISOString().slice(0, 10);
+  // La fattura segue la numerazione fiscale dell'anno, non il codice
+  // dell'ordine da cui nasce: quello resta il collegamento, in `ordine_id`.
+  const numeroFattura = nextNumeroFattura({ data: dataFattura }).numero;
 
   try {
     db.exec('BEGIN');
