@@ -103,8 +103,8 @@ router.post('/', requirePermesso('clienti', 'edit'), (req, res) => {
   try {
     const r = db.prepare(`
       INSERT INTO anagrafiche
-      (tipo,ragione_sociale,piva,cf,indirizzo,cap,citta,provincia,paese,lat,lng,email,pec,telefono,sito_web,note,codice_destinatario,canale_cliente,tipologia_cliente,pa_mepa,pa_sda,pa_rdo)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      (tipo,ragione_sociale,piva,cf,indirizzo,cap,citta,provincia,paese,lat,lng,email,pec,telefono,sito_web,note,codice_destinatario,canale_cliente,tipologia_cliente,pa_mepa,pa_sda,pa_rdo,escludi_split_payment)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       s(b.tipo) || 'cliente',
       s(b.ragione_sociale),
@@ -116,7 +116,8 @@ router.post('/', requirePermesso('clienti', 'edit'), (req, res) => {
       s(b.tipologia_cliente) || 'privato',
       b.pa_mepa ? 1 : 0,
       b.pa_sda ? 1 : 0,
-      b.pa_rdo ? 1 : 0
+      b.pa_rdo ? 1 : 0,
+      b.escludi_split_payment ? 1 : 0
     );
     const id = r.lastInsertRowid;
     if ((s(b.tipo) === 'pa' || s(b.tipologia_cliente) === 'pa') && b.pa_dettagli) {
@@ -133,7 +134,7 @@ router.put('/:id', requirePermesso('clienti', 'edit'), (req, res) => {
     db.prepare(`
       UPDATE anagrafiche SET
         ragione_sociale=?,piva=?,cf=?,indirizzo=?,cap=?,citta=?,provincia=?,paese=?,
-        lat=?,lng=?,email=?,pec=?,telefono=?,sito_web=?,note=?,codice_destinatario=?,canale_cliente=?,tipologia_cliente=?,pa_mepa=?,pa_sda=?,pa_rdo=?,attivo=?
+        lat=?,lng=?,email=?,pec=?,telefono=?,sito_web=?,note=?,codice_destinatario=?,canale_cliente=?,tipologia_cliente=?,pa_mepa=?,pa_sda=?,pa_rdo=?,escludi_split_payment=?,attivo=?
       WHERE id=?
     `).run(
       s(b.ragione_sociale), s(b.piva), s(b.cf),
@@ -145,6 +146,7 @@ router.put('/:id', requirePermesso('clienti', 'edit'), (req, res) => {
       b.pa_mepa ? 1 : 0,
       b.pa_sda ? 1 : 0,
       b.pa_rdo ? 1 : 0,
+      b.escludi_split_payment ? 1 : 0,
       b.attivo !== undefined ? i(b.attivo) : 1,
       req.params.id
     );

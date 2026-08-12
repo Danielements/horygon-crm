@@ -1142,6 +1142,18 @@
       <div class="form-group"><label>U.M.</label><input type="text" id="prod-um" value="pz"></div>
       <div class="form-group"><label>Peso (kg)</label><input type="number" step="0.01" id="prod-peso"></div>
     </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Trattamento IVA</label>
+        <div class="picker-input-row">
+          <select id="prod-regola-iva"></select>
+          <button type="button" class="btn btn-outline btn-sm" onclick="openRegoleIvaModal()">Gestisci</button>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:6px">
+          E' il valore proposto sulle righe nuove. I documenti gia' creati non cambiano.
+        </div>
+      </div>
+    </div>
     <div class="form-group"><label>Tag prodotto</label><input type="text" id="prod-tags" placeholder="Es. carta, A4, riciclata, ufficio"></div>
     <div class="form-row">
       <div class="form-group">
@@ -1204,6 +1216,87 @@
   </div>
 </div>
 
+<!-- MODAL REGOLE IVA -->
+<div id="modal-regole-iva" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">Trattamenti IVA</div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">
+      Anagrafica dei trattamenti usati su articoli e righe documento. Una regola gia' usata non si elimina:
+      si disattiva o le si mette una data di fine validita', cosi' i documenti storici restano leggibili.
+    </div>
+    <input type="hidden" id="regola-iva-id">
+    <div class="form-row">
+      <div class="form-group"><label>Codice *</label><input type="text" id="regola-iva-codice" placeholder="IVA22, N4, N3.1..."></div>
+      <div class="form-group">
+        <label>Tipo</label>
+        <select id="regola-iva-tipo">
+          <option value="VAT_TREATMENT">Trattamento IVA</option>
+          <option value="VAT_DUE">Esigibilita' IVA</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Descrizione</label><input type="text" id="regola-iva-descrizione"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Aliquota %</label><input type="number" step="0.01" id="regola-iva-aliquota"></div>
+      <div class="form-group"><label>Natura SdI</label><input type="text" id="regola-iva-natura" placeholder="N1, N2.1, N4..."></div>
+      <div class="form-group">
+        <label>Esigibilita'</label>
+        <select id="regola-iva-esigibilita">
+          <option value="">—</option>
+          <option value="I">I - immediata</option>
+          <option value="D">D - differita</option>
+          <option value="S">S - scissione dei pagamenti</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Etichetta in fattura</label><input type="text" id="regola-iva-etichetta"></div>
+      <div class="form-group"><label>Riferimento normativo</label><input type="text" id="regola-iva-riferimento"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Valida dal</label><input type="date" id="regola-iva-valido-dal"></div>
+      <div class="form-group"><label>Valida al</label><input type="date" id="regola-iva-valido-al"></div>
+      <div class="form-group"><label>Priorita'</label><input type="number" id="regola-iva-priorita" value="0"></div>
+    </div>
+    <div class="form-group"><label>Note d'uso</label><input type="text" id="regola-iva-note"></div>
+    <div class="form-group">
+      <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="regola-iva-attiva" checked> Attiva</label>
+      <label style="display:inline-flex;align-items:center;gap:6px;margin-left:16px"><input type="checkbox" id="regola-iva-revisione"> Richiede revisione manuale</label>
+    </div>
+    <div class="modal-actions" style="margin-bottom:12px">
+      <button class="btn btn-outline" onclick="resetRegolaIvaForm()">Nuova</button>
+      <button class="btn btn-accent" onclick="salvaRegolaIva()">Salva regola</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Cerca</label><input type="text" id="regole-iva-q" placeholder="codice, descrizione, norma" oninput="loadRegoleIva()"></div>
+      <div class="form-group">
+        <label>Stato</label>
+        <select id="regole-iva-filtro-attiva" onchange="loadRegoleIva()">
+          <option value="">Tutte</option>
+          <option value="1" selected>Solo attive</option>
+          <option value="0">Solo disattivate</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Tipo</label>
+        <select id="regole-iva-filtro-tipo" onchange="loadRegoleIva()">
+          <option value="">Tutti</option>
+          <option value="VAT_TREATMENT">Trattamento</option>
+          <option value="VAT_DUE">Esigibilita'</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Aliquota</label><input type="number" step="0.01" id="regole-iva-filtro-aliquota" oninput="loadRegoleIva()"></div>
+      <div class="form-group"><label>Natura</label><input type="text" id="regole-iva-filtro-natura" oninput="loadRegoleIva()"></div>
+    </div>
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead><tr><th>Codice</th><th>Descrizione</th><th>Aliquota</th><th>Natura</th><th>Validita'</th><th>Stato</th><th>Azioni</th></tr></thead>
+        <tbody id="regole-iva-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL ORDINE -->
 <div id="modal-ordine" class="modal">
   <div class="modal-box doc-theme-box doc-theme-ordine">
@@ -1222,7 +1315,7 @@
           <input type="hidden" id="ord-anagrafica">
           <div class="picker-input-row">
             <input type="text" id="ord-anagrafica-label" readonly placeholder="Seleziona anagrafica dal popup">
-            <button type="button" class="btn btn-outline btn-sm" onclick="openRecordPicker('anagrafiche',{targetId:'ord-anagrafica',labelId:'ord-anagrafica-label'})">Scegli</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="openRecordPicker('anagrafiche',{targetId:'ord-anagrafica',labelId:'ord-anagrafica-label',onSelect:onOrdineAnagraficaSelected})">Scegli</button>
           </div>
         </div>
         <div class="form-group"><label>Canale</label><select id="ord-canale"><option value="mepa">MEPA</option><option value="diretto">Diretto</option></select></div>
@@ -1231,6 +1324,10 @@
         <div class="form-group"><label>Origine preventivo</label><input type="text" id="ord-preventivo-label" readonly placeholder="Nessun preventivo collegato"></div>
         <div class="form-group"><label>Data Ordine</label><input type="date" id="ord-data"></div>
         <div class="form-group"><label>Consegna Prevista</label><input type="date" id="ord-consegna"></div>
+      </div>
+      <div class="form-row" id="ord-riferimenti-pa" style="display:none">
+        <div class="form-group"><label>CIG</label><input type="text" id="ord-cig" maxlength="15" placeholder="Codice Identificativo Gara"></div>
+        <div class="form-group"><label>CUP</label><input type="text" id="ord-cup" maxlength="15" placeholder="Codice Unico Progetto"></div>
       </div>
     </div>
     <div class="form-section-card">
@@ -1360,7 +1457,7 @@
           <input type="hidden" id="fatt-anagrafica">
           <div class="picker-input-row">
             <input type="text" id="fatt-anagrafica-label" readonly placeholder="Seleziona anagrafica dal popup">
-            <button type="button" class="btn btn-outline btn-sm" onclick="openRecordPicker('anagrafiche',{targetId:'fatt-anagrafica',labelId:'fatt-anagrafica-label'})">Scegli</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="openRecordPicker('anagrafiche',{targetId:'fatt-anagrafica',labelId:'fatt-anagrafica-label',onSelect:onFatturaAnagraficaSelected})">Scegli</button>
           </div>
         </div>
         <div class="form-group"><label>Valuta</label><input type="text" id="fatt-valuta" value="EUR"></div>
@@ -1375,6 +1472,22 @@
         <div class="form-group"><label>P.IVA</label><input type="text" id="fatt-piva"></div>
         <div class="form-group"><label>Codice fiscale</label><input type="text" id="fatt-cf"></div>
         <div class="form-group"><label>SDI ID</label><input type="text" id="fatt-sdi"></div>
+      </div>
+      <div id="fatt-riferimenti-pa" style="display:none">
+        <div class="form-row">
+          <div class="form-group"><label>CIG</label><input type="text" id="fatt-cig" maxlength="15" placeholder="Codice Identificativo Gara"></div>
+          <div class="form-group"><label>CUP</label><input type="text" id="fatt-cup" maxlength="15" placeholder="Codice Unico Progetto"></div>
+          <div class="form-group">
+            <label>Esigibilità IVA</label>
+            <select id="fatt-esigibilita-iva">
+              <option value="">Automatica (scissione dei pagamenti per la PA)</option>
+              <option value="S">S - scissione dei pagamenti</option>
+              <option value="I">I - immediata</option>
+              <option value="D">D - differita</option>
+            </select>
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted)">Senza CIG la PA non liquida la fattura: finiscono in DatiOrdineAcquisto insieme al numero dell'ordine.</div>
       </div>
     </div>
     <div class="form-section-card">

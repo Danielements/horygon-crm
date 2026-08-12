@@ -123,8 +123,13 @@ router.delete('/categorie/:id', requirePermesso('prodotti', 'delete'), (req, res
 // Lista prodotti con giacenza
 router.get('/', (req, res) => {
   const { q, categoria_id } = req.query;
-  let sql = `SELECT p.*, c.nome as categoria_nome FROM prodotti p
-    LEFT JOIN categorie c ON c.id = p.categoria_id WHERE p.attivo = 1`;
+  let sql = `SELECT p.*, c.nome as categoria_nome,
+      ri.codice AS regola_iva_codice, ri.descrizione AS regola_iva_descrizione,
+      ri.aliquota_iva AS regola_iva_aliquota, ri.natura_iva AS regola_iva_natura
+    FROM prodotti p
+    LEFT JOIN categorie c ON c.id = p.categoria_id
+    LEFT JOIN regole_iva ri ON ri.id = p.regola_iva_id
+    WHERE p.attivo = 1`;
   const params = [];
   if (q) {
     sql += ' AND (p.nome LIKE ? OR p.codice_interno LIKE ? OR IFNULL(p.descrizione, \'\') LIKE ? OR IFNULL(p.tags, \'\') LIKE ?)';
@@ -153,8 +158,13 @@ router.get('/', (req, res) => {
 
 // Singolo prodotto completo
 router.get('/:id', (req, res) => {
-  const p = db.prepare(`SELECT p.*, c.nome as categoria_nome FROM prodotti p
-    LEFT JOIN categorie c ON c.id = p.categoria_id WHERE p.id = ?`).get(req.params.id);
+  const p = db.prepare(`SELECT p.*, c.nome as categoria_nome,
+      ri.codice AS regola_iva_codice, ri.descrizione AS regola_iva_descrizione,
+      ri.aliquota_iva AS regola_iva_aliquota, ri.natura_iva AS regola_iva_natura
+    FROM prodotti p
+    LEFT JOIN categorie c ON c.id = p.categoria_id
+    LEFT JOIN regole_iva ri ON ri.id = p.regola_iva_id
+    WHERE p.id = ?`).get(req.params.id);
   if (!p) return res.status(404).json({ error: 'Non trovato' });
   p.media = db.prepare('SELECT * FROM prodotti_media WHERE prodotto_id = ? ORDER BY caricato_il DESC').all(req.params.id);
   p.listini = db.prepare('SELECT * FROM prodotti_listini WHERE prodotto_id = ?').all(req.params.id);
@@ -197,10 +207,11 @@ router.post('/', requirePermesso('prodotti', 'edit'), (req, res) => {
   const b = req.body || {};
   try {
     const r = db.prepare(`
-      INSERT INTO prodotti (codice_interno,barcode,nome,descrizione,categoria_id,unita_misura,peso_kg,cpv_mepa,tags)
-      VALUES (?,?,?,?,?,?,?,?,?)
+      INSERT INTO prodotti (codice_interno,barcode,nome,descrizione,categoria_id,unita_misura,peso_kg,cpv_mepa,tags,regola_iva_id)
+      VALUES (?,?,?,?,?,?,?,?,?,?)
     `).run(s(b.codice_interno), s(b.barcode), s(b.nome), s(b.descrizione),
-          i(b.categoria_id), s(b.unita_misura) || 'pz', n(b.peso_kg), s(b.cpv_mepa), normalizeTags(b.tags));
+          i(b.categoria_id), s(b.unita_misura) || 'pz', n(b.peso_kg), s(b.cpv_mepa), normalizeTags(b.tags),
+          i(b.regola_iva_id));
     res.json({ id: r.lastInsertRowid });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -210,10 +221,13 @@ router.put('/:id', requirePermesso('prodotti', 'edit'), (req, res) => {
   const b = req.body || {};
   try {
     db.prepare(`
-      UPDATE prodotti SET codice_interno=?,barcode=?,nome=?,descrizione=?,categoria_id=?,unita_misura=?,peso_kg=?,cpv_mepa=?,tags=?,attivo=?
+      UPDATE prodotti SET codice_interno=?,barcode=?,nome=?,descrizione=?,categoria_id=?,unita_misura=?,peso_kg=?,cpv_mepa=?,tags=?,regola_iva_id=?,attivo=?
       WHERE id=?
     `).run(s(b.codice_interno), s(b.barcode), s(b.nome), s(b.descrizione),
            i(b.categoria_id), s(b.unita_misura), n(b.peso_kg), s(b.cpv_mepa), normalizeTags(b.tags),
+           // Cambiare il trattamento IVA dell'articolo vale per le righe da
+           // qui in avanti: i documenti gia' creati portano il proprio.
+           i(b.regola_iva_id),
            b.attivo !== undefined ? i(b.attivo) : 1,
            req.params.id);
     res.json({ ok: true });

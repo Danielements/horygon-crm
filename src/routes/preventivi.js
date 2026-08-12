@@ -4,10 +4,53 @@ const db = require('../db/database');
 const { authMiddleware, requirePermesso } = require('../middleware/auth');
 const { createPreventivoPdfBuffer } = require('../services/document-pdf');
 const { writeAudit } = require('../services/audit');
+const { calcolaRiga, snapshotIvaPerProdotto } = require('../services/iva');
 
 const s = (v) => (v === undefined || v === '' || v === null) ? null : v;
 const n = (v) => { const p = parseFloat(v); return Number.isFinite(p) ? p : null; };
 const i = (v) => { const p = parseInt(v, 10); return Number.isFinite(p) ? p : null; };
+
+// Snapshot fiscale della riga preventivo.
+//
+// Se la riga non porta un trattamento proprio si prende quello predefinito
+// dell'articolo, ma **una volta sola, adesso**: da qui in poi il dato vive
+// sulla riga e non torna piu' a chiedere all'articolo come sta messo.
+function preparePreventivoRiga(riga = {}) {
+  const conTrattamento = riga.regola_iva_id || riga.codice_iva || riga.natura_iva
+    || riga.aliquota_iva !== undefined && riga.aliquota_iva !== null && riga.aliquota_iva !== ''
+    ? riga
+    : { ...riga, ...(snapshotIvaPerProdotto(riga.prodotto_id) || {}) };
+  return calcolaRiga(conTrattamento);
+}
+
+function insertPreventivoRighe(preventivoId, righe = []) {
+  const ins = db.prepare(`
+    INSERT INTO preventivi_righe (
+      preventivo_id, prodotto_id, descrizione, quantita, prezzo_unitario, sconto,
+      imponibile, aliquota_iva, natura_iva, importo_iva, totale_riga,
+      regola_iva_id, codice_iva, riferimento_normativo
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `);
+  (righe || []).forEach((riga) => {
+    const calc = preparePreventivoRiga(riga);
+    ins.run(
+      preventivoId,
+      i(riga.prodotto_id),
+      s(riga.descrizione),
+      calc.quantita,
+      calc.prezzo_unitario,
+      calc.sconto,
+      calc.imponibile,
+      calc.aliquota_iva,
+      calc.natura_iva,
+      calc.importo_iva,
+      calc.totale_riga,
+      calc.regola_iva_id,
+      calc.codice_iva,
+      calc.riferimento_normativo
+    );
+  });
+}
 
 router.use(authMiddleware);
 
@@ -105,27 +148,7 @@ router.post('/', requirePermesso('ordini', 'edit'), (req, res) => {
       req.user.id
     );
     const id = r.lastInsertRowid;
-    if (b.righe?.length) {
-      const ins = db.prepare(`
-        INSERT INTO preventivi_righe (preventivo_id, prodotto_id, descrizione, quantita, prezzo_unitario, sconto, imponibile, aliquota_iva, natura_iva, importo_iva, totale_riga)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)
-      `);
-      b.righe.forEach(riga => {
-        ins.run(
-          id,
-          i(riga.prodotto_id),
-          s(riga.descrizione),
-          n(riga.quantita),
-          n(riga.prezzo_unitario),
-          n(riga.sconto) || 0,
-          n(riga.imponibile),
-          n(riga.aliquota_iva),
-          s(riga.natura_iva),
-          n(riga.importo_iva),
-          n(riga.totale_riga)
-        );
-      });
-    }
+    insertPreventivoRighe(id, b.righe);
     res.json({ id });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -153,27 +176,7 @@ router.put('/:id', requirePermesso('ordini', 'edit'), (req, res) => {
       req.params.id
     );
     db.prepare('DELETE FROM preventivi_righe WHERE preventivo_id = ?').run(req.params.id);
-    if (b.righe?.length) {
-      const ins = db.prepare(`
-        INSERT INTO preventivi_righe (preventivo_id, prodotto_id, descrizione, quantita, prezzo_unitario, sconto, imponibile, aliquota_iva, natura_iva, importo_iva, totale_riga)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)
-      `);
-      b.righe.forEach(riga => {
-        ins.run(
-          req.params.id,
-          i(riga.prodotto_id),
-          s(riga.descrizione),
-          n(riga.quantita),
-          n(riga.prezzo_unitario),
-          n(riga.sconto) || 0,
-          n(riga.imponibile),
-          n(riga.aliquota_iva),
-          s(riga.natura_iva),
-          n(riga.importo_iva),
-          n(riga.totale_riga)
-        );
-      });
-    }
+    insertPreventivoRighe(req.params.id, b.righe);
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -223,8 +226,13 @@ router.post('/:id/convert-to-order', requirePermesso('ordini', 'edit'), (req, re
   const existing = db.prepare('SELECT id, codice_ordine FROM ordini WHERE preventivo_id = ? LIMIT 1').get(req.params.id);
   if (existing) return res.status(400).json({ error: `Ordine già creato: ${existing.codice_ordine}` });
 
+  // Si porta via anche il trattamento fiscale, non solo quantita' e prezzo:
+  // l'IVA dell'ordine deve essere quella che il cliente ha accettato nel
+  // preventivo, non quella che l'articolo ha oggi in anagrafica.
   const righe = db.prepare(`
-    SELECT prodotto_id, descrizione, quantita, prezzo_unitario, sconto
+    SELECT prodotto_id, descrizione, quantita, prezzo_unitario, sconto,
+           imponibile, aliquota_iva, natura_iva, importo_iva, totale_riga,
+           regola_iva_id, codice_iva, riferimento_normativo
     FROM preventivi_righe
     WHERE preventivo_id = ?
     ORDER BY id
@@ -260,16 +268,34 @@ router.post('/:id/convert-to-order', requirePermesso('ordini', 'edit'), (req, re
   const ordineId = orderResult.lastInsertRowid;
   if (righe.length) {
     const ins = db.prepare(`
-      INSERT INTO ordini_righe (ordine_id, prodotto_id, quantita, prezzo_unitario, sconto)
-      VALUES (?,?,?,?,?)
+      INSERT INTO ordini_righe (
+        ordine_id, prodotto_id, descrizione, quantita, prezzo_unitario, sconto,
+        imponibile, aliquota_iva, natura_iva, importo_iva, totale_riga,
+        regola_iva_id, codice_iva, riferimento_normativo
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `);
     righe.forEach(riga => {
+      // Copia, non ricalcolo: gli importi sono quelli approvati. Il motore
+      // interviene solo se la riga del preventivo e' anteriore allo snapshot
+      // e quindi non porta ancora gli importi.
+      const calc = riga.imponibile === null || riga.imponibile === undefined
+        ? calcolaRiga(riga)
+        : riga;
       ins.run(
         ordineId,
         i(riga.prodotto_id),
-        i(riga.quantita) || 0,
+        s(riga.descrizione),
+        n(riga.quantita) || 0,
         n(riga.prezzo_unitario) || 0,
-        n(riga.sconto) || 0
+        n(riga.sconto) || 0,
+        n(calc.imponibile),
+        n(calc.aliquota_iva),
+        s(calc.natura_iva),
+        n(calc.importo_iva),
+        n(calc.totale_riga),
+        i(calc.regola_iva_id),
+        s(calc.codice_iva),
+        s(calc.riferimento_normativo)
       );
     });
   }

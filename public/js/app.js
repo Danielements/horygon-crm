@@ -679,17 +679,34 @@ function ensureAnagraficaLogisticaFields() {
       <label style="display:inline-flex;align-items:center;gap:6px;margin-right:14px"><input type="checkbox" id="anag-pa-sda"> SDA</label>
       <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="anag-pa-rdo"> RdO</label>
       <div style="font-size:12px;color:var(--text-muted);margin-top:10px">Per la fatturazione elettronica PA valorizza almeno Codice IPA o Codice Univoco Ufficio.</div>
+      <div style="border-top:1px solid var(--border);margin-top:10px;padding-top:10px">
+        <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="anag-escludi-split"> Escludi scissione dei pagamenti</label>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:6px">Verso la PA lo split payment e' la regola: spunta solo nei casi esclusi dall'art. 17-ter.</div>
+      </div>
     </div>`;
   note.parentElement.insertAdjacentElement('beforebegin', wrap);
 }
 
+// La scheda puo' essere una PA per tipo di record (pulsante PA) o per tipologia
+// cliente: basta una delle due perche' i campi PA servano.
+function isAnagraficaPa(record) {
+  if (!record) return false;
+  return record.tipo === 'pa'
+    || record.tipologia_cliente === 'pa'
+    || record.anagrafica_tipo === 'pa'
+    || record.anagrafica_tipologia === 'pa';
+}
+
 function toggleAnagraficaPaFields() {
-  const tipo = document.getElementById('anag-tipologia-cliente')?.value || 'privato';
+  const isPa = isAnagraficaPa({
+    tipo: document.getElementById('anag-tipo')?.value || '',
+    tipologia_cliente: document.getElementById('anag-tipologia-cliente')?.value || 'privato'
+  });
   const box = document.getElementById('anag-pa-flags');
-  if (box) box.style.display = tipo === 'pa' ? 'block' : 'none';
+  if (box) box.style.display = isPa ? 'block' : 'none';
   ['anag-codice-ipa', 'anag-codice-univoco-sdi'].forEach(id => {
     const field = document.getElementById(id);
-    if (field) field.disabled = tipo !== 'pa';
+    if (field) field.disabled = !isPa;
   });
 }
 
@@ -1241,7 +1258,7 @@ function openModalAnagrafica(tipo) {
   });
   const tipologia = document.getElementById('anag-tipologia-cliente');
   if (tipologia) tipologia.value = 'privato';
-  ['anag-pa-mepa','anag-pa-sda','anag-pa-rdo'].forEach(id => {
+  ['anag-pa-mepa','anag-pa-sda','anag-pa-rdo','anag-escludi-split'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.checked = false;
   });
@@ -1301,6 +1318,8 @@ async function editAnagrafica(id) {
   document.getElementById('anag-pa-mepa').checked = !!a.pa_mepa;
   document.getElementById('anag-pa-sda').checked = !!a.pa_sda;
   document.getElementById('anag-pa-rdo').checked = !!a.pa_rdo;
+  const escludiSplit = document.getElementById('anag-escludi-split');
+  if (escludiSplit) escludiSplit.checked = !!a.escludi_split_payment;
   toggleAnagraficaPaFields();
   openModal('modal-anagrafica');
 }
@@ -1329,6 +1348,7 @@ async function salvaAnagrafica() {
     pa_mepa: document.getElementById('anag-pa-mepa')?.checked ? 1 : 0,
     pa_sda: document.getElementById('anag-pa-sda')?.checked ? 1 : 0,
     pa_rdo: document.getElementById('anag-pa-rdo')?.checked ? 1 : 0,
+    escludi_split_payment: document.getElementById('anag-escludi-split')?.checked ? 1 : 0,
     canale_cliente: document.getElementById('anag-tipologia-cliente')?.value === 'pa' ? 'mepa' : 'privato',
     attivo: 1,
   };
@@ -1562,6 +1582,7 @@ async function editProdotto(id) {
   });
   renderProdottoStoredFiles(p.media || []);
   await loadCategorie();
+  await renderProdottoRegolaIva(p.regola_iva_id, p.regola_iva_codice);
   document.getElementById('prod-categoria').value = p.categoria_id || '';
   // Tab fornitori
   const fHtml = (p.fornitori||[]).length ? (p.fornitori||[]).map(f =>
@@ -1745,6 +1766,7 @@ async function salvaProdotto() {
     cpv_mepa: document.getElementById('prod-cpv-mepa').value || null,
     unita_misura: document.getElementById('prod-um').value,
     peso_kg: parseFloat(document.getElementById('prod-peso').value) || null,
+    regola_iva_id: document.getElementById('prod-regola-iva')?.value || null,
     attivo: 1,
   };
   try {
@@ -1790,7 +1812,27 @@ function nuovoProdotto() {
   });
   renderProdottoStoredFiles([]);
   loadCategorie();
+  renderProdottoRegolaIva(null);
   openModal('modal-prodotto');
+}
+
+// Tendina del trattamento IVA sull'anagrafica articolo. Un articolo puo' non
+// averne uno: significa che la scelta si fa riga per riga.
+async function renderProdottoRegolaIva(selectedId, selectedCodice = null) {
+  const select = document.getElementById('prod-regola-iva');
+  if (!select) return;
+  const rules = await loadRegoleIvaCache();
+  const trattamenti = rules.filter((rule) => rule.tipo_regola === 'VAT_TREATMENT');
+  const options = ['<option value="">— nessuno, si sceglie sulla riga —</option>'];
+  // Una regola disattivata dopo essere stata assegnata resta visibile qui,
+  // altrimenti salvare l'articolo la cancellerebbe senza dirlo.
+  if (selectedId && !trattamenti.some((rule) => String(rule.id) === String(selectedId))) {
+    options.push(`<option value="${escapeAttr(selectedId)}" selected>${escapeHtml(selectedCodice || `#${selectedId}`)} — non piu' in elenco</option>`);
+  }
+  trattamenti.forEach((rule) => options.push(
+    `<option value="${escapeAttr(rule.id)}"${String(rule.id) === String(selectedId) ? ' selected' : ''}>${escapeHtml(rule.etichetta)}</option>`
+  ));
+  select.innerHTML = options.join('');
 }
 
 async function eliminaProdotto(id, nome) {
@@ -2039,6 +2081,156 @@ async function getQR(id) {
     <p style="font-size:12px;color:#475569;word-break:break-all">${data.url}</p>
     <p><a href="/api/etichetta/${id}/pdf">PDF etichetta</a></p>
   </body></html>`);
+}
+
+// --- CRUD trattamenti IVA -------------------------------------------------
+
+function openRegoleIvaModal() {
+  resetRegolaIvaForm();
+  loadRegoleIva();
+  openModal('modal-regole-iva');
+}
+
+function resetRegolaIvaForm() {
+  const fields = {
+    'regola-iva-id': '', 'regola-iva-codice': '', 'regola-iva-descrizione': '',
+    'regola-iva-aliquota': '', 'regola-iva-natura': '', 'regola-iva-esigibilita': '',
+    'regola-iva-etichetta': '', 'regola-iva-riferimento': '', 'regola-iva-note': '',
+    'regola-iva-valido-dal': '', 'regola-iva-valido-al': '', 'regola-iva-priorita': '0'
+  };
+  Object.entries(fields).forEach(([id, value]) => {
+    const el = document.getElementById(id);
+    if (el) el.value = value;
+  });
+  const tipo = document.getElementById('regola-iva-tipo');
+  if (tipo) tipo.value = 'VAT_TREATMENT';
+  const attiva = document.getElementById('regola-iva-attiva');
+  if (attiva) attiva.checked = true;
+  const revisione = document.getElementById('regola-iva-revisione');
+  if (revisione) revisione.checked = false;
+  const codice = document.getElementById('regola-iva-codice');
+  if (codice) codice.disabled = false;
+}
+
+async function loadRegoleIva() {
+  const params = new URLSearchParams();
+  const q = document.getElementById('regole-iva-q')?.value?.trim();
+  const attiva = document.getElementById('regole-iva-filtro-attiva')?.value;
+  const tipo = document.getElementById('regole-iva-filtro-tipo')?.value;
+  const aliquota = document.getElementById('regole-iva-filtro-aliquota')?.value;
+  const natura = document.getElementById('regole-iva-filtro-natura')?.value?.trim();
+  if (q) params.set('q', q);
+  if (attiva !== '') params.set('attiva', attiva);
+  if (tipo) params.set('tipo_regola', tipo);
+  if (aliquota !== '' && aliquota !== undefined && aliquota !== null) params.set('aliquota_iva', aliquota);
+  if (natura) params.set('natura_iva', natura.toUpperCase());
+  const body = document.getElementById('regole-iva-body');
+  if (!body) return;
+  try {
+    const rows = await api('GET', `/regole-iva?${params.toString()}`);
+    body.innerHTML = (rows || []).map((rule) => `
+      <tr${rule.attiva ? '' : ' style="opacity:.55"'}>
+        <td><strong>${escapeHtml(rule.codice)}</strong>${rule.revisione_manuale ? '<div style="font-size:11px;color:var(--text-muted)">da verificare caso per caso</div>' : ''}</td>
+        <td>${escapeHtml(rule.descrizione || '')}${rule.riferimento_normativo ? `<div style="font-size:11px;color:var(--text-muted)">${escapeHtml(rule.riferimento_normativo)}</div>` : ''}</td>
+        <td>${rule.aliquota_iva === null || rule.aliquota_iva === undefined ? '—' : `${Number(rule.aliquota_iva)}%`}</td>
+        <td>${escapeHtml(rule.natura_iva || rule.esigibilita_iva || '—')}</td>
+        <td style="font-size:12px">${escapeHtml(rule.valido_dal || '—')} → ${escapeHtml(rule.valido_al || '—')}</td>
+        <td>${rule.attiva ? 'Attiva' : 'Disattivata'}</td>
+        <td><div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-outline btn-sm" onclick="editRegolaIva(${rule.id})">Apri</button>
+          <button class="btn btn-outline btn-sm" onclick="toggleRegolaIva(${rule.id}, ${rule.attiva ? 'false' : 'true'})">${rule.attiva ? 'Disattiva' : 'Riattiva'}</button>
+        </div></td>
+      </tr>`).join('') || '<tr><td colspan="7" style="color:var(--text-muted)">Nessuna regola trovata con questi filtri.</td></tr>';
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="7" style="color:var(--danger)">${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+async function editRegolaIva(id) {
+  try {
+    const rule = await api('GET', `/regole-iva/${id}`);
+    document.getElementById('regola-iva-id').value = rule.id;
+    // Il codice e' la chiave con cui le righe storiche citano la regola: non
+    // si rinomina, si crea semmai un codice nuovo.
+    const codice = document.getElementById('regola-iva-codice');
+    codice.value = rule.codice;
+    codice.disabled = true;
+    document.getElementById('regola-iva-tipo').value = rule.tipo_regola || 'VAT_TREATMENT';
+    document.getElementById('regola-iva-descrizione').value = rule.descrizione || '';
+    document.getElementById('regola-iva-aliquota').value = rule.aliquota_iva ?? '';
+    document.getElementById('regola-iva-natura').value = rule.natura_iva || '';
+    document.getElementById('regola-iva-esigibilita').value = rule.esigibilita_iva || '';
+    document.getElementById('regola-iva-etichetta').value = rule.etichetta_fattura || '';
+    document.getElementById('regola-iva-riferimento').value = rule.riferimento_normativo || '';
+    document.getElementById('regola-iva-note').value = rule.note_uso || '';
+    document.getElementById('regola-iva-valido-dal').value = rule.valido_dal || '';
+    document.getElementById('regola-iva-valido-al').value = rule.valido_al || '';
+    document.getElementById('regola-iva-priorita').value = rule.priorita ?? 0;
+    document.getElementById('regola-iva-attiva').checked = !!rule.attiva;
+    document.getElementById('regola-iva-revisione').checked = !!rule.revisione_manuale;
+    if (rule.utilizzi?.totale) {
+      toast(`Regola usata in ${rule.utilizzi.totale} righe: i documenti esistenti non cambieranno`, 'success');
+    }
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function readRegolaIvaForm() {
+  const value = (id) => document.getElementById(id)?.value?.trim() || null;
+  return {
+    codice: value('regola-iva-codice'),
+    tipo_regola: value('regola-iva-tipo') || 'VAT_TREATMENT',
+    descrizione: value('regola-iva-descrizione'),
+    aliquota_iva: value('regola-iva-aliquota') === null ? null : parseFloat(value('regola-iva-aliquota')),
+    natura_iva: value('regola-iva-natura'),
+    esigibilita_iva: value('regola-iva-esigibilita'),
+    etichetta_fattura: value('regola-iva-etichetta'),
+    riferimento_normativo: value('regola-iva-riferimento'),
+    note_uso: value('regola-iva-note'),
+    valido_dal: value('regola-iva-valido-dal'),
+    valido_al: value('regola-iva-valido-al'),
+    priorita: parseInt(value('regola-iva-priorita') || '0', 10) || 0,
+    attiva: document.getElementById('regola-iva-attiva')?.checked ? 1 : 0,
+    revisione_manuale: document.getElementById('regola-iva-revisione')?.checked ? 1 : 0
+  };
+}
+
+async function salvaRegolaIva() {
+  const id = document.getElementById('regola-iva-id')?.value;
+  const body = readRegolaIvaForm();
+  try {
+    if (id) await api('PATCH', `/regole-iva/${id}`, body);
+    else await api('POST', '/regole-iva', body);
+    toast('Regola IVA salvata', 'success');
+    resetRegolaIvaForm();
+    await loadRegoleIva();
+    await loadRegoleIvaCache(true);
+  } catch (e) {
+    // Il server rifiuta le modifiche sostanziali su una regola gia' usata
+    // finche' non si conferma: qui si chiede all'operatore.
+    if (/conferma_modifica_sostanziale/.test(e.message || '')) {
+      if (confirm(`${e.message}\n\nProcedere comunque?`)) {
+        try {
+          await api('PATCH', `/regole-iva/${id}`, { ...body, conferma_modifica_sostanziale: true });
+          toast('Regola IVA aggiornata', 'success');
+          resetRegolaIvaForm();
+          await loadRegoleIva();
+          await loadRegoleIvaCache(true);
+          return;
+        } catch (inner) { toast(inner.message, 'error'); return; }
+      }
+      return;
+    }
+    toast(e.message, 'error');
+  }
+}
+
+async function toggleRegolaIva(id, attiva) {
+  try {
+    await api('PATCH', `/regole-iva/${id}`, { attiva: attiva ? 1 : 0 });
+    await loadRegoleIva();
+    await loadRegoleIvaCache(true);
+    toast(attiva ? 'Regola riattivata' : 'Regola disattivata: resta leggibile sui documenti storici', 'success');
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function openCategorieModal() {
@@ -2324,13 +2516,116 @@ function getProductOptions(cache, selectedId) {
   return `<option value="">Seleziona...</option>${(cache || []).map(p => `<option value="${p.id}"${String(selectedId || '') === String(p.id) ? ' selected' : ''}>${escapeHtml(p.codice_interno || '')} - ${escapeHtml(p.nome || '')}</option>`).join('')}`;
 }
 
-function calcolaTotaleRiga({ quantita, prezzo_unitario, sconto = 0, aliquota_iva = 0 }) {
+// Stessa formula del motore IVA lato server (`src/services/iva.js`): centesimi
+// interi, e una riga con Natura non produce imposta. Qui serve solo a mostrare
+// il totale mentre si digita — il valore che fa fede e' quello ricalcolato dal
+// server al salvataggio.
+function calcolaTotaleRiga({ quantita, prezzo_unitario, sconto = 0, aliquota_iva = 0, natura_iva = null }) {
   const qty = parseFloat(quantita || 0) || 0;
   const price = parseFloat(prezzo_unitario || 0) || 0;
   const discount = parseFloat(sconto || 0) || 0;
-  const imponibile = Math.max(0, qty * price - discount);
-  const importo_iva = imponibile * ((parseFloat(aliquota_iva || 0) || 0) / 100);
-  return { imponibile, importo_iva, totale_riga: imponibile + importo_iva };
+  const nettoCents = Math.max(0, Math.round(qty * price * 100) - Math.round(discount * 100));
+  const rate = natura_iva ? 0 : (parseFloat(aliquota_iva || 0) || 0);
+  const ivaCents = Math.round(nettoCents * rate / 100);
+  return {
+    imponibile: nettoCents / 100,
+    importo_iva: ivaCents / 100,
+    totale_riga: (nettoCents + ivaCents) / 100
+  };
+}
+
+// --- trattamenti IVA sulle righe -----------------------------------------
+//
+// L'operatore sceglie un trattamento per codice e descrizione, mai un id nudo.
+// I dati fiscali viaggiano sull'option scelta, cosi' la riga sa gia' cosa
+// salvare senza dover ricercare la regola.
+
+let regoleIvaCache = [];
+
+async function loadRegoleIvaCache(force = false) {
+  if (regoleIvaCache.length && !force) return regoleIvaCache;
+  try {
+    regoleIvaCache = await api('GET', '/regole-iva?selezionabili=true') || [];
+  } catch {
+    regoleIvaCache = [];
+  }
+  return regoleIvaCache;
+}
+
+function regolaIvaOptionHtml({ value, label, aliquota, natura, codice, riferimento, regolaId, selected }) {
+  return `<option value="${escapeAttr(value)}"`
+    + ` data-aliquota="${escapeAttr(aliquota ?? '')}"`
+    + ` data-natura="${escapeAttr(natura ?? '')}"`
+    + ` data-codice="${escapeAttr(codice ?? '')}"`
+    + ` data-riferimento="${escapeAttr(riferimento ?? '')}"`
+    + ` data-regola="${escapeAttr(regolaId ?? '')}"`
+    + `${selected ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+}
+
+function buildRigaIvaOptions(data = {}) {
+  const rules = (regoleIvaCache || []).filter((rule) => rule.tipo_regola === 'VAT_TREATMENT');
+  const codiceRiga = data.codice_iva || '';
+  const options = [];
+
+  const haTrattamento = codiceRiga
+    || data.natura_iva
+    || (data.aliquota_iva !== undefined && data.aliquota_iva !== null && data.aliquota_iva !== '');
+
+  // Nessun trattamento: si chiede di sceglierlo. Non si mette un 22% per
+  // comodita', perche' una riga di trasporto o di servizio puo' benissimo non
+  // esserlo e nessuno se ne accorgerebbe.
+  options.push(regolaIvaOptionHtml({
+    value: '', label: '— scegli il trattamento —', selected: !haTrattamento
+  }));
+
+  // Riga storica il cui trattamento non e' piu' fra quelli proponibili: si
+  // mostra comunque, altrimenti riaprire un documento vecchio ne cambierebbe
+  // l'IVA soltanto perche' la regola nel frattempo e' stata disattivata.
+  const fuoriElenco = haTrattamento && !rules.some((rule) => rule.codice === codiceRiga);
+  if (fuoriElenco) {
+    const etichetta = codiceRiga
+      ? `${codiceRiga} — trattamento della riga (non piu' in elenco)`
+      : data.natura_iva
+        ? `${data.natura_iva} — trattamento salvato sulla riga`
+        : `${Number(data.aliquota_iva || 0)}% — trattamento salvato sulla riga`;
+    options.push(regolaIvaOptionHtml({
+      value: '__riga__',
+      label: etichetta,
+      aliquota: data.aliquota_iva,
+      natura: data.natura_iva,
+      codice: codiceRiga,
+      riferimento: data.riferimento_normativo,
+      regolaId: data.regola_iva_id,
+      selected: true
+    }));
+  }
+
+  rules.forEach((rule) => options.push(regolaIvaOptionHtml({
+    value: rule.id,
+    label: rule.etichetta || `${rule.codice} — ${rule.descrizione || ''}`,
+    aliquota: rule.aliquota_iva,
+    natura: rule.natura_iva,
+    codice: rule.codice,
+    riferimento: rule.riferimento_normativo,
+    regolaId: rule.id,
+    selected: !fuoriElenco && codiceRiga === rule.codice
+  })));
+
+  return options.join('');
+}
+
+function readRigaIva(row, prefix) {
+  const select = row.querySelector(`.${prefix}-iva`);
+  const option = select?.selectedOptions?.[0];
+  if (!option) return { aliquota_iva: null, natura_iva: null, codice_iva: null, regola_iva_id: null, riferimento_normativo: null };
+  const aliquota = option.dataset.aliquota;
+  return {
+    aliquota_iva: aliquota === '' || aliquota === undefined ? null : parseFloat(aliquota),
+    natura_iva: option.dataset.natura || null,
+    codice_iva: option.dataset.codice || null,
+    regola_iva_id: option.dataset.regola ? Number(option.dataset.regola) : null,
+    riferimento_normativo: option.dataset.riferimento || null
+  };
 }
 
 function getPublicProductUrl(productId) {
@@ -2366,6 +2661,14 @@ function applyProductSelectionToDocumentoRow(row, prefix, product) {
   const quantityInput = row.querySelector(`.${prefix}-quantita`);
   if ((prefix === 'prev' || prefix === 'ord') && quantityInput) {
     quantityInput.value = String(resolveDocumentoQuantityForProduct(product, getRequestedDocumentoQuantity(row, prefix) || 1));
+  }
+  // Il trattamento dell'articolo si propone solo se la riga non ne ha ancora
+  // uno: se l'operatore l'ha gia' scelto, cambiare articolo non glielo
+  // sovrascrive alle spalle.
+  const ivaSelect = row.querySelector(`.${prefix}-iva`);
+  if (ivaSelect && !ivaSelect.value && product.regola_iva_id) {
+    const option = [...ivaSelect.options].find((opt) => String(opt.value) === String(product.regola_iva_id));
+    if (option) ivaSelect.value = option.value;
   }
   const publicLink = row.querySelector(`.${prefix}-public-link`);
   if (publicLink) {
@@ -2406,8 +2709,10 @@ function buildDocumentoRigaHtml(prefix, cache, data = {}) {
         <div class="form-group"><label>Sconto</label><input type="number" step="0.01" class="${prefix}-sconto" value="${escapeAttr(data.sconto ?? 0)}" oninput="ricalcolaRigheDocumento('${prefix}')"></div>
       </div>
       <div class="form-row">
-        <div class="form-group"><label>Aliquota IVA</label><input type="number" step="0.01" class="${prefix}-aliquota" value="${escapeAttr(data.aliquota_iva ?? 22)}" oninput="ricalcolaRigheDocumento('${prefix}')"></div>
-        <div class="form-group"><label>Natura IVA</label><input type="text" class="${prefix}-natura" value="${escapeAttr(data.natura_iva)}"></div>
+        <div class="form-group">
+          <label>IVA</label>
+          <select class="${prefix}-iva" onchange="ricalcolaRigheDocumento('${prefix}')">${buildRigaIvaOptions(data)}</select>
+        </div>
         <div class="form-group"><label>Totale riga</label><input type="number" step="0.01" class="${prefix}-totale" value="${escapeAttr(data.totale_riga ?? 0)}" readonly></div>
       </div>
       <div class="document-line-footer">
@@ -2466,7 +2771,7 @@ function buildVatSummaryRowHtml(data = {}) {
   return `
     <div class="iva-riga dynamic-line-card">
       <div class="form-row">
-        <div class="form-group"><label>Aliquota IVA</label><input type="number" step="0.01" class="iva-aliquota" value="${escapeAttr(data.aliquota_iva ?? 22)}"></div>
+        <div class="form-group"><label>Aliquota IVA</label><input type="number" step="0.01" class="iva-aliquota" value="${escapeAttr(data.aliquota_iva ?? 0)}"></div>
         <div class="form-group"><label>Natura IVA</label><input type="text" class="iva-natura" value="${escapeAttr(data.natura_iva)}"></div>
       </div>
       <div class="form-row">
@@ -2485,11 +2790,13 @@ function ricalcolaRigheDocumento(prefix) {
   let imponibileTot = 0;
   let ivaTot = 0;
   [...wrap.querySelectorAll(`.${prefix}-riga`)].forEach(row => {
+    const iva = readRigaIva(row, prefix);
     const calc = calcolaTotaleRiga({
       quantita: row.querySelector(`.${prefix}-quantita`)?.value,
       prezzo_unitario: row.querySelector(`.${prefix}-prezzo`)?.value,
       sconto: row.querySelector(`.${prefix}-sconto`)?.value,
-      aliquota_iva: row.querySelector(`.${prefix}-aliquota`)?.value
+      aliquota_iva: iva.aliquota_iva,
+      natura_iva: iva.natura_iva
     });
     const totalInput = row.querySelector(`.${prefix}-totale`);
     if (totalInput) totalInput.value = calc.totale_riga.toFixed(2);
@@ -2516,8 +2823,8 @@ function collectDocumentoRighe(prefix) {
     const quantita = parseFloat(row.querySelector(`.${prefix}-quantita`)?.value || 0) || 0;
     const prezzo_unitario = parseFloat(row.querySelector(`.${prefix}-prezzo`)?.value || 0) || 0;
     const sconto = parseFloat(row.querySelector(`.${prefix}-sconto`)?.value || 0) || 0;
-    const aliquota_iva = parseFloat(row.querySelector(`.${prefix}-aliquota`)?.value || 0) || 0;
-    const calc = calcolaTotaleRiga({ quantita, prezzo_unitario, sconto, aliquota_iva });
+    const iva = readRigaIva(row, prefix);
+    const calc = calcolaTotaleRiga({ quantita, prezzo_unitario, sconto, ...iva });
     return {
       prodotto_id: row.querySelector(`.${prefix}-prodotto`)?.value || null,
       descrizione: row.querySelector(`.${prefix}-descrizione`)?.value || '',
@@ -2525,8 +2832,9 @@ function collectDocumentoRighe(prefix) {
       prezzo_unitario,
       sconto,
       imponibile: calc.imponibile,
-      aliquota_iva,
-      natura_iva: row.querySelector(`.${prefix}-natura`)?.value || null,
+      // Lo snapshot completo viaggia con la riga: il server lo salva com'e'
+      // invece di risalire all'articolo.
+      ...iva,
       importo_iva: calc.importo_iva,
       totale_riga: calc.totale_riga
     };
@@ -2563,8 +2871,21 @@ function addProductToPreventivo(productId) {
     quantita,
     prezzo_unitario: listino?.prezzo ?? 0,
     sconto: 0,
-    aliquota_iva: 22
+    ...trattamentoIvaDaProdotto(product)
   });
+}
+
+// Il trattamento predefinito dell'articolo diventa lo snapshot iniziale della
+// riga. Se l'articolo non ne ha uno la riga nasce senza, e la tendina chiede
+// di sceglierlo: e' preferibile a un 22% messo d'ufficio.
+function trattamentoIvaDaProdotto(product) {
+  if (!product?.regola_iva_id) return {};
+  return {
+    regola_iva_id: product.regola_iva_id,
+    codice_iva: product.regola_iva_codice || null,
+    aliquota_iva: product.regola_iva_aliquota ?? null,
+    natura_iva: product.regola_iva_natura || null
+  };
 }
 
 async function insertKitIntoPreventivo(kitId, kitMultiplier = 1) {
@@ -2584,7 +2905,7 @@ async function insertKitIntoPreventivo(kitId, kitMultiplier = 1) {
       quantita: (Number(componente.quantita || 0) || 0) * kitMultiplier,
       prezzo_unitario: listino?.prezzo ?? componente.prezzo_predefinito ?? 0,
       sconto: 0,
-      aliquota_iva: 22,
+      ...trattamentoIvaDaProdotto(product),
       kit_group: groupId,
       kit_label: kitLabel
     });
@@ -2668,7 +2989,9 @@ function aggiungiRiepilogoIva(data = {}) {
 }
 
 async function preparePreventivoModal(id = null) {
-  const [anag, prodotti, kits] = await Promise.all([api('GET', '/anagrafiche?tipo=cliente'), api('GET', '/prodotti'), api('GET', '/kits')]);
+  // Le regole IVA servono prima di disegnare le righe: le tendine si
+  // costruiscono da quella cache.
+  const [anag, prodotti, kits] = await Promise.all([api('GET', '/anagrafiche?tipo=cliente'), api('GET', '/prodotti'), api('GET', '/kits'), loadRegoleIvaCache()]);
   preventivoProdottiCache = prodotti || [];
   preventivoKitCache = kits || [];
   document.getElementById('prev-righe').innerHTML = '';
@@ -2709,7 +3032,7 @@ async function preparePreventivoModal(id = null) {
 }
 
 async function prepareFatturaModal(id = null) {
-  const [anag, prodotti] = await Promise.all([api('GET', '/anagrafiche'), api('GET', '/prodotti')]);
+  const [anag, prodotti] = await Promise.all([api('GET', '/anagrafiche'), api('GET', '/prodotti'), loadRegoleIvaCache()]);
   fatturaProdottiCache = prodotti || [];
   fatturaAnagraficheCache = anag || [];
   console.debug('[SDI picker] prepareFatturaModal', {
@@ -2738,6 +3061,10 @@ async function prepareFatturaModal(id = null) {
     document.getElementById('fatt-iva').value = '';
     document.getElementById('fatt-totale').value = '';
     document.getElementById('fatt-note').value = '';
+    document.getElementById('fatt-cig').value = '';
+    document.getElementById('fatt-cup').value = '';
+    document.getElementById('fatt-esigibilita-iva').value = '';
+    toggleFatturaPaFields(false);
     aggiungiRigaFattura();
     aggiungiRiepilogoIva();
     return;
@@ -2761,9 +3088,24 @@ async function prepareFatturaModal(id = null) {
   document.getElementById('fatt-iva').value = f.iva ?? '';
   document.getElementById('fatt-totale').value = f.totale ?? '';
   document.getElementById('fatt-note').value = f.note || '';
+  document.getElementById('fatt-cig').value = f.cig || '';
+  document.getElementById('fatt-cup').value = f.cup || '';
+  document.getElementById('fatt-esigibilita-iva').value = f.esigibilita_iva || '';
+  toggleFatturaPaFields(isAnagraficaPa(f) || isAnagraficaPa(findAnagraficaInCache(fatturaAnagraficheCache, f.anagrafica_id)));
   (f.righe?.length ? f.righe : [{}]).forEach(aggiungiRigaFattura);
   (f.riepilogo_iva?.length ? f.riepilogo_iva : [{}]).forEach(aggiungiRiepilogoIva);
   ricalcolaRigheDocumento('fatt');
+}
+
+// Riferimenti d'obbligo verso la PA (CIG, CUP) ed esigibilita' IVA: su una
+// fattura a un cliente privato non compaiono e restano vuoti.
+function toggleFatturaPaFields(isPa) {
+  const box = document.getElementById('fatt-riferimenti-pa');
+  if (box) box.style.display = isPa ? 'block' : 'none';
+}
+
+function onFatturaAnagraficaSelected(row) {
+  toggleFatturaPaFields(isAnagraficaPa(row));
 }
 
 async function loadPreventivi() {
@@ -2860,7 +3202,7 @@ async function cambiaStatoPreventivo(id, stato) {
 }
 
 async function prepareOrdineModal(context = null) {
-  const [anag, prodotti] = await Promise.all([api('GET', '/anagrafiche'), api('GET', '/prodotti')]);
+  const [anag, prodotti] = await Promise.all([api('GET', '/anagrafiche'), api('GET', '/prodotti'), loadRegoleIvaCache()]);
   ordineAnagraficheCache = anag || [];
   ordineProdottiCache = prodotti || [];
   const editingId = Number(context?.ordineId || 0) || null;
@@ -2881,6 +3223,9 @@ async function prepareOrdineModal(context = null) {
   document.getElementById('ord-iva').value = '';
   document.getElementById('ord-totale').value = '';
   document.getElementById('ord-note').value = '';
+  document.getElementById('ord-cig').value = '';
+  document.getElementById('ord-cup').value = '';
+  toggleOrdinePaFields(false);
 
   if (editingId) {
     const o = await api('GET', `/ordini/${editingId}`);
@@ -2898,6 +3243,9 @@ async function prepareOrdineModal(context = null) {
     document.getElementById('ord-iva').value = o.iva ?? '';
     document.getElementById('ord-totale').value = o.totale ?? '';
     document.getElementById('ord-note').value = o.note || '';
+    document.getElementById('ord-cig').value = o.cig || '';
+    document.getElementById('ord-cup').value = o.cup || '';
+    toggleOrdinePaFields(isAnagraficaPa(o));
     (o.righe?.length ? o.righe : [{}]).forEach(aggiungiRigaOrdine);
     ricalcolaRigheDocumento('ord');
     return;
@@ -2916,12 +3264,29 @@ async function prepareOrdineModal(context = null) {
     document.getElementById('ord-iva').value = p.iva ?? '';
     document.getElementById('ord-totale').value = p.totale ?? '';
     document.getElementById('ord-note').value = p.note || '';
+    toggleOrdinePaFields(isAnagraficaPa(findAnagraficaInCache(ordineAnagraficheCache, p.anagrafica_id)));
     (p.righe?.length ? p.righe : [{}]).forEach(aggiungiRigaOrdine);
     ricalcolaRigheDocumento('ord');
     return;
   }
 
   aggiungiRigaOrdine();
+}
+
+function findAnagraficaInCache(cache, anagraficaId) {
+  if (!anagraficaId) return null;
+  return (cache || []).find(row => String(row.id) === String(anagraficaId)) || null;
+}
+
+// CIG e CUP appartengono alla fatturazione verso la PA: su un ordine a un
+// cliente privato non hanno posto e restano nascosti.
+function toggleOrdinePaFields(isPa) {
+  const box = document.getElementById('ord-riferimenti-pa');
+  if (box) box.style.display = isPa ? 'flex' : 'none';
+}
+
+function onOrdineAnagraficaSelected(row) {
+  toggleOrdinePaFields(isAnagraficaPa(row));
 }
 
 async function loadOrdini() {
@@ -2993,6 +3358,8 @@ async function salvaOrdine() {
     iva: parseFloat(document.getElementById('ord-iva').value) || 0,
     totale: parseFloat(document.getElementById('ord-totale').value) || null,
     note: document.getElementById('ord-note').value,
+    cig: document.getElementById('ord-cig').value || null,
+    cup: document.getElementById('ord-cup').value || null,
     righe: collectDocumentoRighe('ord')
   };
   try {
@@ -6399,6 +6766,9 @@ async function salvaFattura() {
     iva: parseFloat(document.getElementById('fatt-iva').value) || 0,
     totale: parseFloat(document.getElementById('fatt-totale').value) || 0,
     note: document.getElementById('fatt-note').value || '',
+    cig: document.getElementById('fatt-cig').value || null,
+    cup: document.getElementById('fatt-cup').value || null,
+    esigibilita_iva: document.getElementById('fatt-esigibilita-iva').value || null,
     righe: collectDocumentoRighe('fatt'),
     riepilogo_iva: collectVatSummaryRows()
   };

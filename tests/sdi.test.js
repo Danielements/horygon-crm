@@ -198,6 +198,161 @@ test('FPA12 sample validates against local XSD and app rules', async () => {
   assert.equal(result.ok, true, JSON.stringify(result, null, 2));
 });
 
+// Caso reale: ordine evaso per AERONAUTICA MILITARE 70 STORMO, senza partita
+// IVA, con CIG e split payment. E' la fattura che il CRM deve saper emettere,
+// e la si verifica contro lo schema, non a occhio.
+function makeAeronauticaInvoice(overrides = {}) {
+  return {
+    id: 45,
+    numero: '45/2026',
+    numero_documento: '45/2026',
+    data: '2026-08-11',
+    tipo_documento: 'fattura',
+    totale: 1220,
+    valuta: 'EUR',
+    scadenza: '2026-10-10',
+    cig: 'B1C2D3E4F5',
+    cup: 'F81B26000000001',
+    ordine_codice: 'ORD-2026-00042',
+    ordine_data: '2026-06-30',
+    righe: [{ descrizione: 'Fornitura ricambi', quantita: 2, prezzo_unitario: 500, totale_riga: 1000, aliquota_iva: 22 }],
+    riepilogo_iva: [{ aliquota_iva: 22, imponibile: 1000, imposta: 220 }],
+    ...overrides
+  };
+}
+
+function makeAeronauticaCustomer(overrides = {}) {
+  return {
+    ragione_sociale: 'AERONAUTICA MILITARE 70 STORMO',
+    piva: null,
+    cf: '80007090592',
+    pec: 'aerostormo70@postacert.difesa.it',
+    indirizzo: 'Aeroporto Enrico Comani',
+    cap: '04100',
+    citta: 'Latina',
+    provincia: 'LT',
+    paese: 'IT',
+    destinationCode: 'AKGVPD',
+    isPa: true,
+    escludiSplitPayment: false,
+    ...overrides
+  };
+}
+
+test('PA invoice carries CIG, CUP and split payment and validates against the FPA12 schema', async () => {
+  const payload = buildInvoicePayload(
+    makeAeronauticaInvoice(),
+    makeOrdinaryPayload('FPA12').company,
+    makeAeronauticaCustomer(),
+    { mode: 'test', progressivo: 'H0045' }
+  );
+  assert.equal(payload.formatoTrasmissione, 'FPA12');
+  assert.equal(payload.destinationCode, 'AKGVPD');
+  assert.equal(payload.esigibilitaIva, 'S');
+  assert.deepEqual(payload.datiOrdineAcquisto, {
+    idDocumento: 'ORD-2026-00042',
+    data: '2026-06-30',
+    codiceCup: 'F81B26000000001',
+    codiceCig: 'B1C2D3E4F5'
+  });
+
+  const xml = buildOrdinaryInvoiceXml(payload);
+  const result = await validateInvoiceXml({ xml, format: 'FPA12' });
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
+
+  // Il cessionario ha il solo codice fiscale: la PA non ha partita IVA.
+  assert.match(xml, /<CessionarioCommittente>[\s\S]*?<CodiceFiscale>80007090592<\/CodiceFiscale>/);
+  assert.equal(/<CessionarioCommittente>[\s\S]*?<IdFiscaleIVA>/.test(xml), false);
+  // DatiOrdineAcquisto sta dentro DatiGenerali, subito dopo
+  // DatiGeneraliDocumento, e il CUP precede il CIG.
+  assert.match(xml, /<\/DatiGeneraliDocumento>\s*<DatiOrdineAcquisto>/);
+  assert.match(xml, /<CodiceCUP>F81B26000000001<\/CodiceCUP>\s*<CodiceCIG>B1C2D3E4F5<\/CodiceCIG>/);
+  assert.match(xml, /<Imposta>220\.00<\/Imposta>\s*<EsigibilitaIVA>S<\/EsigibilitaIVA>/);
+});
+
+test('PA invoice without CIG omits the correlated document block', async () => {
+  const payload = buildInvoicePayload(
+    makeAeronauticaInvoice({ cig: null, cup: null }),
+    makeOrdinaryPayload('FPA12').company,
+    makeAeronauticaCustomer(),
+    { mode: 'test', progressivo: 'H0046' }
+  );
+  assert.equal(payload.datiOrdineAcquisto, null);
+  const xml = buildOrdinaryInvoiceXml(payload);
+  assert.equal(xml.includes('<DatiOrdineAcquisto>'), false);
+  const result = await validateInvoiceXml({ xml, format: 'FPA12' });
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
+});
+
+test('PA excluded from split payment falls back to immediate VAT', () => {
+  const payload = buildInvoicePayload(
+    makeAeronauticaInvoice(),
+    makeOrdinaryPayload('FPA12').company,
+    makeAeronauticaCustomer({ escludiSplitPayment: true }),
+    { mode: 'test', progressivo: 'H0047' }
+  );
+  assert.equal(payload.esigibilitaIva, 'I');
+  assert.equal(payload.riepilogo[0].esigibilitaIva, 'I');
+});
+
+// Lo stesso ordine evaso puo' andare a un cliente privato: li' CIG, CUP e
+// scissione dei pagamenti non c'entrano nulla e la fattura resta quella di
+// prima.
+test('private customer invoice keeps immediate VAT and no purchase order block', async () => {
+  const payload = buildInvoicePayload(
+    makeAeronauticaInvoice({ cig: null, cup: null, ordine_codice: 'ORD-2026-00043' }),
+    makeOrdinaryPayload('FPR12').company,
+    {
+      ragione_sociale: 'CLIENTE PRIVATO SRL',
+      piva: 'IT01043931003',
+      cf: '01043931003',
+      indirizzo: 'Via Test',
+      cap: '00100',
+      citta: 'Roma',
+      provincia: 'RM',
+      paese: 'IT',
+      destinationCode: 'UMZGLCP',
+      isPa: false,
+      escludiSplitPayment: false
+    },
+    { mode: 'test', progressivo: 'H0048' }
+  );
+  assert.equal(payload.formatoTrasmissione, 'FPR12');
+  assert.equal(payload.esigibilitaIva, 'I');
+  assert.equal(payload.datiOrdineAcquisto, null);
+
+  const xml = buildOrdinaryInvoiceXml(payload);
+  assert.equal(xml.includes('<DatiOrdineAcquisto>'), false);
+  assert.match(xml, /<EsigibilitaIVA>I<\/EsigibilitaIVA>/);
+  const result = await validateInvoiceXml({ xml, format: 'FPR12' });
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
+});
+
+// Un CIG su una fattura a un privato non si perde in silenzio: succede nei
+// subappalti soggetti a tracciabilita'.
+test('private customer with a CIG still gets the correlated document block', () => {
+  const payload = buildInvoicePayload(
+    makeAeronauticaInvoice({ cup: null }),
+    makeOrdinaryPayload('FPR12').company,
+    {
+      ragione_sociale: 'APPALTATORE SRL',
+      piva: 'IT01043931003',
+      cf: '01043931003',
+      indirizzo: 'Via Test',
+      cap: '00100',
+      citta: 'Roma',
+      provincia: 'RM',
+      paese: 'IT',
+      destinationCode: 'UMZGLCP',
+      isPa: false,
+      escludiSplitPayment: false
+    },
+    { mode: 'test', progressivo: 'H0049' }
+  );
+  assert.equal(payload.esigibilitaIva, 'I');
+  assert.equal(payload.datiOrdineAcquisto.codiceCig, 'B1C2D3E4F5');
+});
+
 test('FSM10 sample validates against local XSD and app rules', async () => {
   const xml = buildSimplifiedInvoiceXml(makeSimplifiedPayload());
   const result = await validateInvoiceXml({ xml, format: 'FSM10' });

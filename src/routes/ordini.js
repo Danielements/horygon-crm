@@ -10,6 +10,7 @@ const { authMiddleware, requirePermesso } = require('../middleware/auth');
 const { notifyUsersWithEmail, emailCustomerIfEnabled } = require('../services/google');
 const { createOrdinePdfBuffer } = require('../services/document-pdf');
 const { writeAudit } = require('../services/audit');
+const { calcolaRiga, calcolaTotaliDocumento, snapshotIvaPerProdotto } = require('../services/iva');
 
 const s = (v) => (v === undefined || v === '' || v === null) ? null : v;
 const n = (v) => { const p = parseFloat(v); return isNaN(p) ? null : p; };
@@ -27,50 +28,39 @@ function buildInvoiceNumberFromOrder(orderCode) {
   return candidate;
 }
 
+// Righe fattura dalle righe ordine.
+//
+// Il trattamento fiscale arriva **dalla riga dell'ordine**, che a sua volta lo
+// aveva ricevuto dal preventivo o dall'articolo al momento in cui l'ordine e'
+// nato. L'articolo non viene piu' interrogato qui: era il punto in cui una
+// modifica all'anagrafica si propagava all'indietro su ordini gia' confermati.
 function buildInvoiceRowsFromOrderRows(rows = []) {
   return rows.map((row) => {
-    const quantita = Number(row.quantita || 0) || 0;
-    const prezzoUnitario = Number(row.prezzo_unitario || 0) || 0;
-    const sconto = Number(row.sconto || 0) || 0;
-    const imponibile = Math.max(0, quantita * prezzoUnitario - sconto);
-    const aliquotaIva = Number(row.aliquota_iva || 0) || 0;
-    const importoIva = +(imponibile * (aliquotaIva / 100)).toFixed(2);
+    const calc = calcolaRiga(row);
     return {
       prodotto_id: row.prodotto_id,
       descrizione: row.descrizione || row.nome || row.codice_interno || `Prodotto ${row.prodotto_id}`,
-      quantita,
-      prezzo_unitario: prezzoUnitario,
-      sconto,
-      imponibile: +imponibile.toFixed(2),
-      aliquota_iva: aliquotaIva,
-      natura_iva: row.natura_iva || null,
-      importo_iva: importoIva,
-      totale_riga: +(imponibile + importoIva).toFixed(2)
+      quantita: calc.quantita,
+      prezzo_unitario: calc.prezzo_unitario,
+      sconto: calc.sconto,
+      imponibile: calc.imponibile,
+      aliquota_iva: calc.aliquota_iva,
+      natura_iva: calc.natura_iva,
+      importo_iva: calc.importo_iva,
+      totale_riga: calc.totale_riga,
+      regola_iva_id: calc.regola_iva_id,
+      codice_iva: calc.codice_iva,
+      riferimento_normativo: calc.riferimento_normativo
     };
   });
 }
 
-function buildInvoiceVatSummary(rows = []) {
-  const buckets = new Map();
-  rows.forEach((row) => {
-    const key = `${Number(row.aliquota_iva || 0)}|${row.natura_iva || ''}`;
-    if (!buckets.has(key)) {
-      buckets.set(key, {
-        aliquota_iva: Number(row.aliquota_iva || 0) || 0,
-        natura_iva: row.natura_iva || null,
-        imponibile: 0,
-        imposta: 0
-      });
-    }
-    const bucket = buckets.get(key);
-    bucket.imponibile += Number(row.imponibile || 0) || 0;
-    bucket.imposta += Number(row.importo_iva || 0) || 0;
-  });
-  return Array.from(buckets.values()).map((row) => ({
-    ...row,
-    imponibile: +row.imponibile.toFixed(2),
-    imposta: +row.imposta.toFixed(2)
-  }));
+// Snapshot fiscale di una riga ordine creata direttamente, senza preventivo:
+// il default viene dall'articolo, ma solo adesso e una volta sola.
+function prepareOrdineRiga(riga = {}) {
+  const haTrattamento = riga.regola_iva_id || riga.codice_iva || riga.natura_iva
+    || (riga.aliquota_iva !== undefined && riga.aliquota_iva !== null && riga.aliquota_iva !== '');
+  return calcolaRiga(haTrattamento ? riga : { ...riga, ...(snapshotIvaPerProdotto(riga.prodotto_id) || {}) });
 }
 
 function getGiacenza(prodottoId) {
@@ -89,13 +79,40 @@ function getGiacenza(prodottoId) {
 
 function normalizeOrdineRighe(righe = []) {
   return (righe || [])
-    .map((riga) => ({
-      prodotto_id: i(riga.prodotto_id),
-      quantita: i(riga.quantita),
-      prezzo_unitario: n(riga.prezzo_unitario),
-      sconto: n(riga.sconto) || 0
-    }))
+    .map((riga) => {
+      const calc = prepareOrdineRiga(riga);
+      return {
+        prodotto_id: i(riga.prodotto_id),
+        descrizione: s(riga.descrizione),
+        quantita: i(riga.quantita),
+        prezzo_unitario: n(riga.prezzo_unitario),
+        sconto: n(riga.sconto) || 0,
+        imponibile: calc.imponibile,
+        aliquota_iva: calc.aliquota_iva,
+        natura_iva: calc.natura_iva,
+        importo_iva: calc.importo_iva,
+        totale_riga: calc.totale_riga,
+        regola_iva_id: calc.regola_iva_id,
+        codice_iva: calc.codice_iva,
+        riferimento_normativo: calc.riferimento_normativo
+      };
+    })
     .filter((riga) => riga.prodotto_id && riga.quantita && riga.quantita > 0);
+}
+
+function insertOrdineRighe(ordineId, righe = []) {
+  const ins = db.prepare(`
+    INSERT INTO ordini_righe (
+      ordine_id, prodotto_id, descrizione, quantita, prezzo_unitario, sconto,
+      imponibile, aliquota_iva, natura_iva, importo_iva, totale_riga,
+      regola_iva_id, codice_iva, riferimento_normativo
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `);
+  righe.forEach((riga) => ins.run(
+    ordineId, riga.prodotto_id, riga.descrizione, riga.quantita, riga.prezzo_unitario, riga.sconto,
+    riga.imponibile, riga.aliquota_iva, riga.natura_iva, riga.importo_iva, riga.totale_riga,
+    riga.regola_iva_id, riga.codice_iva, riga.riferimento_normativo
+  ));
 }
 
 function syncMovimentiFromOrdine(ordineId, tipo, righe = []) {
@@ -198,7 +215,10 @@ router.get('/mine', (req, res) => {
 
 // Singolo ordine
 router.get('/:id', (req, res) => {
-  const o = db.prepare(`SELECT o.*, a.ragione_sociale FROM ordini o
+  // Il tipo della controparte serve all'interfaccia: CIG e CUP si mostrano solo
+  // sugli ordini verso la PA.
+  const o = db.prepare(`SELECT o.*, a.ragione_sociale, a.tipo AS anagrafica_tipo, a.tipologia_cliente AS anagrafica_tipologia
+    FROM ordini o
     LEFT JOIN anagrafiche a ON a.id = o.anagrafica_id WHERE o.id = ?`).get(req.params.id);
   if (!o) return res.status(404).json({ error: 'Non trovato' });
   o.righe = db.prepare(`SELECT r.*, p.nome, p.codice_interno FROM ordini_righe r
@@ -227,16 +247,15 @@ router.post('/', requirePermesso('ordini', 'edit'), (req, res) => {
     const r = db.prepare(`
       INSERT INTO ordini (
         codice_ordine,tipo,anagrafica_id,canale,data_ordine,data_consegna_prevista,
-        imponibile,iva,totale,note,numero_spedizione,corriere,preventivo_id,created_by_user_id
+        imponibile,iva,totale,note,numero_spedizione,corriere,preventivo_id,cig,cup,created_by_user_id
       )
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(s(b.codice_ordine), s(b.tipo), i(b.anagrafica_id), s(b.canale),
            s(b.data_ordine), s(b.data_consegna_prevista), n(b.imponibile) || 0, n(b.iva) || 0, n(b.totale), s(b.note),
-           s(b.numero_spedizione), s(b.corriere), i(b.preventivo_id), req.user.id);
+           s(b.numero_spedizione), s(b.corriere), i(b.preventivo_id), s(b.cig), s(b.cup), req.user.id);
     const id = Number(r.lastInsertRowid);
     if (cleanRighe.length) {
-      const ins = db.prepare('INSERT INTO ordini_righe (ordine_id,prodotto_id,quantita,prezzo_unitario,sconto) VALUES (?,?,?,?,?)');
-      cleanRighe.forEach((riga) => ins.run(id, riga.prodotto_id, riga.quantita, riga.prezzo_unitario, riga.sconto));
+      insertOrdineRighe(id, cleanRighe);
       syncMovimentiFromOrdine(id, s(b.tipo), cleanRighe);
     }
     db.exec('COMMIT');
@@ -266,7 +285,7 @@ router.put('/:id', requirePermesso('ordini', 'edit'), (req, res) => {
     db.prepare(`
       UPDATE ordini
       SET codice_ordine=?, tipo=?, anagrafica_id=?, canale=?, data_ordine=?, data_consegna_prevista=?,
-          imponibile=?, iva=?, totale=?, note=?, numero_spedizione=?, corriere=?, preventivo_id=?
+          imponibile=?, iva=?, totale=?, note=?, numero_spedizione=?, corriere=?, preventivo_id=?, cig=?, cup=?
       WHERE id=?
     `).run(
       s(b.codice_ordine),
@@ -282,11 +301,12 @@ router.put('/:id', requirePermesso('ordini', 'edit'), (req, res) => {
       s(b.numero_spedizione),
       s(b.corriere),
       i(b.preventivo_id),
+      s(b.cig),
+      s(b.cup),
       ordineId
     );
     if (cleanRighe.length) {
-      const ins = db.prepare('INSERT INTO ordini_righe (ordine_id,prodotto_id,quantita,prezzo_unitario,sconto) VALUES (?,?,?,?,?)');
-      cleanRighe.forEach((riga) => ins.run(ordineId, riga.prodotto_id, riga.quantita, riga.prezzo_unitario, riga.sconto));
+      insertOrdineRighe(ordineId, cleanRighe);
       syncMovimentiFromOrdine(ordineId, s(b.tipo), cleanRighe);
     }
     db.exec('COMMIT');
@@ -375,8 +395,13 @@ router.post('/:id/convert-to-fattura', requirePermesso('fatture', 'edit'), (req,
   if (existingInvoice) {
     return res.status(400).json({ error: `Ordine gia collegato alla fattura ${existingInvoice.numero || existingInvoice.id}` });
   }
+  // Dell'articolo si prendono solo nome e codice, per la descrizione. I dati
+  // fiscali stanno sulla riga dell'ordine: leggerli da `prodotti` era il bug
+  // che faceva cambiare l'IVA di un ordine confermato quando si modificava
+  // l'anagrafica — e su questo schema `prodotti` non ha nemmeno quelle
+  // colonne, quindi la rotta falliva del tutto.
   const orderRows = db.prepare(`
-    SELECT r.*, p.nome, p.codice_interno, p.aliquota_iva, p.natura_iva
+    SELECT r.*, p.nome, p.codice_interno
     FROM ordini_righe r
     LEFT JOIN prodotti p ON p.id = r.prodotto_id
     WHERE r.ordine_id = ?
@@ -386,11 +411,14 @@ router.post('/:id/convert-to-fattura', requirePermesso('fatture', 'edit'), (req,
     return res.status(400).json({ error: 'Ordine senza righe fatturabili' });
   }
 
+  const cliente = db.prepare('SELECT tipo, escludi_split_payment FROM anagrafiche WHERE id = ?').get(ordine.anagrafica_id);
+  const esigibilita = cliente?.tipo === 'pa' && !Number(cliente.escludi_split_payment || 0) ? 'S' : null;
   const fatturaRows = buildInvoiceRowsFromOrderRows(orderRows);
-  const riepilogoIva = buildInvoiceVatSummary(fatturaRows);
-  const imponibile = +fatturaRows.reduce((sum, row) => sum + (Number(row.imponibile || 0) || 0), 0).toFixed(2);
-  const iva = +fatturaRows.reduce((sum, row) => sum + (Number(row.importo_iva || 0) || 0), 0).toFixed(2);
-  const totale = +(imponibile + iva).toFixed(2);
+  const totali = calcolaTotaliDocumento(fatturaRows, { esigibilita_iva: esigibilita });
+  const riepilogoIva = totali.riepilogo;
+  const imponibile = totali.imponibile;
+  const iva = totali.iva;
+  const totale = totali.totale;
   const numeroFattura = buildInvoiceNumberFromOrder(ordine.codice_ordine || ordine.id);
   const dataFattura = s(ordine.data_ordine) || new Date().toISOString().slice(0, 10);
 
@@ -399,8 +427,9 @@ router.post('/:id/convert-to-fattura', requirePermesso('fatture', 'edit'), (req,
     const result = db.prepare(`
       INSERT INTO fatture (
         numero, numero_documento, tipo, direzione, tipo_documento, anagrafica_id, ordine_id, data, scadenza, data_ricezione,
-        imponibile, iva, totale, sdi_id, stato, stato_pagamento, valuta, partita_iva, codice_fiscale, note, origine_importazione
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        imponibile, iva, totale, sdi_id, stato, stato_pagamento, valuta, partita_iva, codice_fiscale, note, origine_importazione,
+        cig, cup
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       numeroFattura,
       numeroFattura,
@@ -422,13 +451,19 @@ router.post('/:id/convert-to-fattura', requirePermesso('fatture', 'edit'), (req,
       s(ordine.piva),
       s(ordine.cf),
       s(ordine.note),
-      'ordine'
+      'ordine',
+      // CIG e CUP sono dell'ordine e restano gli stessi sulla fattura: e' il
+      // riferimento su cui la PA aggancia il pagamento.
+      s(ordine.cig),
+      s(ordine.cup)
     );
     const fatturaId = Number(result.lastInsertRowid);
     const insertRow = db.prepare(`
       INSERT INTO fatture_righe (
-        fattura_id, prodotto_id, descrizione, quantita, prezzo_unitario, sconto, imponibile, aliquota_iva, natura_iva, importo_iva, totale_riga
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        fattura_id, prodotto_id, descrizione, quantita, prezzo_unitario, sconto, imponibile,
+        aliquota_iva, natura_iva, importo_iva, totale_riga,
+        regola_iva_id, codice_iva, riferimento_normativo
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `);
     fatturaRows.forEach((row) => {
       insertRow.run(
@@ -442,7 +477,10 @@ router.post('/:id/convert-to-fattura', requirePermesso('fatture', 'edit'), (req,
         n(row.aliquota_iva),
         s(row.natura_iva),
         n(row.importo_iva),
-        n(row.totale_riga)
+        n(row.totale_riga),
+        i(row.regola_iva_id),
+        s(row.codice_iva),
+        s(row.riferimento_normativo)
       );
     });
     const insertVat = db.prepare(`
@@ -456,7 +494,9 @@ router.post('/:id/convert-to-fattura', requirePermesso('fatture', 'edit'), (req,
         s(row.natura_iva),
         n(row.imponibile),
         n(row.imposta),
-        null
+        // Il riferimento normativo arriva dalla regola IVA delle righe: e' il
+        // testo che finisce in RiferimentoNormativo nella fattura elettronica.
+        s(row.riferimento_normativo)
       );
     });
     db.exec('COMMIT');

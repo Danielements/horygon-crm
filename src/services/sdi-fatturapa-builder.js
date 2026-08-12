@@ -110,6 +110,7 @@ function buildOrdinaryInvoiceXml(payload) {
         ${payload.importoTotaleDocumento != null ? `<ImportoTotaleDocumento>${formatDecimal(payload.importoTotaleDocumento, 2)}</ImportoTotaleDocumento>` : ''}
         ${(payload.causali || []).map((causale) => `<Causale>${xmlEscape(causale)}</Causale>`).join('\n        ')}
       </DatiGeneraliDocumento>
+      ${renderDatiOrdineAcquisto(payload.datiOrdineAcquisto)}
     </DatiGenerali>
     <DatiBeniServizi>
 ${bodyLines}
@@ -206,7 +207,9 @@ function buildSimplifiedInvoiceXml(payload) {
 `;
 }
 
-function summarizeVat(lines) {
+// L'esigibilita' vale per l'intero documento: la si passa da fuori perche' con
+// la scissione dei pagamenti verso la PA non e' piu' sempre "I".
+function summarizeVat(lines, esigibilitaIva = 'I') {
   const grouped = new Map();
   lines.forEach((line) => {
     const key = `${Number(line.aliquotaIva || 0).toFixed(2)}|${line.naturaIva || ''}`;
@@ -216,7 +219,7 @@ function summarizeVat(lines) {
         naturaIva: line.naturaIva || null,
         imponibile: 0,
         imposta: 0,
-        esigibilitaIva: Number(line.aliquotaIva || 0) > 0 ? 'I' : undefined,
+        esigibilitaIva: Number(line.aliquotaIva || 0) > 0 ? esigibilitaIva : undefined,
         riferimentoNormativo: line.riferimentoNormativo || null
       });
     }
@@ -296,6 +299,21 @@ function renderPaymentBlocks(payment) {
         ${detail.bic ? `<BIC>${xmlEscape(detail.bic)}</BIC>` : ''}
       </DettaglioPagamento>
     </DatiPagamento>`).join('\n');
+}
+
+// DatiOrdineAcquisto sta in DatiGeneraliType subito dopo DatiGeneraliDocumento,
+// e i suoi figli seguono DatiDocumentiCorrelatiType: RiferimentoNumeroLinea,
+// IdDocumento, Data, NumItem, CodiceCommessaConvenzione, CodiceCUP, CodiceCIG.
+// L'ordine e' vincolante, il CUP precede il CIG, e IdDocumento e' l'unico
+// obbligatorio.
+function renderDatiOrdineAcquisto(order) {
+  if (!order || !order.idDocumento) return '';
+  return `<DatiOrdineAcquisto>
+        <IdDocumento>${xmlEscape(order.idDocumento)}</IdDocumento>
+        ${order.data ? `<Data>${order.data}</Data>` : ''}
+        ${order.codiceCup ? `<CodiceCUP>${xmlEscape(order.codiceCup)}</CodiceCUP>` : ''}
+        ${order.codiceCig ? `<CodiceCIG>${xmlEscape(order.codiceCig)}</CodiceCIG>` : ''}
+      </DatiOrdineAcquisto>`;
 }
 
 // ScontoMaggiorazioneType: Tipo (SC/MG), Percentuale, Importo.

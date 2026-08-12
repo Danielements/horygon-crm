@@ -328,7 +328,12 @@ function ensureColumn(table, definition) {
   "tipologia_cliente TEXT DEFAULT 'privato'",
   "pa_mepa INTEGER DEFAULT 0",
   "pa_sda INTEGER DEFAULT 0",
-  "pa_rdo INTEGER DEFAULT 0"
+  "pa_rdo INTEGER DEFAULT 0",
+  // Verso la PA la scissione dei pagamenti e' la regola, non l'eccezione: il
+  // flag esclude i casi previsti dall'art. 17-ter (regime forfettario del
+  // fornitore, prestazioni con ritenuta, enti non soggetti). Il default 0
+  // significa quindi split payment attivo.
+  "escludi_split_payment INTEGER DEFAULT 0"
 ].forEach(col => ensureColumn('anagrafiche', col));
 
 [
@@ -353,7 +358,15 @@ function ensureColumn(table, definition) {
   "ordine_cliente_id INTEGER",
   "suggerimenti_collegamento TEXT",
   "alert_generato INTEGER DEFAULT 0",
-  "documento_meta TEXT"
+  "documento_meta TEXT",
+  // Riferimenti che la PA pretende per liquidare: senza CIG in fattura la
+  // tracciabilita' dei flussi finanziari non e' soddisfatta e il pagamento si
+  // ferma. Finiscono in DatiOrdineAcquisto.
+  "cig TEXT",
+  "cup TEXT",
+  // Esigibilita' IVA risolta al momento della generazione: I immediata,
+  // D differita, S scissione dei pagamenti.
+  "esigibilita_iva TEXT"
 ].forEach(col => ensureColumn('fatture', col));
 
 [
@@ -381,12 +394,22 @@ function ensureColumn(table, definition) {
 [
   "preventivo_id INTEGER",
   "imponibile REAL DEFAULT 0",
-  "iva REAL DEFAULT 0"
+  "iva REAL DEFAULT 0",
+  // CIG e CUP nascono sull'ordine della PA e vengono riportati sulla fattura
+  // che ne deriva.
+  "cig TEXT",
+  "cup TEXT"
 ].forEach(col => ensureColumn('ordini', col));
 
 [
   "cpv_mepa TEXT",
-  "tags TEXT"
+  "tags TEXT",
+  // Trattamento IVA predefinito dell'articolo. E' un default, non un vincolo:
+  // quello che conta sui documenti e' lo snapshot copiato sulla riga, e
+  // cambiare questo campo non tocca nulla di gia' emesso.
+  // Non si affianca una `aliquota_iva` sull'articolo: sarebbe una seconda
+  // verita' che prima o poi diverge dalla regola.
+  "regola_iva_id INTEGER"
 ].forEach(col => ensureColumn('prodotti', col));
 
 [
@@ -396,6 +419,75 @@ function ensureColumn(table, definition) {
   "attivo INTEGER DEFAULT 1",
   "note TEXT"
 ].forEach(col => ensureColumn('kit', col));
+
+// Anagrafica centralizzata dei trattamenti IVA.
+//
+// Non ha `tenant_id`: sono aliquote e codici Natura di legge nazionale, uguali
+// per chiunque usi il CRM. Duplicarle per tenant significherebbe mantenere n
+// copie della stessa norma e vederle divergere.
+//
+// `codice` e' la chiave con cui il seed fa upsert e con cui le righe dei
+// documenti si riconoscono anche se un giorno gli id cambiassero.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS regole_iva (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    codice TEXT NOT NULL UNIQUE,
+    codice_sorgente TEXT,
+    tipo_regola TEXT NOT NULL DEFAULT 'VAT_TREATMENT',
+    gruppo_esclusivo TEXT,
+    descrizione TEXT,
+    aliquota_iva REAL,
+    natura_iva TEXT,
+    esigibilita_iva TEXT,
+    etichetta_fattura TEXT,
+    riferimento_normativo TEXT,
+    note_uso TEXT,
+    revisione_manuale INTEGER DEFAULT 0,
+    attiva INTEGER DEFAULT 1,
+    valido_dal TEXT,
+    valido_al TEXT,
+    priorita INTEGER DEFAULT 0,
+    fonte_url TEXT,
+    verificato_il TEXT,
+    creato_il TEXT DEFAULT (datetime('now')),
+    aggiornato_il TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_regole_iva_attiva ON regole_iva(attiva, tipo_regola);
+`);
+
+// Snapshot fiscale sulle righe dei documenti.
+//
+// `aliquota_iva` e `natura_iva` c'erano gia' su preventivi e fatture e restano
+// i campi su cui si calcola: qui si aggiunge da dove vengono, cioe' la regola,
+// piu' il riferimento normativo che finisce in fattura elettronica.
+// `regola_iva_id` e' una tracciatura della provenienza, **non** la fonte del
+// calcolo: se domani la regola cambia, la riga non si muove.
+[
+  "regola_iva_id INTEGER",
+  "codice_iva TEXT",
+  "riferimento_normativo TEXT"
+].forEach(col => ensureColumn('preventivi_righe', col));
+
+[
+  "regola_iva_id INTEGER",
+  "codice_iva TEXT"
+].forEach(col => ensureColumn('fatture_righe', col));
+
+// `ordini_righe` era l'anello mancante: non aveva alcun dato fiscale, ne'
+// gli importi di riga. L'IVA della fattura veniva riletta dall'articolo al
+// momento della conversione, cioe' esattamente la retroattivita' da evitare.
+[
+  "descrizione TEXT",
+  "imponibile REAL",
+  "aliquota_iva REAL",
+  "natura_iva TEXT",
+  "importo_iva REAL",
+  "totale_riga REAL",
+  "regola_iva_id INTEGER",
+  "codice_iva TEXT",
+  "riferimento_normativo TEXT"
+].forEach(col => ensureColumn('ordini_righe', col));
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS fatture_iva_riepilogo (
@@ -1016,5 +1108,33 @@ APP_SECTIONS.forEach(section => {
   const commercialistaReadable = ['fatture', 'documenti', 'analytics', 'statistics'].includes(section);
   upsertPerm.run(7, section, commercialistaReadable ? 1 : 0, 0, 0, 0);
 });
+
+// Regole IVA: seed idempotente dal CSV normativo, poi allineamento dello
+// storico. Girano a ogni avvio perche' e' cosi' che questo progetto fa le
+// migrazioni: nessuno dei due passi riscrive importi gia' calcolati.
+const { seedRegoleIva } = require('./seed-regole-iva');
+const { backfillSnapshotIva } = require('./backfill-iva');
+try { seedRegoleIva(db); } catch { /* l'avvio non dipende dal seed */ }
+try {
+  const esito = backfillSnapshotIva(db);
+  // Un controllo di quadratura che non dice niente non e' un controllo. Se la
+  // somma delle righe ricostruite non torna con la testata di un ordine, la
+  // testata resta quella che era e il caso finisce in system_log, dove si
+  // vede. Stessa cosa per le righe rimaste senza aliquota deducibile.
+  const scarti = esito.ordini?.mismatched || [];
+  const irrisolte = esito.ordini?.unresolved || 0;
+  if (scarti.length || irrisolte) {
+    db.prepare(`
+      INSERT INTO system_log (livello, origine, messaggio, dettagli)
+      VALUES (?,?,?,?)
+    `).run(
+      'warn',
+      'migrazione-iva',
+      `Allineamento IVA delle righe ordine: ${scarti.length} ordini non quadrano con la testata, `
+      + `${irrisolte} righe senza aliquota deducibile (restano da completare a mano)`,
+      JSON.stringify({ scarti: scarti.slice(0, 50), righe_senza_aliquota: irrisolte })
+    );
+  }
+} catch { /* ne' dall'allineamento */ }
 
 module.exports = db;

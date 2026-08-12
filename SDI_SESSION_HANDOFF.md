@@ -14,7 +14,7 @@ cio' che non e' deducibile dal repository.
 
 ## Stato del codice
 
-Branch `codex/sdi-diagnostics`. **198 test, tutti verdi** (`npm test`).
+Branch `codex/sdi-diagnostics`. **205 test, tutti verdi** (`npm test`).
 
 Fatto il 09.08.2026, seconda parte: **backfill dello storico dai Servizi
 Massivi**. Nuovi `sdi-massive-esito.js` (lettura del file di esito, dove stanno
@@ -29,20 +29,27 @@ Confermati sul campo, oltre che su fixture: mTLS verso `servizi.fatturapa.it`,
 la SOAPAction come stringa nuda, l'involucro `RichiestaServiziMassivi`, la firma
 CAdES di FirmaOK, gli allegati MTOM in risposta.
 
-## Stato del backfill all'11.08.2026, sera
+## Stato del backfill all'11.08.2026, notte — CHIUSO
 
-**Il ciclo SMTS funziona end-to-end contro il servizio reale.** Due job passive
-inoltrati, elaborati, archivi scaricati e import simulato:
+**Il backfill e' completo.** Quattro job, quattro archivi, tutti `COMPLETED` con
+gli archivi `PROCESSED` e ogni documento con esito `IMPORTED`:
 
-| Job | Periodo | IdRichiesta | Archivio | Documenti |
+| Job | Direzione | Periodo | IdRichiesta | Documenti |
 |---|---|---|---|---|
-| 1 | 01.03-31.05 | `360566686` | `360566686_FATT_03365990591.zip` | 10 fatture |
-| 2 | 01.06-10.08 | `360612883` | `360612883_FATT_03365990591.zip` | 19 fatture |
+| 1 | `INCOMING` | 01.03-31.05 | `360566686` | 10 passive |
+| 2 | `INCOMING` | 01.06-10.08 | `360612883` | 19 passive |
+| 3 | `OUTGOING` | 01.03-31.05 | `360722083` | 2 attive |
+| 4 | `OUTGOING` | 01.06-11.08 | `360722768` | 3 attive |
 
-Entrambi in `IMPORTING` con `dry_run = 1`: **niente e' ancora stato scritto**.
-Archivi disponibili fino al **10.09.2026**.
+In `fatture`: **29 ricevute e 5 emesse**, id 36-69. Archivi disponibili fino al
+**10.09.2026**.
 
-Mancano le due finestre delle **attive** (`OUTGOING`), da pianificare.
+**Non serve rilanciare `riprocessa`.** Verificato l'11.08 rileggendo i quattro
+archivi da disco con il parser corrente e confrontando numero, data e totale con
+le righe in `fatture`: 34 documenti su 34 identici. L'archivio del job 1 era
+stato elaborato prima dell'ultimo rebuild, ma non conteneva niente che le
+correzioni cambino. Un `riprocessa` cancellerebbe e ricreerebbe 34 documenti
+fiscali senza guadagnarci nulla.
 
 ### Risolto l'11.08.2026, dopo il primo dry-run
 
@@ -63,14 +70,16 @@ controparte.
 conservato resta il file come e' arrivato, base-64 compreso, perche' e' quello
 su cui SdI ha calcolato l'hash nei metadati.
 
-### Cosa resta prima dell'import vero
+### Cosa resta da guardare sulle fatture importate
 
-1. Rilanciare il **dry-run** dopo il deploy: `metadati` non deve piu' essere 0,
-   i tre `STORED_NON_XML` devono sparire, e ogni riga deve mostrare direzione e
-   controparte.
-2. Verificare le **controparti**: su queste passive devono essere i fornitori,
-   e ora si possono confrontare con `cedentedenominazione` dei metadati.
-3. Solo allora `importa` con `{"dryRun": false}`.
+Le controparti sono corrette e leggibili (Google Cloud, MediaMarket, Scipioni,
+Qube3...), ma **nessuna e' agganciata a un'anagrafica** tranne la 65: il campo
+`anagrafica_id` e' vuoto e la controparte vive in `cliente_fornitore_label`.
+Se serve collegarle, e' un lavoro a parte.
+
+Piccolo difetto visto di passaggio: in `cliente_fornitore_label` le entita' XML
+restano codificate (`FUNAYA ... GAO JOHN JIANZHENG &amp; C. S.A.S.`). Cosmetico,
+non tocca l'XML originale.
 
 ### Lezioni pagate care, in questa sessione
 
@@ -221,8 +230,8 @@ pulsanti laterali:
 
 | Pulsante loro | Blocco FatturaPA | Stato |
 |---|---|---|
-| Riferimenti | `DatiOrdineAcquisto` / `DatiContratto` / `DatiConvenzione`, con **CIG e CUP** | **manca** |
-| (flag anagrafica) | `EsigibilitaIVA = S`, scissione dei pagamenti | **manca** |
+| Riferimenti | `DatiOrdineAcquisto` / `DatiContratto` / `DatiConvenzione`, con **CIG e CUP** | **fatto** l'11.08 |
+| (flag anagrafica) | `EsigibilitaIVA = S`, scissione dei pagamenti | **fatto** l'11.08 |
 | Riferimenti DDT | `DatiDDT` | manca |
 | Rate | `DatiPagamento` / `DettaglioPagamento` | parziale: c'e' `scadenza` e i default in `sdi.payment.*` |
 | Bollo | `DatiBollo` | manca |
@@ -236,77 +245,70 @@ riferimenti la PA non liquida (tracciabilita' dei flussi finanziari); senza
 `EsigibilitaIVA = S` il trattamento IVA e' sbagliato. Gli altri servono a
 coprire i casi, non questa fattura.
 
-### Piano esecutivo per la prossima sessione
+### Fatto l'11.08.2026: riferimenti PA ed esigibilita' IVA
 
-Sei passi, in quest'ordine. Non tocca la logica esistente: aggiunge campi e due
-blocchi XML.
+I sei passi del piano sono eseguiti. Il codice e' additivo: dove i campi nuovi
+sono vuoti, l'XML e' identico a prima.
 
-**1. Colonne** (additive, in `src/db/database.js` con `ensureColumn`):
+**Colonne** (`src/db/database.js`, con `ensureColumn`): `ordini.cig/cup`,
+`fatture.cig/cup/esigibilita_iva`, `anagrafiche.escludi_split_payment`.
 
-```text
-ordini:       cig TEXT, cup TEXT
-fatture:      cig TEXT, cup TEXT, esigibilita_iva TEXT
-anagrafiche:  escludi_split_payment INTEGER DEFAULT 0
-```
+**Conversione**: `convert-to-fattura` riporta `cig` e `cup` dall'ordine.
 
-Il flag sull'anagrafica ricalca quello del software di riferimento: lo split
-payment e' attivo per le PA **salvo esclusione**, non il contrario.
+**Payload** (`src/services/sdi-fatturapa.js`): `loadInvoice` fa join su `ordini`
+per numero e data, `resolveEsigibilitaIva` e `buildDatiOrdineAcquisto`.
+Precedenza dell'esigibilita': valore scritto a mano sulla fattura, poi `S` se il
+cliente e' PA e non e' escluso, poi `sdi.vat.esigibilita`, poi `I`.
 
-**2. Conversione** (`src/routes/ordini.js`, `convert-to-fattura`): riporta
-`cig` e `cup` dall'ordine alla fattura. E' l'unico punto in cui la logica
-cambia davvero, ed e' una copia di due campi.
+**Builder**: `renderDatiOrdineAcquisto`, dentro `DatiGenerali` subito dopo
+`DatiGeneraliDocumento`, con il CUP prima del CIG; `summarizeVat` prende
+l'esigibilita' da fuori invece di scrivere `I` fisso.
 
-**3. Payload** (`src/services/sdi-fatturapa.js`): porta `cig`, `cup`, il numero
-e la data dell'ordine, e calcola l'esigibilita': `S` se il cliente e' PA e non
-e' escluso, altrimenti quella configurata.
+**Interfaccia**: CIG e CUP sul modale ordine e su quello fattura, con
+l'esigibilita' IVA (vuoto = automatica), e la casella "escludi scissione dei
+pagamenti" nel riquadro PA dell'anagrafica. **I riquadri compaiono solo quando
+la controparte e' una PA**, per tipo di record o per tipologia cliente: la stessa
+fattura da ordine evaso puo' andare a un cliente privato, e li' quei campi non
+c'entrano nulla. Ordini e fatture espongono `anagrafica_tipo` per saperlo senza
+una chiamata in piu'.
 
-**4. Builder** (`src/services/sdi-fatturapa-builder.js`), attenzione all'ordine
-degli elementi, che negli XSD e' vincolante:
+**Test**: cinque, in `tests/sdi.test.js`. La FPA12 dell'Aeronautica valida
+contro `Schema_VFPR12_v1.2.3.xsd`, e altrettanto fanno il caso senza CIG e
+quello a cliente privato, che deve restare com'era.
 
-`DatiOrdineAcquisto` sta dentro `DatiGenerali`, **subito dopo**
-`DatiGeneraliDocumento`. `IdDocumento` e' obbligatorio quando il blocco c'e':
+Una scelta da conoscere: **il blocco viene emesso quando CIG o CUP sono
+valorizzati, anche verso un privato**, perche' nei subappalti la tracciabilita'
+si applica lo stesso e scartare in silenzio un codice scritto a mano sarebbe
+peggio. La differenza per il privato la fa l'interfaccia, che quei campi non li
+mostra.
 
-```xml
-<DatiOrdineAcquisto>
-  <IdDocumento>numero ordine</IdDocumento>
-  <Data>data ordine</Data>
-  <CodiceCUP>...</CodiceCUP>
-  <CodiceCIG>...</CodiceCIG>
-</DatiOrdineAcquisto>
-```
+Una costrizione del tracciato, non una scelta: `IdDocumento` e' obbligatorio in
+`DatiDocumentiCorrelatiType`, e **non esiste alcun modo di portare un CIG senza
+dichiarare un documento correlato**. Con un ordine collegato si usa il suo
+codice; senza, si ripiega sul numero della fattura.
 
-`EsigibilitaIVA` sta dentro `DatiRiepilogo`, **dopo `Imposta` e prima di
-`RiferimentoNormativo`**. Valori: `I` immediata, `D` differita, `S` scissione
-dei pagamenti. Il builder ha gia' il campo condizionale, va solo alimentato.
-
-**5. Interfaccia**: CIG e CUP sul modale ordine e su quello fattura; casella
-"escludi split payment" sulla scheda anagrafica quando il tipo e' `pa`.
-
-**6. Test**: una FPA12 per l'Aeronautica che valida contro
-`Schema_VFPR12_v1.2.3.xsd`, con `DatiOrdineAcquisto` popolato, `EsigibilitaIVA`
-a `S`, cessionario col solo codice fiscale e destinatario `AKGVPD`. Vale la
-regola imparata a caro prezzo: **validare contro lo schema, non a occhio**.
-
-Infine `sdi.signature.mode` su `external`: oggi e' `disabled` e da solo impedisce
-di generare qualunque FPA12.
+Resta da fare, ed e' l'unico passo mancante per emetterla: `sdi.signature.mode`
+su `external`. Oggi e' `disabled` e da solo impedisce di generare qualunque
+FPA12.
 
 ## Lavori aperti, in ordine
 
-1. **Chiudere i tre `.p7m` illeggibili e il tracciato dei metadati**, poi
-   lanciare l'import vero sui job 1 e 2 (vedi "Stato del backfill").
-2. Pianificare, firmare e importare le due finestre delle **attive**.
-3. Import automatico delle passive firmate `.p7m` dal canale realtime: oggi
+1. **`sdi.signature.mode = external`**, poi emettere la FPA12 per l'Aeronautica
+   dall'ordine evaso e portarla per intero nel ciclo di firma.
+2. Import automatico delle passive firmate `.p7m` dal canale realtime: oggi
    vengono archiviate ma non importate, e il CRM risponde comunque `ER01`.
-4. Client di quadratura e reinoltro: **bloccato**, mancano tre WSDL da recuperare
+3. Client di quadratura e reinoltro: **bloccato**, mancano tre WSDL da recuperare
    dal Sistema di Accreditamento
    (`SdIQuadraturaWSFlussoRicezioneReport_v1.0.wsdl`,
    `SdIQuadraturaWSFlussoTrasmissioneReport_v1.0.wsdl`,
    `SdIQuadraturaWSFlussoTrasmissioneReinoltro_v1.0.wsdl`).
-5. `ScaricoRichiesteEsito_v1.0.xsd`, non pubblicato insieme agli altri contratti
+4. `ScaricoRichiesteEsito_v1.0.xsd`, non pubblicato insieme agli altri contratti
    SMTS: il parser dell'esito segue la tabella della specifica, avere lo schema
    permetterebbe di validarlo.
-6. Rate limiter globale su `/api` (`src/index.js`): copre anche il callback SdI,
+5. Rate limiter globale su `/api` (`src/index.js`): copre anche il callback SdI,
    300 richieste al minuto per IP. Da escludere o alzare prima di volumi reali.
+6. Agganciare le 34 fatture dello storico alle anagrafiche: oggi la controparte
+   sta solo in `cliente_fornitore_label`.
 
 ## Cose che non vanno rifatte
 

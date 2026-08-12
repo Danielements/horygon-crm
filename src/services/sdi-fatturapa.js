@@ -11,9 +11,9 @@ const {
   buildOrdinaryInvoiceXml,
   buildSimplifiedInvoiceXml,
   buildProgressivoInvio,
-  mapDocumentType,
-  summarizeVat
+  mapDocumentType
 } = require('./sdi-fatturapa-builder');
+const { calcolaTotaliDocumento } = require('./iva');
 
 const ROOT = path.resolve(__dirname, '../../');
 const OUTBOUND_DIR = path.join(ROOT, 'uploads', 'sdi-outbound');
@@ -81,10 +81,13 @@ function loadInvoice(fatturaId) {
       a.paese AS cliente_paese,
       a.codice_destinatario AS cliente_codice_destinatario,
       a.tipo AS cliente_tipo,
-      p.codice_univoco_sdi AS cliente_codice_univoco_pa
+      p.codice_univoco_sdi AS cliente_codice_univoco_pa,
+      o.codice_ordine AS ordine_codice,
+      o.data_ordine AS ordine_data
     FROM fatture f
     LEFT JOIN anagrafiche a ON a.id = f.anagrafica_id
     LEFT JOIN pa_dettagli p ON p.anagrafica_id = a.id
+    LEFT JOIN ordini o ON o.id = f.ordine_id
     WHERE f.id = ?
   `).get(fatturaId);
   if (!invoice) return null;
@@ -155,7 +158,8 @@ function loadRecipientProfile(anagraficaId) {
   return {
     ...customer,
     destinationCode,
-    isPa: customer.tipo === 'pa'
+    isPa: customer.tipo === 'pa',
+    escludiSplitPayment: Number(customer.escludi_split_payment || 0) === 1
   };
 }
 
@@ -188,11 +192,19 @@ function buildInvoicePayload(invoice, company, customer, options = {}) {
       aliquotaIva,
       importoIva: toAmount(line.importo_iva) ?? round2(totaleRiga * aliquotaIva / 100),
       naturaIva: String(line.natura_iva || '').trim() || null,
-      riferimentoNormativo: null
+      // Arriva dallo snapshot della riga, cioe' dalla regola IVA con cui la
+      // riga e' stata scritta. Nel tracciato vive nel riepilogo, non sulla
+      // linea, ma e' qui che si sa a quale gruppo appartiene.
+      riferimentoNormativo: String(line.riferimento_normativo || '').trim() || null
     };
   });
   if (!lines.length) throw new Error('La fattura non contiene righe da esportare');
 
+  const esigibilitaIva = resolveEsigibilitaIva(invoice, customer);
+  // Il riepilogo salvato sulla fattura vince: e' quello che l'operatore vede e
+  // puo' correggere. Quando non c'e' lo ricalcola il motore IVA, con lo stesso
+  // raggruppamento usato da preventivi e ordini — per aliquota, Natura ed
+  // esigibilita', non per la sola percentuale.
   const riepilogo = (invoice.riepilogo_iva || []).length
     ? invoice.riepilogo_iva.map((row) => ({
         aliquotaIva: toAmount(row.aliquota_iva) || 0,
@@ -200,9 +212,16 @@ function buildInvoicePayload(invoice, company, customer, options = {}) {
         imponibile: toAmount(row.imponibile) || 0,
         imposta: toAmount(row.imposta) || 0,
         riferimentoNormativo: String(row.riferimento_normativo || '').trim() || null,
-        esigibilitaIva: (toAmount(row.aliquota_iva) || 0) > 0 ? 'I' : undefined
+        esigibilitaIva: (toAmount(row.aliquota_iva) || 0) > 0 ? esigibilitaIva : undefined
       }))
-    : summarizeVat(lines);
+    : calcolaTotaliDocumento(invoice.righe || [], { esigibilita_iva: esigibilitaIva }).riepilogo.map((row) => ({
+        aliquotaIva: Number(row.aliquota_iva || 0),
+        naturaIva: row.natura_iva || null,
+        imponibile: Number(row.imponibile || 0),
+        imposta: Number(row.imposta || 0),
+        riferimentoNormativo: row.riferimento_normativo || null,
+        esigibilitaIva: row.natura_iva ? undefined : esigibilitaIva
+      }));
 
   const format = options.forceFormat || (customer.isPa ? 'FPA12' : 'FPR12');
   const destinationCode = resolveDestinationCode(customer, format);
@@ -242,10 +261,53 @@ function buildInvoicePayload(invoice, company, customer, options = {}) {
     importoTotaleDocumento: totaleDocumento,
     divisa: String(invoice.valuta || 'EUR').trim() || 'EUR',
     causali: [],
+    esigibilitaIva,
+    datiOrdineAcquisto: buildDatiOrdineAcquisto(invoice, numero),
     lines,
     riepilogo,
     payment: buildPaymentPayload(invoice, totaleDocumento)
   };
+}
+
+// Esigibilita' IVA del riepilogo.
+//
+// Verso la PA vale la scissione dei pagamenti (art. 17-ter DPR 633/72): la
+// fattura espone l'imposta ma la versa l'ente, non noi. E' la regola, quindi il
+// default e' S e sono i casi esclusi a dover essere marcati sull'anagrafica.
+// Un valore scritto a mano sulla fattura vince su tutto: e' una scelta gia'
+// fatta da chi la emette.
+function resolveEsigibilitaIva(invoice, customer) {
+  const esplicita = String(invoice.esigibilita_iva || '').trim().toUpperCase();
+  if (['I', 'D', 'S'].includes(esplicita)) return esplicita;
+  if (customer.isPa && !customer.escludiSplitPayment) return 'S';
+  const configurata = String(getSetting('sdi.vat.esigibilita', 'I') || 'I').trim().toUpperCase();
+  return ['I', 'D', 'S'].includes(configurata) ? configurata : 'I';
+}
+
+// DatiOrdineAcquisto: e' il blocco in cui la PA cerca CIG e CUP, e senza quelli
+// non liquida (tracciabilita' dei flussi finanziari, legge 136/2010).
+//
+// IdDocumento e' obbligatorio quando il blocco c'e' (DatiDocumentiCorrelatiType)
+// e nel tracciato non esiste alcun modo di portare un CIG senza dichiarare un
+// documento correlato. Quando la fattura nasce da un ordine si usa il codice
+// dell'ordine; senza ordine collegato l'unico riferimento certo che abbiamo e'
+// il numero della fattura stessa.
+function buildDatiOrdineAcquisto(invoice, numeroFattura) {
+  const cig = normalizeCorrelatedCode(invoice.cig);
+  const cup = normalizeCorrelatedCode(invoice.cup);
+  const idDocumento = String(invoice.ordine_codice || '').trim() || numeroFattura;
+  if (!cig && !cup) return null;
+  return {
+    idDocumento: idDocumento.slice(0, 20),
+    data: normalizeDate(invoice.ordine_data) || undefined,
+    codiceCup: cup || undefined,
+    codiceCig: cig || undefined
+  };
+}
+
+// String15Type sul tracciato: CIG e CUP sono codici, non testo libero.
+function normalizeCorrelatedCode(value) {
+  return String(value || '').trim().replace(/\s+/g, '').toUpperCase().slice(0, 15);
 }
 
 function saveOutboundXml(invoice, customer, xml, payload, validation, options = {}, signature = null) {
@@ -294,6 +356,8 @@ function saveOutboundXml(invoice, customer, xml, payload, validation, options = 
       progressivo_invio: payload.fileProgressivo,
       codice_destinatario: payload.destinationCode,
       cliente: payload.customer.denomination,
+      esigibilita_iva: payload.esigibilitaIva,
+      dati_ordine_acquisto: payload.datiOrdineAcquisto || null,
       firma: applied.meta,
       validation
     }),
