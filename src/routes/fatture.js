@@ -49,6 +49,8 @@ router.get('/', requirePermesso('fatture', 'read'), (req, res) => {
   // documento e' partito ne' se e' tornata una ricevuta.
   let sql = `SELECT f.*,
       COALESCE(a.ragione_sociale, f.cliente_fornitore_label) AS ragione_sociale,
+      a.tipo AS anagrafica_tipo,
+      a.tipologia_cliente AS anagrafica_tipologia,
       (SELECT COUNT(*) FROM fatture_sdi_flussi fl
         WHERE fl.fattura_id = f.id AND COALESCE(fl.direzione,'outbound') = 'outbound') AS sdi_flussi,
       (SELECT COUNT(*) FROM fatture_sdi_flussi fl
