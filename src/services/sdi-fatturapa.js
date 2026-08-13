@@ -188,7 +188,14 @@ function buildInvoicePayload(invoice, company, customer, options = {}) {
   const lines = (invoice.righe || []).map((line, index) => {
     const quantita = toAmount(line.quantita) || 1;
     const prezzoUnitario = toAmount(line.prezzo_unitario) || 0;
-    const totaleRiga = toAmount(line.totale_riga) || toAmount(line.imponibile) || round2(quantita * prezzoUnitario);
+    // PrezzoTotale nel tracciato e' il **netto** di riga (imponibile), non il
+    // totale IVA inclusa. La colonna `totale_riga` in `fatture_righe` e' invece
+    // il lordo (imponibile + imposta), come la scrive convert-to-fattura: darla
+    // a PrezzoTotale fa scattare 00423 riga per riga (atteso qty x prezzo) e poi
+    // 00422 (ImponibileImporto != somma dei PrezzoTotale). Si usa `imponibile`,
+    // e solo in sua assenza lo si ricostruisce da quantita x prezzo - sconto.
+    const imponibileRiga = toAmount(line.imponibile)
+      ?? round2(quantita * prezzoUnitario - (toAmount(line.sconto) || 0));
     const aliquotaIva = toAmount(line.aliquota_iva) || 0;
     return {
       numeroLinea: index + 1,
@@ -197,9 +204,9 @@ function buildInvoicePayload(invoice, company, customer, options = {}) {
       unitaMisura: String(line.unita_misura || 'NR').trim(),
       prezzoUnitario,
       scontoMaggiorazione: buildScontoMaggiorazione(line, quantita),
-      totaleRiga,
+      totaleRiga: imponibileRiga,
       aliquotaIva,
-      importoIva: toAmount(line.importo_iva) ?? round2(totaleRiga * aliquotaIva / 100),
+      importoIva: toAmount(line.importo_iva) ?? round2(imponibileRiga * aliquotaIva / 100),
       naturaIva: String(line.natura_iva || '').trim() || null,
       // Arriva dallo snapshot della riga, cioe' dalla regola IVA con cui la
       // riga e' stata scritta. Nel tracciato vive nel riepilogo, non sulla

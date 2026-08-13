@@ -308,6 +308,41 @@ test('an invoice with no reference carries no DatiFattureCollegate', async () =>
   assert.equal(buildOrdinaryInvoiceXml(payload).includes('<DatiFattureCollegate>'), false);
 });
 
+// Regressione del 00423/00422: le righe come le scrive convert-to-fattura
+// hanno `totale_riga` LORDO (imponibile + imposta), non netto. PrezzoTotale nel
+// tracciato e' il netto, quindi va preso da `imponibile`. Il test precedente
+// usava dati sintetici (totale_riga = netto) e non lo vedeva; qui le righe sono
+// sagomate come nel database.
+test('PrezzoTotale is the net line amount even when totale_riga carries VAT', async () => {
+  const payload = buildInvoicePayload(
+    makeAeronauticaInvoice({
+      // Due righe reali dell'ordine 3, con totale_riga lordo come in DB.
+      righe: [
+        { descrizione: 'BIC SOFT FEEL', quantita: 400, prezzo_unitario: 0.90, sconto: 0, imponibile: 360.00, aliquota_iva: 22, importo_iva: 79.20, totale_riga: 439.20 },
+        { descrizione: 'MATITA NORIS', quantita: 300, prezzo_unitario: 0.55, sconto: 0, imponibile: 165.00, aliquota_iva: 22, importo_iva: 36.30, totale_riga: 201.30 }
+      ],
+      riepilogo_iva: [{ aliquota_iva: 22, imponibile: 525.00, imposta: 115.50 }],
+      totale: 640.50
+    }),
+    makeOrdinaryPayload('FPA12').company,
+    makeAeronauticaCustomer(),
+    { mode: 'test', progressivo: 'H0060' }
+  );
+
+  // PrezzoTotale = netto, non lordo.
+  assert.equal(payload.lines[0].totaleRiga, 360);
+  assert.equal(payload.lines[1].totaleRiga, 165);
+
+  const xml = buildOrdinaryInvoiceXml(payload);
+  assert.match(xml, /<PrezzoTotale>360\.00000000<\/PrezzoTotale>/);
+  assert.equal(xml.includes('439.20'), false, 'il lordo non deve comparire come PrezzoTotale');
+
+  // I pre-controlli fiscali 00422 e 00423 devono passare: sono quelli che in
+  // produzione avevano fermato la generazione della fattura 6.
+  const result = await validateInvoiceXml({ xml, format: 'FPA12' });
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
+});
+
 test('PA invoice without CIG omits the correlated document block', async () => {
   const payload = buildInvoicePayload(
     makeAeronauticaInvoice({ cig: null, cup: null }),
