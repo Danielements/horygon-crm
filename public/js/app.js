@@ -3882,6 +3882,41 @@ function renderStatoSdiBadge(f) {
     : badge('Inviata, nessuna ricevuta', 'badge-fornitore', `Trasmessa a SdI${identificativo}, nessuna notifica ancora ricevuta`);
 }
 
+// Il pulsante SdI sulla riga della fattura cambia con lo stato e con il tipo di
+// cliente.
+//
+// - Verso la PA (FPA12) il documento passa dalla firma: "Firma / Invio".
+// - Verso B2B/B2C (FPR12) non c'e' firma, si trasmette e basta: "Trasmetti".
+// - Una volta trasmessa **con successo** diventa "Trasmessa", uguale per
+//   entrambi. Uno scarto o un rifiuto NON contano come buon fine: il pulsante
+//   torna azionabile per correggere e ritrasmettere.
+//
+// Apre sempre lo stesso modale (openSdiFirmaModal), che dentro mostra i passi
+// giusti per il caso (genera/firma/invia o solo invia).
+function renderSdiRowButton(f) {
+  if (f.tipo !== 'emessa') return '';
+  const isPa = f.anagrafica_tipo === 'pa' || f.anagrafica_tipologia === 'pa';
+  const inviati = Number(f.sdi_inviati || 0);
+  const esitoNegativo = ['scartata', 'rifiutata', 'non_consegnata'].includes(String(f.sdi_ultimo_esito || ''));
+  const trasmessaOk = inviati > 0 && !esitoNegativo;
+
+  let label, classe, titolo;
+  if (trasmessaOk) {
+    label = '&#10003; Trasmessa';
+    classe = 'btn-outline';
+    titolo = 'Trasmessa a SdI: apri per vedere l\'esito';
+  } else if (isPa) {
+    label = '&#128278; Firma / Invio';
+    classe = f.stato_sdi === 'firma_richiesta' ? 'btn-accent' : 'btn-outline';
+    titolo = esitoNegativo ? 'Scartata o rifiutata: correggi e ritrasmetti' : 'Ciclo di firma e invio a SdI (fattura PA)';
+  } else {
+    label = '&#128228; Trasmetti';
+    classe = String(f.stato_sdi || '').startsWith('xml_generato') ? 'btn-accent' : 'btn-outline';
+    titolo = esitoNegativo ? 'Scartata o rifiutata: correggi e ritrasmetti' : 'Genera e trasmetti a SdI (no firma per B2B/B2C)';
+  }
+  return `<button class="btn ${classe} btn-sm" onclick="openSdiFirmaModal(${f.id})" title="${escapeAttr(titolo)}">${label}</button>`;
+}
+
 function renderFattureRows(targetId, rows) {
   const body = document.getElementById(targetId);
   if (!body) return;
@@ -3901,7 +3936,7 @@ function renderFattureRows(targetId, rows) {
       <button class="btn btn-outline btn-sm" onclick="previewFattura(${f.id})" title="Anteprima fattura">&#128065;</button>
       <button class="btn btn-outline btn-sm" onclick="openApiPdf('/fatture/${f.id}/pdf-cortesia')" title="Copia di cortesia in PDF">PDF</button>
       ${f.xml_path ? `<button class="btn btn-outline btn-sm" onclick="openFatturaXml(${f.id})" title="Apri XML">XML</button>` : ''}
-      ${f.tipo === 'emessa' ? `<button class="btn ${f.stato_sdi === 'firma_richiesta' ? 'btn-accent' : 'btn-outline'} btn-sm" onclick="openSdiFirmaModal(${f.id})" title="Ciclo di firma e invio a SdI">&#128278; Firma / Invio</button>` : ''}
+      ${renderSdiRowButton(f)}
       ${f.tipo === 'emessa' && f.tipo_documento !== 'nota_credito' ? `<button class="btn btn-outline btn-sm" onclick="creaNotaCredito(${f.id})" title="Nota di credito a storno di questa fattura">Nota credito</button>` : ''}
       ${f.tipo === 'emessa' && f.source === 'CRM' ? `<button class="btn btn-danger btn-sm" onclick="eliminaFattura(${f.id}, '${String(f.numero || f.id).replace(/'/g, "\\'")}')" title="Elimina: possibile solo finche non e stata trasmessa al SdI">Elimina</button>` : ''}
       ${f.tipo === 'ricevuta' ? `<button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC01')" title="Comunica a SdI l accettazione della fattura ricevuta">Accetta</button><button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC02')" title="Comunica a SdI il rifiuto della fattura ricevuta">Rifiuta</button>` : ''}
@@ -4450,6 +4485,23 @@ async function generaXmlFattura(fatturaId) {
   }
 }
 
+// Rigenerazione dopo una modifica alla fattura, prima dell'invio.
+//
+// `generaXmlFattura` compare solo quando non c'e' ancora un flusso: una volta
+// generato, il modale mostra firma e invio ma non piu' la generazione, e una
+// fattura corretta prima dell'invio resterebbe con l'XML vecchio. Questo rilegge
+// i dati aggiornati e produce un flusso nuovo. Non trasmette nulla, e non tocca i
+// flussi gia' esistenti: alloca un progressivo nuovo (i nomi file non si riusano),
+// quindi il flusso precedente resta da firmare o da abbandonare.
+async function rigeneraXmlFattura(fatturaId) {
+  if (!confirm(
+    'Rigenerare l\'XML da questa fattura?\n\n' +
+    'Serve dopo aver modificato la fattura prima dell\'invio: rilegge i dati aggiornati e produce un XML nuovo.\n\n' +
+    'Alloca un progressivo e un nome file nuovi, che non si riusano: il flusso attuale non viene sostituito e va firmato o abbandonato a parte.'
+  )) return;
+  await generaXmlFattura(fatturaId);
+}
+
 function sdiFirmaFlussi() {
   const state = sdiFirmaState || {};
   return [state.flusso, ...(state.altriInAttesaDiFirma || [])].filter(Boolean);
@@ -4549,7 +4601,12 @@ function renderSdiFirmaBody() {
       </div>` : ''}
     ${firmatario}
     ${esito}
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">${azioni.join('')}</div>`;
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">${azioni.join('')}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+      <button class="btn btn-outline btn-sm" onclick="rigeneraXmlFattura(${escapeAttr(state.fatturaId)})"
+        title="Dopo aver modificato la fattura, prima dell'invio: rigenera l'XML in un flusso nuovo">&#8635; Rigenera XML</button>
+      <span style="font-size:12px;color:var(--text-muted);align-self:center">Da usare se hai modificato la fattura dopo la generazione.</span>
+    </div>`;
 }
 
 // Il subject di un certificato arriva su piu' righe (C=IT\nO=...\nCN=...):
