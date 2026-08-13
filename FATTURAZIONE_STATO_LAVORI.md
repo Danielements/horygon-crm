@@ -1,22 +1,66 @@
 # Fatturazione: stato dei lavori
 
-Ultimo aggiornamento: 2026-08-12, sera.
+Ultimo aggiornamento: 2026-08-13.
 
 Documento di lavoro sul ciclo commerciale e sulla fattura. Per il canale SdI
 resta `SDI_INTEGRATION_OVERVIEW.md`; per il backfill e la firma,
 `SDI_SESSION_HANDOFF.md`.
 
-Branch `codex/sdi-diagnostics`, **248 test verdi** (`npm test`).
-Locale e VPS sono allineati a `7f0e65d`: non c'e' niente da deployare.
+Branch `codex/sdi-diagnostics`, **258 test verdi** (`npm test`).
+Ultimo commit locale `0db82d8`. **Il VPS va riallineato**: `git pull &&
+docker compose up -d --build`.
 
 ## 0. Il punto in una riga
 
 **Non e' ancora stata trasmessa nessuna fattura.** In produzione:
-`fatture_sdi_flussi` e' vuota, `fatture_sdi_notifiche` e' vuota. La fattura 6
-per l'Aeronautica esiste ma non e' mai stata generata in XML, e tre dati
-mancanti la bloccano (§3.1).
+`fatture_sdi_flussi` e `fatture_sdi_notifiche` vuote. La fattura 6 per
+l'Aeronautica ora si **genera** in XML (validata contro `Schema_VFPR12`), ma
+prima della firma vanno completati i dati PA (§3.1): manca ancora il passaggio
+`sdi.mode = production` e la firma qualificata.
 
-## 1. Fatto in questa sessione
+## 1. Fatto
+
+### 13 agosto — correzioni sul tracciato FPA12, provate su dati reali
+
+Da una revisione dell'XML dell'Aeronautica (`IT03365990591_H0001.xml`), tutte
+verificate contro `Schema_VFPR12_v1.2.3.xsd` e riproducendo la fattura vera:
+
+| Difetto | Correzione |
+|---|---|
+| `PrezzoTotale` con l'IVA inclusa | e' il **netto** di riga (imponibile). I dati veri hanno `totale_riga` lordo: 439,20 = 360 x 1,22. Scattavano 00423 su ogni riga e 00422 sul riepilogo. I test usavano righe con `totale_riga` gia' netto e non lo vedevano |
+| Split payment: `ImportoPagamento` lordo | sotto esigibilita' `S` la PA non versa l'IVA al fornitore: `ImportoPagamento` e' il **netto** (totale meno imposta), `ImportoTotaleDocumento` resta il lordo |
+| `CapitaleSociale 0.00` | un capitale a zero e' un'informazione falsa: il campo si **omette** quando non configurato (facoltativo in IscrizioneREA). Configurare `sdi.company.share_capital` |
+| scadenza inventata | senza scadenza il pagamento ripiegava sulla data fattura ("dovuto oggi"): `DataScadenzaPagamento` si **omette** quando non c'e' |
+| CIG mancante su PA | **warning** (non blocco: le esclusioni esistono), mostrato come toast alla generazione. Senza CIG obbligatorio la PA non liquida |
+| `IdDocumento` = codice interno CRM | e' il **numero dell'ordinativo PA** (es. "077"), non `ORD-PREV-...`. Campi nuovi `riferimento_ordine_pa` / `_data` su ordini e fatture, piu' `capitolo_spesa` e `protocollo_pa` (solo memoria interna, fuori dal tracciato). Copiati da ordine a fattura, editabili nel riquadro PA di entrambi i modali |
+| ordine consegnato non fatturabile | `convert-to-fattura` accetta da `confermato` a `consegnato`; il pulsante "Crea fattura" compare sugli stessi stati (era solo `confermato`) |
+| pulsante Elimina fattura muto | `onclick` generato con `JSON.stringify` (doppi apici in attributo a doppi apici): allineato agli apici singoli |
+| `sdi_id` = Codice Univoco Ufficio | il campo "Identificativo SdI" conteneva `AKGVPD` e la fattura risultava trasmessa: il campo ora spiega che e' numerico e lo assegna SdI, e un valore non numerico chiede conferma |
+
+**Ingresso del ciclo di firma aperto.** Aggiunta `POST /api/sdi/fatture/:id/genera`
+(genera nella modalita' del canale, **non trasmette**) e il pulsante nel modale:
+prima "Firma / Invio" compariva solo con `stato_sdi` gia' valorizzato, che si
+valorizza generando — un cerchio chiuso. Tolti i pulsanti "Genera XML TEST" e
+"Invia a SdI TEST".
+
+**Dove cambiare `RiferimentoNormativo`** (es. "Scissione dei pagamenti -
+art. 17-ter DPR 633/1972"): nel campo *Riferimento* della riga del **Riepilogo
+IVA** della singola fattura, non nella regola globale (quella e' il riferimento
+dell'aliquota, e cambierebbe tutte le fatture a quell'aliquota). E' facoltativo:
+lo split e' gia' comunicato da `EsigibilitaIVA = S`.
+
+**Accesso al CRUD IVA**: pulsante "Trattamenti IVA" nell'header Prodotti,
+accanto a Categorie (prima si apriva solo da dentro un articolo).
+
+### Modello IVA: come e' assegnata (riepilogo)
+
+- **Default per articolo** (scheda prodotto, campo Trattamento IVA).
+- **Snapshot per riga**: all'inserimento in preventivo/ordine/fattura il
+  trattamento e' copiato sulla riga, e li' e' modificabile con un **dropdown**
+  (codice + descrizione dal CRUD) senza toccare l'articolo.
+- **Nessuna IVA globale di documento**, di proposito: la stessa fattura porta
+  righe ad aliquote/nature diverse. L'unica proprieta' IVA a livello documento
+  e' l'**esigibilita'** (I/D/S), che dipende dal cliente.
 
 ### Incidente del 12 agosto: sessanta mail vere da una corsa di test
 
@@ -127,35 +171,46 @@ che sbordava, mentre i controlli numerici passavano.
 
 ## 3. Aperto
 
-### 3.1 La fattura PA all'Aeronautica — tre dati la bloccano
+### 3.1 La fattura PA all'Aeronautica — dati da completare
 
-Stato in produzione, letto il 12.08 sera:
+Il tracciato ora e' corretto (validato contro `Schema_VFPR12`). Restano i **dati
+reali** da inserire, tutti dal foglio d'ordine della PA:
 
 ```text
-fattura 6   : sdi_id='AKGVPD'  ordine_id=NULL  cig='BC733E0240'  totale 2549.14
-ordine 3    : ORD-PREV-20260625-354  stato=consegnato  cig=NULL
-anagrafica 9: AERONAUTICA MILITARE 70° STORMO  tipo=cliente  tipologia_cliente=pa
-              cf=80007090592  codice_destinatario=AKGVPD  escludi_split_payment=1
+CIG                      BC733E0240
+N. ordinativo PA         077              -> DatiOrdineAcquisto/IdDocumento
+Data ordinativo PA       2026-07-20       -> DatiOrdineAcquisto/Data
+Capitolo di spesa        4516/02          (solo interno)
+Protocollo PA            M_D ALT001 REG2026 0006592   (solo interno)
+Codice Univoco Ufficio   AKGVPD
+Pagamento                60 giorni
+Split payment            si
 ```
 
-1. **`sdi_id` contiene `AKGVPD`**, il Codice Univoco Ufficio finito nel campo
-   Identificativo SdI. Finche' resta, la fattura risulta trasmessa e non si
-   elimina. Va svuotato dalla scheda fattura.
-2. **`escludi_split_payment = 1`** → l'esigibilita' esce `I`, non `S`. Per
-   un'amministrazione dello Stato la scissione di norma si applica. **Decisione
-   del proprietario**, non toccare da soli.
-3. **L'ordine 3 non ha CIG** (sta sulla fattura). Se si cancella e si ricrea la
-   fattura dall'ordine, il CIG si perde: va messo prima sull'ordine.
+Da fare nel modale ordine/fattura (sezione PA) prima di rigenerare:
 
-Nota: `ORD-PREV-20260625-354` e' di **21 caratteri**, `IdDocumento` ne ammette
-20. Verra' troncato. Se quel riferimento serve alla PA, accorciare il codice.
+1. **CIG e N. ordinativo PA sull'ordine** (o sulla fattura): con i campi nuovi
+   il CIG non si perde piu' alla conversione, e `IdDocumento` prende `077`, non
+   il codice interno.
+2. **Togliere "escludi split payment"** sull'anagrafica → esigibilita' `S`,
+   `ImportoPagamento` netto 2089,46.
+3. **Scadenza a 60 giorni** sulla fattura.
+4. Se serve, `RiferimentoNormativo` split nel campo Riferimento del Riepilogo
+   IVA (vedi §1).
 
-Sequenza concordata: svuota `sdi_id` → metti il CIG sull'ordine → elimina la
-fattura 6 → *Crea fattura* dall'ordine 3 → *Firma / Invio* → **Genera XML e
-fermarsi a guardarlo** → firma con FirmaOK → ricarica il `.p7m` → invia.
+Attenzione: `sdi_id` conteneva `AKGVPD` (Codice Univoco Ufficio nel campo
+sbagliato): finche' resta, la fattura risulta trasmessa e non si elimina. Se si
+ricrea da zero il problema non si ripresenta.
 
-`sdi.mode` e' `test`, ma per questo canale un ambiente di prova non esiste
-piu': o l'invio non prova niente, o e' gia' un documento fiscale.
+Poi: *Firma / Invio → Genera XML → **fermarsi a guardarlo*** (atteso:
+`IdDocumento 077`, `Data 2026-07-20`, `EsigibilitaIVA S`, `ImportoPagamento
+2089.46`, CIG nel blocco, nessun `CapitaleSociale`) → `sdi.mode = production`
+(**decisione del proprietario**) → **rigenerare** (il flusso test non e'
+trasmissibile in produzione) → firma con FirmaOK → ricarica il `.p7m` → invia
+con conferma.
+
+La numerazione fiscale genera `6` (5 fatture emesse da inizio attivita').
+`sdi.mode` e' `test`: per questo canale un ambiente di prova non esiste piu'.
 
 ### 3.2 Campi di testata e piede della fattura
 
@@ -164,7 +219,7 @@ Il riferimento e' la maschera del gestionale del commercialista. Manca il
 
 | Blocco | Blocco FatturaPA | Nota |
 |---|---|---|
-| Pagamento (modalita' MP01-23, condizioni TP01-03, IBAN, rate) | `DatiPagamento` | oggi esce dalle sole impostazioni globali `sdi.payment.*`: **non modificabile per fattura**. E' il primo da fare |
+| Pagamento (modalita' MP01-23, condizioni TP01-03, IBAN, rate) | `DatiPagamento` | esce dalle impostazioni globali `sdi.payment.*` piu' la scadenza della fattura; l'importo e' gia' corretto sotto split. **Non ancora modificabile per fattura** (modalita', IBAN, rate): primo da fare |
 | Trasporto (vettore, incoterms, colli, peso, aspetto beni, data/ora) | `DatiTrasporto` | manca |
 | Causale | `Causale` | il builder lo rende gia', va solo alimentato |
 | Bollo | `DatiBollo` | manca |
