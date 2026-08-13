@@ -1045,7 +1045,7 @@ function renderOrdiniMobileCards(rows = []) {
         <button class="btn btn-outline btn-sm" onclick="editOrdine(${o.id})">Apri</button>
         <button class="btn btn-outline btn-sm" onclick="openApiPdf('/ordini/${o.id}/pdf')">PDF</button>
         <button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('ordine',${o.id})">Invia</button>
-        ${o.tipo === 'vendita' && o.stato === 'confermato' ? `<button class="btn btn-outline btn-sm" onclick="creaFatturaDaOrdine(${o.id})">Crea fattura</button>` : ''}
+        ${ordineFatturabile(o) ? `<button class="btn btn-outline btn-sm" onclick="creaFatturaDaOrdine(${o.id})">Crea fattura</button>` : ''}
         <button class="btn btn-outline btn-sm" onclick="creaDdtDaOrdine(${o.id})">Crea DDT</button>
         <button class="btn btn-danger btn-sm" onclick="deleteOrdine(${o.id})">Elimina</button>
         ${renderDocumentLogButton('ordine', o.id, 'mobile')}
@@ -3305,7 +3305,7 @@ async function loadOrdini() {
     <td>${o.ragione_sociale || '-'}</td><td>${o.data_ordine || '-'}</td>
     <td>${o.totale ? formatCurrencyIt(o.totale) : '-'}</td>
     <td>${renderStateBadge(o.stato)}</td>
-      <td><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start"><button class="btn btn-outline btn-sm" onclick="editOrdine(${o.id})">Apri</button><button class="btn btn-outline btn-sm" onclick="openApiPdf('/ordini/${o.id}/pdf')">PDF</button><button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('ordine',${o.id})">Invia</button>${o.tipo === 'vendita' && o.stato === 'confermato' ? `<button class="btn btn-outline btn-sm" onclick="creaFatturaDaOrdine(${o.id})">Crea fattura</button>` : ''}<button class="btn btn-outline btn-sm" onclick="creaDdtDaOrdine(${o.id})">Crea DDT</button><button class="btn btn-danger btn-sm" onclick="deleteOrdine(${o.id})">Elimina</button>${renderDocumentLogButton('ordine', o.id, 'desk')}<select class="btn btn-outline btn-sm" onchange="cambiaStatoOrdine(${o.id},this.value)">
+      <td><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start"><button class="btn btn-outline btn-sm" onclick="editOrdine(${o.id})">Apri</button><button class="btn btn-outline btn-sm" onclick="openApiPdf('/ordini/${o.id}/pdf')">PDF</button><button class="btn btn-outline btn-sm" onclick="openSendDocumentModal('ordine',${o.id})">Invia</button>${ordineFatturabile(o) ? `<button class="btn btn-outline btn-sm" onclick="creaFatturaDaOrdine(${o.id})">Crea fattura</button>` : ''}<button class="btn btn-outline btn-sm" onclick="creaDdtDaOrdine(${o.id})">Crea DDT</button><button class="btn btn-danger btn-sm" onclick="deleteOrdine(${o.id})">Elimina</button>${renderDocumentLogButton('ordine', o.id, 'desk')}<select class="btn btn-outline btn-sm" onchange="cambiaStatoOrdine(${o.id},this.value)">
       ${['ricevuto','confermato','in_lavorazione','spedito','consegnato','annullato'].map(s => `<option value="${s}"${o.stato === s ? ' selected' : ''}>${s}</option>`).join('')}
     </select>${renderDocumentSendMeta(o)}</div></td></tr>`).join('');
   renderSummaryCards('ordini-summary', [
@@ -3339,6 +3339,16 @@ async function creaDdtDaOrdine(id) {
     loadDdt();
     loadOrdini();
   } catch (e) { toast(e.message, 'error'); }
+}
+
+// Gli stessi stati che `convert-to-fattura` accetta lato server (ordini.js):
+// si fattura dalla conferma alla consegna. Tenere qui la condizione, invece di
+// scriverla inline in due punti, evita che frontend e backend tornino a
+// divergere — com'era: il server accettava 'consegnato' ma il pulsante spariva.
+const STATI_ORDINE_FATTURABILI = ['confermato', 'in_lavorazione', 'spedito', 'consegnato'];
+
+function ordineFatturabile(o) {
+  return o && o.tipo === 'vendita' && STATI_ORDINE_FATTURABILI.includes(String(o.stato || '').toLowerCase());
 }
 
 async function creaFatturaDaOrdine(id) {
