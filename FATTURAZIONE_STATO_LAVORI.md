@@ -204,7 +204,26 @@ ricrea da zero il problema non si ripresenta.
 
 Poi: *Firma / Invio → Genera XML → **fermarsi a guardarlo*** (atteso:
 `IdDocumento 077`, `Data 2026-07-20`, `EsigibilitaIVA S`, `ImportoPagamento
-2089.46`, CIG nel blocco, nessun `CapitaleSociale`) → `sdi.mode = production`
+2089.46`, CIG nel blocco) → `sdi.mode = production`
+
+**Fatto: la fattura 6 e' gia' generata** (id 75, flusso 39, progressivo `H0004`,
+stato `firma_richiesta`) e l'XML reale valida contro l'XSD. Il file H0004
+verificato il 2026-08-13 ha tutti i valori attesi. Due note dall'XML reale:
+- `CapitaleSociale` e' **omesso** perche' sul VPS `sdi.company.share_capital=0`.
+  Il capitale vero di HORYGON e' 5.000 EUR: per **dichiararlo** va messo
+  `share_capital=5000` sul VPS e **rigenerato** (il campo e' facoltativo, quindi
+  ometterlo non e' un errore — e' una scelta). Decisione del proprietario.
+- `RiferimentoNormativo` = `D.P.R. 633/1972, art. 16` (riferimento dell'aliquota
+  22%), non quello dello split (`art. 17-ter`). Facoltativo: lo split e' gia'
+  detto da `EsigibilitaIVA=S`.
+
+Incoerenza latente (non blocca): `convert-to-fattura` riconosce la PA dal solo
+`tipo='pa'`, mentre l'anagrafica Aeronautica e' `tipo='cliente'` con
+`tipologia_cliente='pa'`. Percio' la colonna `fatture.esigibilita_iva` e' NULL,
+ma la **generazione** risolve `S` via `loadRecipientProfile` (tipo OR tipologia):
+l'XML e' giusto. Da allineare se un domani qualcosa legge quella colonna.
+
+Passi seguenti (invariati): `sdi.mode = production`
 (**decisione del proprietario**) → **rigenerare** (il flusso test non e'
 trasmissibile in produzione) → firma con FirmaOK → ricarica il `.p7m` → invia
 con conferma.
