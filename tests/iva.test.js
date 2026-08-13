@@ -555,6 +555,47 @@ test('le righe dell intestazione non si sovrappongono nemmeno con un numero lung
   }
 });
 
+// Il riferimento all'ordinativo PA viaggia da ordine a fattura e finisce in
+// DatiOrdineAcquisto/IdDocumento — non il codice interno ORD-...
+test('il numero ordinativo PA passa da ordine a fattura fino all XML', async () => {
+  const { buildInvoicePayload } = require('../src/services/sdi-fatturapa');
+  const prodottoId = creaProdotto('ORDPA', IVA22.id);
+  const ordine = await call('POST', '/api/ordini', {
+    codice_ordine: `${MARKER}-ORD-PA`, tipo: 'vendita', data_ordine: '2026-08-12',
+    cig: 'BC733E0240', riferimento_ordine_pa: '077', riferimento_ordine_pa_data: '2026-07-20',
+    capitolo_spesa: '4516/02', protocollo_pa: 'M_D ALT001 REG2026 0006592',
+    righe: [{ prodotto_id: prodottoId, quantita: 1, prezzo_unitario: 100 }]
+  });
+  await call('PATCH', `/api/ordini/${ordine.id}/stato`, { stato: 'consegnato' });
+  const fattura = await call('POST', `/api/ordini/${ordine.id}/convert-to-fattura`, {});
+
+  const f = db.prepare('SELECT riferimento_ordine_pa, riferimento_ordine_pa_data, capitolo_spesa, protocollo_pa, cig FROM fatture WHERE id = ?').get(fattura.fattura_id);
+  assert.equal(f.riferimento_ordine_pa, '077', 'il numero ordinativo PA deve arrivare sulla fattura');
+  assert.equal(f.riferimento_ordine_pa_data, '2026-07-20');
+  assert.equal(f.capitolo_spesa, '4516/02');
+  assert.equal(f.protocollo_pa, 'M_D ALT001 REG2026 0006592');
+
+  // E nel payload SdI IdDocumento e' 077, non il codice ordine interno.
+  const invoice = db.prepare(`
+    SELECT f.*, o.codice_ordine AS ordine_codice, o.data_ordine AS ordine_data
+    FROM fatture f LEFT JOIN ordini o ON o.id = f.ordine_id WHERE f.id = ?
+  `).get(fattura.fattura_id);
+  invoice.righe = db.prepare('SELECT * FROM fatture_righe WHERE fattura_id = ?').all(fattura.fattura_id);
+  invoice.riepilogo_iva = db.prepare('SELECT * FROM fatture_iva_riepilogo WHERE fattura_id = ?').all(fattura.fattura_id);
+  const customer = {
+    ragione_sociale: 'AERONAUTICA', cf: '80007090592', piva: null, indirizzo: 'Via X', cap: '04013',
+    citta: 'Latina', provincia: 'LT', paese: 'IT', destinationCode: 'AKGVPD', isPa: true, escludiSplitPayment: false
+  };
+  const company = { country: 'IT', vat: '03365990591', fiscalCode: '03365990591', denomination: 'HORYGON S.R.L.', regimeFiscale: 'RF01', address: 'Via Roma', cap: '04100', city: 'Latina', province: 'LT' };
+  const payload = buildInvoicePayload(invoice, company, customer, { mode: 'test', progressivo: 'H0070' });
+  assert.equal(payload.datiOrdineAcquisto.idDocumento, '077');
+  assert.equal(payload.datiOrdineAcquisto.codiceCig, 'BC733E0240');
+
+  db.prepare('DELETE FROM fatture_righe WHERE fattura_id = ?').run(fattura.fattura_id);
+  db.prepare('DELETE FROM fatture_iva_riepilogo WHERE fattura_id = ?').run(fattura.fattura_id);
+  db.prepare('DELETE FROM fatture WHERE id = ?').run(fattura.fattura_id);
+});
+
 // Rinumerare la fattura dall'interfaccia le staccava l'ordine di origine: il
 // modale non ha un campo per l'ordine, quindi il PUT arrivava senza e lo
 // azzerava. Senza quel collegamento il riferimento in DatiOrdineAcquisto

@@ -282,7 +282,7 @@ router.get('/:id/xml', requirePermesso('fatture', 'read'), (req, res) => {
 
 // Crea fattura manuale
 router.post('/', requirePermesso('fatture', 'edit'), (req, res) => {
-  const { numero, tipo, direzione, tipo_documento, anagrafica_id, ordine_id, data, scadenza, data_ricezione, imponibile, iva, totale, sdi_id, stato, stato_pagamento, valuta, partita_iva, codice_fiscale, note, righe, riepilogo_iva, cig, cup, esigibilita_iva } = req.body;
+  const { numero, tipo, direzione, tipo_documento, anagrafica_id, ordine_id, data, scadenza, data_ricezione, imponibile, iva, totale, sdi_id, stato, stato_pagamento, valuta, partita_iva, codice_fiscale, note, righe, riepilogo_iva, cig, cup, esigibilita_iva, riferimento_ordine_pa, riferimento_ordine_pa_data, capitolo_spesa, protocollo_pa } = req.body;
   try {
     const hashDocumento = buildDocumentHash({ numero, data, partita_iva, totale });
     const duplicate = db.prepare(`
@@ -296,13 +296,14 @@ router.post('/', requirePermesso('fatture', 'edit'), (req, res) => {
     const r = db.prepare(`INSERT INTO fatture (
       numero, numero_documento, tipo, direzione, tipo_documento, anagrafica_id, ordine_id, data, scadenza, data_ricezione,
       imponibile, iva, totale, sdi_id, stato, stato_pagamento, valuta, partita_iva, codice_fiscale, note, hash_documento, origine_importazione,
-      cig, cup, esigibilita_iva
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      cig, cup, esigibilita_iva, riferimento_ordine_pa, riferimento_ordine_pa_data, capitolo_spesa, protocollo_pa
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       sqlNullable(numero), sqlNullable(numero), sqlNullable(tipo), direzione || (tipo === 'emessa' ? 'attiva' : 'passiva'), tipo_documento || 'fattura',
       sqlNullable(anagrafica_id), sqlNullable(ordine_id), sqlNullable(data), sqlNullable(scadenza), data_ricezione || null,
       sqlNullable(imponibile), sqlNullable(iva), sqlNullable(totale), sqlNullable(sdi_id), stato || 'ricevuta', stato_pagamento || 'da_pagare', valuta || 'EUR',
       partita_iva || null, codice_fiscale || null, sqlNullable(note), hashDocumento, 'manuale',
-      sqlNullable(cig), sqlNullable(cup), sqlNullable(esigibilita_iva)
+      sqlNullable(cig), sqlNullable(cup), sqlNullable(esigibilita_iva),
+      sqlNullable(riferimento_ordine_pa), sqlNullable(riferimento_ordine_pa_data), sqlNullable(capitolo_spesa), sqlNullable(protocollo_pa)
     );
     const id = r.lastInsertRowid;
     const prepared = prepareInvoiceLines(righe, esigibilita_iva);
@@ -334,7 +335,7 @@ router.post('/', requirePermesso('fatture', 'edit'), (req, res) => {
 });
 
 router.put('/:id', requirePermesso('fatture', 'edit'), (req, res) => {
-  const { numero, tipo, direzione, tipo_documento, anagrafica_id, ordine_id, data, scadenza, data_ricezione, imponibile, iva, totale, sdi_id, stato, stato_pagamento, valuta, partita_iva, codice_fiscale, note, righe, riepilogo_iva, cig, cup, esigibilita_iva } = req.body;
+  const { numero, tipo, direzione, tipo_documento, anagrafica_id, ordine_id, data, scadenza, data_ricezione, imponibile, iva, totale, sdi_id, stato, stato_pagamento, valuta, partita_iva, codice_fiscale, note, righe, riepilogo_iva, cig, cup, esigibilita_iva, riferimento_ordine_pa, riferimento_ordine_pa_data, capitolo_spesa, protocollo_pa } = req.body;
   try {
     const hashDocumento = buildDocumentHash({ numero, data, partita_iva, totale });
     // I valori si normalizzano a null: un campo assente dal corpo della
@@ -357,14 +358,15 @@ router.put('/:id', requirePermesso('fatture', 'edit'), (req, res) => {
     db.prepare(`UPDATE fatture SET
       numero=?, numero_documento=?, tipo=?, direzione=?, tipo_documento=?, anagrafica_id=?, ordine_id=?, data=?, scadenza=?, data_ricezione=?,
       imponibile=?, iva=?, totale=?, sdi_id=?, stato=?, stato_pagamento=?, valuta=?, partita_iva=?, codice_fiscale=?, note=?, hash_documento=?,
-      cig=?, cup=?, esigibilita_iva=?
+      cig=?, cup=?, esigibilita_iva=?, riferimento_ordine_pa=?, riferimento_ordine_pa_data=?, capitolo_spesa=?, protocollo_pa=?
       WHERE id=?
     `).run(
       sqlNullable(numero), sqlNullable(numero), sqlNullable(tipo), direzione || (tipo === 'emessa' ? 'attiva' : 'passiva'), tipo_documento || 'fattura',
       sqlNullable(anagrafica_id), ordineCollegato, sqlNullable(data), sqlNullable(scadenza), data_ricezione || null,
       sqlNullable(imponibile), sqlNullable(iva), sqlNullable(totale), sqlNullable(sdi_id), stato || 'ricevuta', stato_pagamento || 'da_pagare', valuta || 'EUR',
       partita_iva || null, codice_fiscale || null, sqlNullable(note), hashDocumento,
-      sqlNullable(cig), sqlNullable(cup), sqlNullable(esigibilita_iva), req.params.id
+      sqlNullable(cig), sqlNullable(cup), sqlNullable(esigibilita_iva),
+      sqlNullable(riferimento_ordine_pa), sqlNullable(riferimento_ordine_pa_data), sqlNullable(capitolo_spesa), sqlNullable(protocollo_pa), req.params.id
     );
     db.prepare('DELETE FROM fatture_righe WHERE fattura_id = ?').run(req.params.id);
     db.prepare('DELETE FROM fatture_iva_riepilogo WHERE fattura_id = ?').run(req.params.id);

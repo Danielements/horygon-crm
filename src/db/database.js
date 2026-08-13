@@ -370,7 +370,15 @@ function ensureColumn(table, definition) {
   // Documento a cui questo si riferisce: una nota di credito senza il numero e
   // la data della fattura che rettifica non dice a cosa si riferisce, e finisce
   // in DatiFattureCollegate.
-  "fattura_riferimento_id INTEGER"
+  "fattura_riferimento_id INTEGER",
+  // Riferimento all'ordinativo della PA (DatiOrdineAcquisto/IdDocumento e Data):
+  // e' il numero che la PA ha emesso, non il codice interno del CRM. Copiati
+  // dall'ordine alla conversione, editabili sulla fattura.
+  "riferimento_ordine_pa TEXT",
+  "riferimento_ordine_pa_data TEXT",
+  // Memoria interna del fascicolo PA, fuori dal tracciato.
+  "capitolo_spesa TEXT",
+  "protocollo_pa TEXT"
 ].forEach(col => ensureColumn('fatture', col));
 
 [
@@ -402,7 +410,16 @@ function ensureColumn(table, definition) {
   // CIG e CUP nascono sull'ordine della PA e vengono riportati sulla fattura
   // che ne deriva.
   "cig TEXT",
-  "cup TEXT"
+  "cup TEXT",
+  // Riferimento all'ordinativo della PA, distinto dal codice interno del CRM
+  // (codice_ordine, es. ORD-PREV-...). In DatiOrdineAcquisto/IdDocumento va il
+  // numero dell'ordinativo che la PA ha emesso (es. "077"), non il nostro.
+  "riferimento_ordine_pa TEXT",
+  "riferimento_ordine_pa_data TEXT",
+  // Solo memoria interna: non entrano nel tracciato, ma servono a ricostruire
+  // il fascicolo dell'ordine PA.
+  "capitolo_spesa TEXT",
+  "protocollo_pa TEXT"
 ].forEach(col => ensureColumn('ordini', col));
 
 [

@@ -343,6 +343,41 @@ test('PrezzoTotale is the net line amount even when totale_riga carries VAT', as
   assert.equal(result.ok, true, JSON.stringify(result, null, 2));
 });
 
+// L'IdDocumento di DatiOrdineAcquisto e' il numero dell'ordinativo della PA
+// (es. "077"), non il codice interno del CRM (ORD-PREV-...). Sono concetti
+// diversi e vivono in campi diversi.
+test('DatiOrdineAcquisto uses the PA order number, not the internal CRM code', () => {
+  const payload = buildInvoicePayload(
+    makeAeronauticaInvoice({
+      riferimento_ordine_pa: '077',
+      riferimento_ordine_pa_data: '2026-07-20',
+      ordine_codice: 'ORD-PREV-20260625-354',
+      ordine_data: '2026-06-25'
+    }),
+    makeOrdinaryPayload('FPA12').company,
+    makeAeronauticaCustomer(),
+    { mode: 'test', progressivo: 'H0066' }
+  );
+  assert.equal(payload.datiOrdineAcquisto.idDocumento, '077');
+  assert.equal(payload.datiOrdineAcquisto.data, '2026-07-20');
+  assert.equal(payload.datiOrdineAcquisto.codiceCig, 'B1C2D3E4F5');
+
+  const xml = buildOrdinaryInvoiceXml(payload);
+  assert.match(xml, /<IdDocumento>077<\/IdDocumento>/);
+  assert.equal(xml.includes('ORD-PREV'), false, 'il codice interno del CRM non deve finire nel tracciato');
+});
+
+test('without a PA order number IdDocumento falls back to the CRM order code', () => {
+  const payload = buildInvoicePayload(
+    makeAeronauticaInvoice({ riferimento_ordine_pa: null, ordine_codice: 'ORD-2026-00042', ordine_data: '2026-06-30' }),
+    makeOrdinaryPayload('FPA12').company,
+    makeAeronauticaCustomer(),
+    { mode: 'test', progressivo: 'H0067' }
+  );
+  assert.equal(payload.datiOrdineAcquisto.idDocumento, 'ORD-2026-00042');
+  assert.equal(payload.datiOrdineAcquisto.data, '2026-06-30');
+});
+
 test('split payment pays the supplier the net amount, not the gross', () => {
   const payload = buildInvoicePayload(
     makeAeronauticaInvoice({

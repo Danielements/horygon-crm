@@ -237,12 +237,14 @@ router.post('/', requirePermesso('ordini', 'edit'), (req, res) => {
     const r = db.prepare(`
       INSERT INTO ordini (
         codice_ordine,tipo,anagrafica_id,canale,data_ordine,data_consegna_prevista,
-        imponibile,iva,totale,note,numero_spedizione,corriere,preventivo_id,cig,cup,created_by_user_id
+        imponibile,iva,totale,note,numero_spedizione,corriere,preventivo_id,cig,cup,
+        riferimento_ordine_pa,riferimento_ordine_pa_data,capitolo_spesa,protocollo_pa,created_by_user_id
       )
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(s(b.codice_ordine), s(b.tipo), i(b.anagrafica_id), s(b.canale),
            s(b.data_ordine), s(b.data_consegna_prevista), n(b.imponibile) || 0, n(b.iva) || 0, n(b.totale), s(b.note),
-           s(b.numero_spedizione), s(b.corriere), i(b.preventivo_id), s(b.cig), s(b.cup), req.user.id);
+           s(b.numero_spedizione), s(b.corriere), i(b.preventivo_id), s(b.cig), s(b.cup),
+           s(b.riferimento_ordine_pa), s(b.riferimento_ordine_pa_data), s(b.capitolo_spesa), s(b.protocollo_pa), req.user.id);
     const id = Number(r.lastInsertRowid);
     if (cleanRighe.length) {
       insertOrdineRighe(id, cleanRighe);
@@ -288,7 +290,8 @@ router.put('/:id', requirePermesso('ordini', 'edit'), (req, res) => {
     db.prepare(`
       UPDATE ordini
       SET codice_ordine=?, tipo=?, anagrafica_id=?, canale=?, data_ordine=?, data_consegna_prevista=?,
-          imponibile=?, iva=?, totale=?, note=?, numero_spedizione=?, corriere=?, preventivo_id=?, cig=?, cup=?
+          imponibile=?, iva=?, totale=?, note=?, numero_spedizione=?, corriere=?, preventivo_id=?, cig=?, cup=?,
+          riferimento_ordine_pa=?, riferimento_ordine_pa_data=?, capitolo_spesa=?, protocollo_pa=?
       WHERE id=?
     `).run(
       s(b.codice_ordine),
@@ -306,6 +309,10 @@ router.put('/:id', requirePermesso('ordini', 'edit'), (req, res) => {
       i(b.preventivo_id),
       s(b.cig),
       s(b.cup),
+      s(b.riferimento_ordine_pa),
+      s(b.riferimento_ordine_pa_data),
+      s(b.capitolo_spesa),
+      s(b.protocollo_pa),
       ordineId
     );
     if (cleanRighe.length) {
@@ -459,8 +466,8 @@ router.post('/:id/convert-to-fattura', requirePermesso('fatture', 'edit'), (req,
       INSERT INTO fatture (
         numero, numero_documento, tipo, direzione, tipo_documento, anagrafica_id, ordine_id, data, scadenza, data_ricezione,
         imponibile, iva, totale, sdi_id, stato, stato_pagamento, valuta, partita_iva, codice_fiscale, note, origine_importazione,
-        cig, cup
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        cig, cup, riferimento_ordine_pa, riferimento_ordine_pa_data, capitolo_spesa, protocollo_pa
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       numeroFattura,
       numeroFattura,
@@ -486,7 +493,13 @@ router.post('/:id/convert-to-fattura', requirePermesso('fatture', 'edit'), (req,
       // CIG e CUP sono dell'ordine e restano gli stessi sulla fattura: e' il
       // riferimento su cui la PA aggancia il pagamento.
       s(ordine.cig),
-      s(ordine.cup)
+      s(ordine.cup),
+      // Riferimento all'ordinativo PA: e' il numero che finisce in
+      // DatiOrdineAcquisto/IdDocumento, non il codice_ordine interno.
+      s(ordine.riferimento_ordine_pa),
+      s(ordine.riferimento_ordine_pa_data),
+      s(ordine.capitolo_spesa),
+      s(ordine.protocollo_pa)
     );
     const fatturaId = Number(result.lastInsertRowid);
     const insertRow = db.prepare(`

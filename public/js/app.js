@@ -3063,6 +3063,10 @@ async function prepareFatturaModal(id = null) {
     document.getElementById('fatt-note').value = '';
     document.getElementById('fatt-cig').value = '';
     document.getElementById('fatt-cup').value = '';
+    document.getElementById('fatt-rif-ordine-pa').value = '';
+    document.getElementById('fatt-rif-ordine-pa-data').value = '';
+    document.getElementById('fatt-capitolo-spesa').value = '';
+    document.getElementById('fatt-protocollo-pa').value = '';
     document.getElementById('fatt-esigibilita-iva').value = '';
     toggleFatturaPaFields(false);
     aggiungiRigaFattura();
@@ -3090,6 +3094,10 @@ async function prepareFatturaModal(id = null) {
   document.getElementById('fatt-note').value = f.note || '';
   document.getElementById('fatt-cig').value = f.cig || '';
   document.getElementById('fatt-cup').value = f.cup || '';
+  document.getElementById('fatt-rif-ordine-pa').value = f.riferimento_ordine_pa || '';
+  document.getElementById('fatt-rif-ordine-pa-data').value = f.riferimento_ordine_pa_data || '';
+  document.getElementById('fatt-capitolo-spesa').value = f.capitolo_spesa || '';
+  document.getElementById('fatt-protocollo-pa').value = f.protocollo_pa || '';
   document.getElementById('fatt-esigibilita-iva').value = f.esigibilita_iva || '';
   // Serve a salvaFattura per accorgersi se si sta rinumerando un documento
   // che al SdI e' gia' andato.
@@ -3232,6 +3240,10 @@ async function prepareOrdineModal(context = null) {
   document.getElementById('ord-note').value = '';
   document.getElementById('ord-cig').value = '';
   document.getElementById('ord-cup').value = '';
+  document.getElementById('ord-rif-ordine-pa').value = '';
+  document.getElementById('ord-rif-ordine-pa-data').value = '';
+  document.getElementById('ord-capitolo-spesa').value = '';
+  document.getElementById('ord-protocollo-pa').value = '';
   toggleOrdinePaFields(false);
 
   if (editingId) {
@@ -3252,6 +3264,10 @@ async function prepareOrdineModal(context = null) {
     document.getElementById('ord-note').value = o.note || '';
     document.getElementById('ord-cig').value = o.cig || '';
     document.getElementById('ord-cup').value = o.cup || '';
+    document.getElementById('ord-rif-ordine-pa').value = o.riferimento_ordine_pa || '';
+    document.getElementById('ord-rif-ordine-pa-data').value = o.riferimento_ordine_pa_data || '';
+    document.getElementById('ord-capitolo-spesa').value = o.capitolo_spesa || '';
+    document.getElementById('ord-protocollo-pa').value = o.protocollo_pa || '';
     toggleOrdinePaFields(isAnagraficaPa(o));
     (o.righe?.length ? o.righe : [{}]).forEach(aggiungiRigaOrdine);
     ricalcolaRigheDocumento('ord');
@@ -3377,6 +3393,10 @@ async function salvaOrdine() {
     note: document.getElementById('ord-note').value,
     cig: document.getElementById('ord-cig').value || null,
     cup: document.getElementById('ord-cup').value || null,
+    riferimento_ordine_pa: document.getElementById('ord-rif-ordine-pa').value || null,
+    riferimento_ordine_pa_data: document.getElementById('ord-rif-ordine-pa-data').value || null,
+    capitolo_spesa: document.getElementById('ord-capitolo-spesa').value || null,
+    protocollo_pa: document.getElementById('ord-protocollo-pa').value || null,
     righe: collectDocumentoRighe('ord')
   };
   try {
@@ -6897,6 +6917,10 @@ async function salvaFattura() {
     note: document.getElementById('fatt-note').value || '',
     cig: document.getElementById('fatt-cig').value || null,
     cup: document.getElementById('fatt-cup').value || null,
+    riferimento_ordine_pa: document.getElementById('fatt-rif-ordine-pa').value || null,
+    riferimento_ordine_pa_data: document.getElementById('fatt-rif-ordine-pa-data').value || null,
+    capitolo_spesa: document.getElementById('fatt-capitolo-spesa').value || null,
+    protocollo_pa: document.getElementById('fatt-protocollo-pa').value || null,
     esigibilita_iva: document.getElementById('fatt-esigibilita-iva').value || null,
     righe: collectDocumentoRighe('fatt'),
     riepilogo_iva: collectVatSummaryRows()

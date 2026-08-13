@@ -320,11 +320,19 @@ function resolveEsigibilitaIva(invoice, customer) {
 function buildDatiOrdineAcquisto(invoice, numeroFattura) {
   const cig = normalizeCorrelatedCode(invoice.cig);
   const cup = normalizeCorrelatedCode(invoice.cup);
-  const idDocumento = String(invoice.ordine_codice || '').trim() || numeroFattura;
+  // IdDocumento identifica l'ordinativo della PA, non il documento interno del
+  // CRM. Si prende quindi il riferimento all'ordine PA (es. "077"); il codice
+  // dell'ordine CRM (ORD-PREV-...) e' un ripiego per non lasciare il campo
+  // vuoto, e il numero fattura l'ultimo ripiego. Stessa gerarchia per la data:
+  // prima quella dell'ordinativo PA, poi quella dell'ordine CRM.
+  const idDocumento = String(invoice.riferimento_ordine_pa || invoice.ordine_codice || '').trim() || numeroFattura;
+  const data = normalizeDate(invoice.riferimento_ordine_pa_data)
+    || normalizeDate(invoice.ordine_data)
+    || undefined;
   if (!cig && !cup) return null;
   return {
     idDocumento: idDocumento.slice(0, 20),
-    data: normalizeDate(invoice.ordine_data) || undefined,
+    data,
     codiceCup: cup || undefined,
     codiceCig: cig || undefined
   };

@@ -1325,9 +1325,20 @@
         <div class="form-group"><label>Data Ordine</label><input type="date" id="ord-data"></div>
         <div class="form-group"><label>Consegna Prevista</label><input type="date" id="ord-consegna"></div>
       </div>
-      <div class="form-row" id="ord-riferimenti-pa" style="display:none">
-        <div class="form-group"><label>CIG</label><input type="text" id="ord-cig" maxlength="15" placeholder="Codice Identificativo Gara"></div>
-        <div class="form-group"><label>CUP</label><input type="text" id="ord-cup" maxlength="15" placeholder="Codice Unico Progetto"></div>
+      <div id="ord-riferimenti-pa" style="display:none">
+        <div class="form-row">
+          <div class="form-group"><label>CIG</label><input type="text" id="ord-cig" maxlength="15" placeholder="Codice Identificativo Gara"></div>
+          <div class="form-group"><label>CUP</label><input type="text" id="ord-cup" maxlength="15" placeholder="Codice Unico Progetto"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>N. ordinativo PA</label><input type="text" id="ord-rif-ordine-pa" maxlength="20" placeholder="es. 077 — il numero della PA, non ORD-..."></div>
+          <div class="form-group"><label>Data ordinativo PA</label><input type="date" id="ord-rif-ordine-pa-data"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Capitolo di spesa</label><input type="text" id="ord-capitolo-spesa" placeholder="es. 4516/02"></div>
+          <div class="form-group"><label>Protocollo PA</label><input type="text" id="ord-protocollo-pa" placeholder="es. M_D ALT001 REG2026 0006592"></div>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted)">Il numero ordinativo PA finisce in DatiOrdineAcquisto/IdDocumento. Capitolo e protocollo restano solo nel CRM.</div>
       </div>
     </div>
     <div class="form-section-card">
@@ -1494,7 +1505,15 @@
             </select>
           </div>
         </div>
-        <div style="font-size:12px;color:var(--text-muted)">Senza CIG la PA non liquida la fattura: finiscono in DatiOrdineAcquisto insieme al numero dell'ordine.</div>
+        <div class="form-row">
+          <div class="form-group"><label>N. ordinativo PA</label><input type="text" id="fatt-rif-ordine-pa" maxlength="20" placeholder="es. 077 — il numero della PA"></div>
+          <div class="form-group"><label>Data ordinativo PA</label><input type="date" id="fatt-rif-ordine-pa-data"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Capitolo di spesa</label><input type="text" id="fatt-capitolo-spesa" placeholder="es. 4516/02"></div>
+          <div class="form-group"><label>Protocollo PA</label><input type="text" id="fatt-protocollo-pa" placeholder="es. M_D ALT001 REG2026 0006592"></div>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted)">In DatiOrdineAcquisto/IdDocumento va il N. ordinativo PA (es. 077), non il codice interno dell'ordine. Senza CIG la PA non liquida.</div>
       </div>
     </div>
     <div class="form-section-card">
