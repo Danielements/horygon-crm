@@ -21,7 +21,7 @@ async function validateInvoiceXml({ xml, format }) {
   const appErrors = validateApplicationRules({ parsed, rootInfo, format, schema });
   const formalTaxId = validateFormalTaxIds(xml);
   const fiscalErrors = runSdiFiscalChecks(xml, { format });
-  const warnings = buildValidationWarnings({ formalTaxId });
+  const warnings = buildValidationWarnings({ formalTaxId, xml, format });
   const xsd = await validateXsd(xml, schema);
   return {
     ok: xsd.ok && appErrors.length === 0 && formalTaxId.ok && fiscalErrors.length === 0,
@@ -126,10 +126,21 @@ function validateFormalTaxIds(xml) {
   };
 }
 
-function buildValidationWarnings({ formalTaxId }) {
+function buildValidationWarnings({ formalTaxId, xml = '', format = '' }) {
   const warnings = [];
   if (formalTaxId?.customerFiscalCode) {
     warnings.push('Il codice fiscale e formalmente valido ma non e stata verificata la sua esistenza in Anagrafe Tributaria. I codici fiscali sintetici vengono scartati dallo SdI con errore 00306.');
+  }
+  // CIG su fattura PA. Non e' un errore di schema — il blocco riferimenti e'
+  // facoltativo e ci sono casi di esclusione — ma senza CIG una PA di norma non
+  // liquida (tracciabilita' dei flussi finanziari, art. 25 DL 66/2014). Meglio
+  // avvisare chi genera che affidarsi a un rifiuto della PA settimane dopo.
+  if (format === 'FPA12'
+    && !/<CodiceCIG>/i.test(xml)
+    && !/<DatiOrdineAcquisto>/i.test(xml)
+    && !/<DatiContratto>/i.test(xml)
+    && !/<DatiConvenzione>/i.test(xml)) {
+    warnings.push('Fattura verso PA senza CIG ne riferimento a ordine/contratto/convenzione: verificare se e dovuto. Senza CIG obbligatorio la PA non procede al pagamento (art. 25 DL 66/2014).');
   }
   return warnings;
 }

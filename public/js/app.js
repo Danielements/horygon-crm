@@ -4417,6 +4417,9 @@ async function generaXmlFattura(fatturaId) {
         : `XML generato: ${esito.filename}`,
       'success'
     );
+    // I warning non bloccano la generazione, ma vanno visti prima di firmare:
+    // il CIG mancante su una PA e' quello che conta. Un toast per ciascuno.
+    (esito?.validation?.warnings || []).forEach((avviso) => toast(avviso, 'error'));
     // Si rilegge lo stato invece di indovinarlo: il flusso appena creato porta
     // nome file, progressivo e stato della firma.
     await openSdiFirmaModal(fatturaId);

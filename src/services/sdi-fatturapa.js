@@ -128,7 +128,10 @@ function loadCompanyProfile() {
     fax: String(getSetting('sdi.company.fax', '') || '').trim(),
     reaOffice: String(getSetting('sdi.company.rea_office', '') || '').trim().toUpperCase(),
     reaNumber: String(getSetting('sdi.company.rea_number', '') || '').trim(),
-    shareCapital: toAmount(getSetting('sdi.company.share_capital', '0')),
+    // Mai 0.00 come ripiego: un capitale a zero e' un'informazione societaria
+    // falsa. Se il dato non c'e', il campo si omette (e' facoltativo in
+    // IscrizioneREA). Configurare `sdi.company.share_capital` col valore vero.
+    shareCapital: toAmount(getSetting('sdi.company.share_capital', '')) || null,
     soleShareholder: String(getSetting('sdi.company.sole_shareholder', '') || '').trim(),
     liquidationState: String(getSetting('sdi.company.liquidation_state', 'LN') || 'LN').trim(),
     referenceAdministration: String(getSetting('sdi.company.reference_administration', '') || '').trim()
@@ -282,7 +285,12 @@ function buildInvoicePayload(invoice, company, customer, options = {}) {
     datiFattureCollegate: buildDatiFattureCollegate(invoice),
     lines,
     riepilogo,
-    payment: buildPaymentPayload(invoice, totaleDocumento)
+    payment: buildPaymentPayload(invoice, totaleDocumento, {
+      esigibilitaIva,
+      // Imposta complessiva del documento: serve a calcolare quanto e' davvero
+      // dovuto al fornitore quando l'IVA e' in scissione dei pagamenti.
+      imposta: round2(riepilogo.reduce((sum, row) => sum + (Number(row.imposta) || 0), 0))
+    })
   };
 }
 
@@ -434,13 +442,25 @@ function buildFilenameProgressivo(value) {
   return xmlSafeFilePart(value).slice(-5).padStart(5, '0').toUpperCase();
 }
 
-function buildPaymentPayload(invoice, total) {
+function buildPaymentPayload(invoice, total, options = {}) {
+  // Con la scissione dei pagamenti (esigibilita' S) la PA non versa l'IVA al
+  // fornitore: la trattiene e la versa lei. `ImportoPagamento` deve quindi
+  // essere il **netto** dovuto a noi (totale documento meno l'imposta in
+  // scissione), non il lordo. `ImportoTotaleDocumento` resta invece il lordo.
+  const imposta = Number(options.imposta) || 0;
+  const importoPagamento = options.esigibilitaIva === 'S'
+    ? round2(total - imposta)
+    : total;
+  // La scadenza si scrive solo se c'e'. Prima, in sua assenza, ripiegava sulla
+  // data della fattura: un "pagamento dovuto lo stesso giorno" che nessuno ha
+  // dichiarato. Meglio ometterla che affermare una scadenza inventata.
+  const dataScadenza = normalizeDate(invoice.scadenza) || undefined;
   return {
     condizioniPagamento: String(getSetting('sdi.payment.condizioni', 'TP02') || 'TP02').trim(),
     details: [{
       modalitaPagamento: String(getSetting('sdi.payment.modalita', 'MP05') || 'MP05').trim(),
-      dataScadenzaPagamento: normalizeDate(invoice.scadenza || invoice.data) || undefined,
-      importoPagamento: total,
+      dataScadenzaPagamento: dataScadenza,
+      importoPagamento,
       istitutoFinanziario: String(getSetting('sdi.payment.istituto', '') || '').trim() || undefined,
       iban: normalizeIdentifier(getSetting('sdi.payment.iban', '')) || undefined,
       bic: normalizeIdentifier(getSetting('sdi.payment.bic', '')) || undefined

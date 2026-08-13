@@ -343,6 +343,88 @@ test('PrezzoTotale is the net line amount even when totale_riga carries VAT', as
   assert.equal(result.ok, true, JSON.stringify(result, null, 2));
 });
 
+test('split payment pays the supplier the net amount, not the gross', () => {
+  const payload = buildInvoicePayload(
+    makeAeronauticaInvoice({
+      righe: [{ descrizione: 'Fornitura', quantita: 1, prezzo_unitario: 2089.46, sconto: 0, imponibile: 2089.46, aliquota_iva: 22, importo_iva: 459.68, totale_riga: 2549.14 }],
+      riepilogo_iva: [{ aliquota_iva: 22, imponibile: 2089.46, imposta: 459.68 }],
+      totale: 2549.14,
+      scadenza: '2026-07-25'
+    }),
+    makeOrdinaryPayload('FPA12').company,
+    // PA non esclusa dallo split: esigibilita' S.
+    makeAeronauticaCustomer({ escludiSplitPayment: false }),
+    { mode: 'test', progressivo: 'H0061' }
+  );
+  assert.equal(payload.esigibilitaIva, 'S');
+  // ImportoTotaleDocumento resta il lordo, ImportoPagamento diventa il netto.
+  assert.equal(payload.importoTotaleDocumento, 2549.14);
+  assert.equal(payload.payment.details[0].importoPagamento, 2089.46);
+  assert.equal(payload.payment.details[0].dataScadenzaPagamento, '2026-07-25');
+});
+
+test('with immediate VAT the supplier is paid the gross amount', () => {
+  const payload = buildInvoicePayload(
+    makeAeronauticaInvoice({
+      righe: [{ descrizione: 'Fornitura', quantita: 1, prezzo_unitario: 100, sconto: 0, imponibile: 100, aliquota_iva: 22, importo_iva: 22, totale_riga: 122 }],
+      riepilogo_iva: [{ aliquota_iva: 22, imponibile: 100, imposta: 22 }],
+      totale: 122
+    }),
+    makeOrdinaryPayload('FPA12').company,
+    makeAeronauticaCustomer({ escludiSplitPayment: true }),
+    { mode: 'test', progressivo: 'H0062' }
+  );
+  assert.equal(payload.esigibilitaIva, 'I');
+  assert.equal(payload.payment.details[0].importoPagamento, 122);
+});
+
+test('an unknown due date is omitted, not defaulted to the invoice date', () => {
+  const payload = buildInvoicePayload(
+    makeAeronauticaInvoice({ scadenza: null }),
+    makeOrdinaryPayload('FPA12').company,
+    makeAeronauticaCustomer(),
+    { mode: 'test', progressivo: 'H0063' }
+  );
+  assert.equal(payload.payment.details[0].dataScadenzaPagamento, undefined);
+  const xml = buildOrdinaryInvoiceXml(payload);
+  assert.equal(xml.includes('<DataScadenzaPagamento>'), false);
+});
+
+test('share capital of zero is omitted rather than declared false', () => {
+  const company = { ...makeOrdinaryPayload('FPA12').company, shareCapital: null };
+  const payload = { ...makeOrdinaryPayload('FPA12'), company };
+  const xml = buildOrdinaryInvoiceXml(payload);
+  assert.equal(xml.includes('<CapitaleSociale>'), false, 'un capitale a zero non deve comparire');
+
+  const conCapitale = buildOrdinaryInvoiceXml({ ...payload, company: { ...company, shareCapital: 10000 } });
+  assert.match(conCapitale, /<CapitaleSociale>10000\.00<\/CapitaleSociale>/);
+});
+
+test('a PA invoice without a CIG is flagged as a warning, not blocked', async () => {
+  const xml = buildOrdinaryInvoiceXml(buildInvoicePayload(
+    makeAeronauticaInvoice({ cig: null, cup: null, ordine_codice: null }),
+    makeOrdinaryPayload('FPA12').company,
+    makeAeronauticaCustomer(),
+    { mode: 'test', progressivo: 'H0064' }
+  ));
+  const result = await validateInvoiceXml({ xml, format: 'FPA12' });
+  // Passa lo schema: il blocco riferimenti e' facoltativo.
+  assert.equal(result.ok, true, JSON.stringify(result, null, 2));
+  // Ma l'operatore viene avvisato.
+  assert.equal(result.warnings.some((w) => /senza CIG/i.test(w)), true);
+});
+
+test('a PA invoice with a CIG raises no CIG warning', async () => {
+  const xml = buildOrdinaryInvoiceXml(buildInvoicePayload(
+    makeAeronauticaInvoice(),
+    makeOrdinaryPayload('FPA12').company,
+    makeAeronauticaCustomer(),
+    { mode: 'test', progressivo: 'H0065' }
+  ));
+  const result = await validateInvoiceXml({ xml, format: 'FPA12' });
+  assert.equal(result.warnings.some((w) => /senza CIG/i.test(w)), false);
+});
+
 test('PA invoice without CIG omits the correlated document block', async () => {
   const payload = buildInvoicePayload(
     makeAeronauticaInvoice({ cig: null, cup: null }),

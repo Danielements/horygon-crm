@@ -71,7 +71,7 @@ function buildOrdinaryInvoiceXml(payload) {
       <IscrizioneREA>
         <Ufficio>${xmlEscape(payload.company.reaOffice)}</Ufficio>
         <NumeroREA>${xmlEscape(payload.company.reaNumber)}</NumeroREA>
-        ${payload.company.shareCapital != null ? `<CapitaleSociale>${formatDecimal(payload.company.shareCapital, 2)}</CapitaleSociale>` : ''}
+        ${payload.company.shareCapital != null && payload.company.shareCapital > 0 ? `<CapitaleSociale>${formatDecimal(payload.company.shareCapital, 2)}</CapitaleSociale>` : ''}
         ${payload.company.soleShareholder ? `<SocioUnico>${xmlEscape(payload.company.soleShareholder)}</SocioUnico>` : ''}
         <StatoLiquidazione>${xmlEscape(payload.company.liquidationState || 'LN')}</StatoLiquidazione>
       </IscrizioneREA>` : ''}
@@ -156,7 +156,7 @@ function buildSimplifiedInvoiceXml(payload) {
       <IscrizioneREA>
         <Ufficio>${xmlEscape(payload.company.reaOffice)}</Ufficio>
         <NumeroREA>${xmlEscape(payload.company.reaNumber)}</NumeroREA>
-        ${payload.company.shareCapital != null ? `<CapitaleSociale>${formatDecimal(payload.company.shareCapital, 2)}</CapitaleSociale>` : ''}
+        ${payload.company.shareCapital != null && payload.company.shareCapital > 0 ? `<CapitaleSociale>${formatDecimal(payload.company.shareCapital, 2)}</CapitaleSociale>` : ''}
         <StatoLiquidazione>${xmlEscape(payload.company.liquidationState || 'LN')}</StatoLiquidazione>
       </IscrizioneREA>` : ''}
       <RegimeFiscale>${xmlEscape(payload.company.regimeFiscale)}</RegimeFiscale>
