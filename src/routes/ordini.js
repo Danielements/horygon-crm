@@ -67,6 +67,19 @@ function getGiacenza(prodottoId) {
   return Number(row?.giacenza || 0);
 }
 
+// Confronta la sola componente di magazzino di due insiemi di righe: contano
+// prodotto e quantita', perche' sono cio' che muove la giacenza. Un cambio di
+// descrizione, prezzo o trattamento IVA non e' un movimento di merce e non deve
+// far riprenotare nulla.
+function stesseRigheMagazzino(esistenti, nuove) {
+  const norm = (arr) => (arr || [])
+    .filter((r) => r && r.prodotto_id)
+    .map((r) => `${Number(r.prodotto_id)}:${Number(r.quantita) || 0}`)
+    .sort()
+    .join('|');
+  return norm(esistenti) === norm(nuove);
+}
+
 function normalizeOrdineRighe(righe = []) {
   return (righe || [])
     .map((riga) => {
@@ -276,10 +289,20 @@ router.put('/:id', requirePermesso('ordini', 'edit'), (req, res) => {
   // nuovo pezzi che sono gia' usciti: modificare il CIG di un ordine
   // consegnato falliva con "Giacenza insufficiente" per merce gia' partita.
   const STATI_SENZA_MAGAZZINO = ['in_lavorazione', 'spedito', 'consegnato', 'annullato'];
-  const toccaMagazzino = !STATI_SENZA_MAGAZZINO.includes(String(existing.stato || '').toLowerCase());
+  const cleanRighe = normalizeOrdineRighe(b.righe);
+  // Salvare la testata (CIG, date, riferimenti PA) non deve riprenotare la
+  // merce. Un ordine nato da preventivo non ha movimenti propri, e la sua merce
+  // puo' essere gia' uscita con un DDT non agganciato: riprenotare al salvataggio
+  // faceva "Giacenza insufficiente" per roba gia' spedita. Il magazzino si tocca
+  // solo se cambiano davvero prodotti o quantita'.
+  const righeMagazzinoInvariate = stesseRigheMagazzino(
+    db.prepare('SELECT prodotto_id, quantita FROM ordini_righe WHERE ordine_id = ?').all(ordineId),
+    cleanRighe
+  );
+  const toccaMagazzino = !STATI_SENZA_MAGAZZINO.includes(String(existing.stato || '').toLowerCase())
+    && !righeMagazzinoInvariate;
 
   try {
-    const cleanRighe = normalizeOrdineRighe(b.righe);
     db.exec('BEGIN');
     // I movimenti si cancellano solo se poi si ricreano: toglierli e basta
     // farebbe risalire la giacenza di merce gia' spedita.
