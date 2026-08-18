@@ -944,6 +944,18 @@ db.exec(`
     FOREIGN KEY (archive_id) REFERENCES sdi_historical_sync_archive(id) ON DELETE SET NULL
   );
 
+  CREATE TABLE IF NOT EXISTS sdi_daily_reconciliation_run (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    trigger TEXT,
+    window_from TEXT,
+    window_to TEXT,
+    incoming_job_id INTEGER,
+    outgoing_job_id INTEGER,
+    summary TEXT,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS sdi_reconciliation_job (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id INTEGER NOT NULL,

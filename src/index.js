@@ -130,4 +130,11 @@ app.listen(PORT, () => {
   } catch (error) {
     console.error('[sdi] scheduler backfill non avviato:', error.message);
   }
+  // Riconciliazione giornaliera di sicurezza: disabilitata finche'
+  // SDI_DAILY_RECONCILIATION_ENABLED non vale true.
+  try {
+    require('./services/sdi-daily-reconciliation-scheduler').startDailyReconciliationScheduler();
+  } catch (error) {
+    console.error('[sdi] scheduler riconciliazione non avviato:', error.message);
+  }
 });
