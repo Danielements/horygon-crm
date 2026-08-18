@@ -1277,3 +1277,32 @@ function makeFakeResponse() {
     }
   };
 }
+
+// Bollo virtuale: quando la fattura ha gia' registrato il bollo come dichiarato,
+// l'XML deve portare <DatiBollo> nella posizione XSD (dopo Numero, prima di
+// ImportoTotaleDocumento) e restare valido.
+test('DatiBollo e emesso se il bollo e dichiarato, in ordine XSD', async () => {
+  const payload = buildInvoicePayload(
+    makeAeronauticaInvoice({ bollo_dichiarato: 1, bollo_importo: 2 }),
+    makeOrdinaryPayload('FPA12').company,
+    makeAeronauticaCustomer(),
+    { mode: 'test', progressivo: 'H0070' }
+  );
+  assert.deepEqual(payload.datiBollo, { importo: 2 });
+  const xml = buildOrdinaryInvoiceXml(payload);
+  assert.match(xml, /<DatiBollo><BolloVirtuale>SI<\/BolloVirtuale><ImportoBollo>2\.00<\/ImportoBollo><\/DatiBollo>/);
+  assert.match(xml, /<\/Numero>\s*<DatiBollo>[\s\S]*?<\/DatiBollo>\s*<ImportoTotaleDocumento>/);
+  const result = await validateInvoiceXml({ xml, format: 'FPA12' });
+  assert.equal(result.ok, true, JSON.stringify(result));
+});
+
+test('senza bollo dichiarato non c e DatiBollo', () => {
+  const payload = buildInvoicePayload(
+    makeAeronauticaInvoice(),
+    makeOrdinaryPayload('FPA12').company,
+    makeAeronauticaCustomer(),
+    { mode: 'test', progressivo: 'H0071' }
+  );
+  assert.equal(payload.datiBollo, null);
+  assert.equal(buildOrdinaryInvoiceXml(payload).includes('<DatiBollo>'), false);
+});

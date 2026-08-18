@@ -107,6 +107,7 @@ function buildOrdinaryInvoiceXml(payload) {
         <Divisa>${xmlEscape(payload.divisa || 'EUR')}</Divisa>
         <Data>${payload.data}</Data>
         <Numero>${xmlEscape(payload.numero)}</Numero>
+        ${payload.datiBollo ? `<DatiBollo><BolloVirtuale>SI</BolloVirtuale><ImportoBollo>${formatDecimal(payload.datiBollo.importo, 2)}</ImportoBollo></DatiBollo>` : ''}
         ${payload.importoTotaleDocumento != null ? `<ImportoTotaleDocumento>${formatDecimal(payload.importoTotaleDocumento, 2)}</ImportoTotaleDocumento>` : ''}
         ${(payload.causali || []).map((causale) => `<Causale>${xmlEscape(causale)}</Causale>`).join('\n        ')}
       </DatiGeneraliDocumento>

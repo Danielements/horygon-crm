@@ -333,6 +333,7 @@ router.post('/', requirePermesso('fatture', 'edit'), (req, res) => {
       ));
     }
     saveVatSummary(id, riepilogo_iva?.length ? riepilogo_iva : prepared.totali.riepilogo);
+    try { require('../services/stamp-duty-service').recomputeStampDutyForInvoice(id); } catch {}
     res.json({ id });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -397,6 +398,7 @@ router.put('/:id', requirePermesso('fatture', 'edit'), (req, res) => {
       ));
     }
     saveVatSummary(req.params.id, riepilogo_iva?.length ? riepilogo_iva : prepared.totali.riepilogo);
+    try { require('../services/stamp-duty-service').recomputeStampDutyForInvoice(req.params.id); } catch {}
     res.json({ ok: true });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });

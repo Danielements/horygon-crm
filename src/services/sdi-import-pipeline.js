@@ -187,6 +187,10 @@ function importDocument({
     });
   }
 
+  // Bollo dichiarato nell'XML (DatiBollo): lo si registra come dichiarato e lo si
+  // assegna al trimestre. Non deve mai bloccare l'import di un documento fiscale.
+  try { require('./stamp-duty-service').applyImportedDatiBollo(fatturaId, xmlText, { tenantId }); } catch {}
+
   audit('SDI_HISTORICAL_DOCUMENT_IMPORTED', { tenantId, jobId, utenteId, fatturaId, filename, originalSha256, identificativoSdi });
   return finish({
     outcome: 'IMPORTED',

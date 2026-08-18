@@ -161,6 +161,64 @@ function applyImportedDatiBollo(fatturaId, xmlText, { tenantId = 1 } = {}) {
   return recomputeStampDutyForInvoice(fatturaId, { tenantId });
 }
 
+// Ricalcola il bollo di tutte le fatture (emesse e ricevute): popola le esistenti.
+function recomputeAllInvoices({ tenantId = 1 } = {}) {
+  const ids = db.prepare("SELECT id FROM fatture WHERE tipo IN ('emessa','ricevuta') OR direzione IN ('attiva','passiva')").all();
+  let processate = 0;
+  let conBollo = 0;
+  for (const { id } of ids) {
+    const r = recomputeStampDutyForInvoice(id, { tenantId });
+    if (r) { processate += 1; if (r.declared) conBollo += 1; }
+  }
+  return { processate, conBollo };
+}
+
+// Dashboard bollo per trimestre.
+function getBolloDashboard({ tenantId = 1 } = {}) {
+  const settlements = db.prepare('SELECT * FROM stamp_duty_settlement WHERE tenant_id = ? ORDER BY year DESC, quarter DESC').all(tenantId);
+  return settlements.map((s) => {
+    const c = db.prepare(`
+      SELECT COUNT(*) AS fatture,
+             SUM(CASE WHEN bollo_fonte = 'ADE_LIST_A' THEN 1 ELSE 0 END) AS ade_a,
+             SUM(CASE WHEN bollo_fonte = 'ADE_LIST_B' THEN 1 ELSE 0 END) AS ade_b
+      FROM fatture WHERE bollo_settlement_id = ? AND bollo_dichiarato = 1
+    `).get(s.id);
+    return { ...s, fatture: c.fatture || 0, adeListA: c.ade_a || 0, adeListB: c.ade_b || 0 };
+  });
+}
+
+function settlementInvoices(settlementId) {
+  return db.prepare(`
+    SELECT id, numero, data, totale, bollo_importo, bollo_fonte, bollo_stato,
+           COALESCE((SELECT ragione_sociale FROM anagrafiche WHERE id = fatture.anagrafica_id), cliente_fornitore_label) AS controparte
+    FROM fatture WHERE bollo_settlement_id = ? AND bollo_dichiarato = 1 ORDER BY data
+  `).all(settlementId);
+}
+
+// Registra il pagamento del settlement (handoff manuale: portale AdE / F24 /
+// registrazione). Non c'e' un pagamento da 2 EUR per fattura: e' l'aggregato.
+function paySettlement(settlementId, { method = null, taxCode = null, paidAt = null, receiptPath = null, officialAmount = null, notes = null } = {}) {
+  const s = db.prepare('SELECT * FROM stamp_duty_settlement WHERE id = ?').get(settlementId);
+  if (!s) throw new Error('Settlement non trovato');
+  db.prepare(`
+    UPDATE stamp_duty_settlement
+    SET status = 'PAID', payment_method = ?, tax_code = ?, paid_at = ?, receipt_path = ?,
+        official_ade_amount = COALESCE(?, official_ade_amount), notes = COALESCE(?, notes),
+        aggiornato_il = datetime('now')
+    WHERE id = ?
+  `).run(method, taxCode, paidAt || new Date().toISOString().slice(0, 10), receiptPath, officialAmount, notes, settlementId);
+  db.prepare("UPDATE fatture SET bollo_stato = 'PAID' WHERE bollo_settlement_id = ? AND bollo_dichiarato = 1").run(settlementId);
+  return db.prepare('SELECT * FROM stamp_duty_settlement WHERE id = ?').get(settlementId);
+}
+
+function reconcileSettlement(settlementId) {
+  const s = db.prepare('SELECT * FROM stamp_duty_settlement WHERE id = ?').get(settlementId);
+  if (!s) throw new Error('Settlement non trovato');
+  db.prepare("UPDATE stamp_duty_settlement SET status = 'RECONCILED', aggiornato_il = datetime('now') WHERE id = ?").run(settlementId);
+  db.prepare("UPDATE fatture SET bollo_stato = 'RECONCILED' WHERE bollo_settlement_id = ? AND bollo_dichiarato = 1").run(settlementId);
+  return db.prepare('SELECT * FROM stamp_duty_settlement WHERE id = ?').get(settlementId);
+}
+
 module.exports = {
   quarterOf,
   dueDateForQuarter,
@@ -173,5 +231,10 @@ module.exports = {
   getOrCreateSettlement,
   recalcSettlement,
   recomputeStampDutyForInvoice,
-  applyImportedDatiBollo
+  applyImportedDatiBollo,
+  recomputeAllInvoices,
+  getBolloDashboard,
+  settlementInvoices,
+  paySettlement,
+  reconcileSettlement
 };

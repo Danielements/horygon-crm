@@ -282,6 +282,10 @@ function buildInvoicePayload(invoice, company, customer, options = {}) {
     causali: [],
     esigibilitaIva,
     datiOrdineAcquisto: buildDatiOrdineAcquisto(invoice, numero),
+    // Bollo virtuale: si dichiara nell'XML solo quando la fattura lo ha gia'
+    // registrato come dovuto (bollo_dichiarato). Il calcolo/assegnazione avviene
+    // alla creazione della fattura (StampDutyService), non qui.
+    datiBollo: invoice.bollo_dichiarato ? { importo: Number(invoice.bollo_importo) || 2.00 } : null,
     datiFattureCollegate: buildDatiFattureCollegate(invoice),
     lines,
     riepilogo,

@@ -567,6 +567,9 @@ router.post('/:id/convert-to-fattura', requirePermesso('fatture', 'edit'), (req,
       );
     });
     db.exec('COMMIT');
+    // Bollo: calcola dovuto/dichiarato e assegna il trimestre/settlement. Non
+    // deve mai bloccare la creazione della fattura.
+    try { require('../services/stamp-duty-service').recomputeStampDutyForInvoice(fatturaId); } catch {}
     res.json({ ok: true, fattura_id: fatturaId, numero: numeroFattura });
   } catch (e) {
     try { db.exec('ROLLBACK'); } catch {}

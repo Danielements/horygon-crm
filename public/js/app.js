@@ -3927,7 +3927,7 @@ function renderFattureRows(targetId, rows) {
     <td>${f.imponibile != null ? 'EUR '+Number(f.imponibile).toFixed(2) : '-'}</td>
     <td>${formatIvaValue(f.iva)}</td>
     <td><strong>${f.totale != null ? 'EUR '+Number(f.totale).toFixed(2) : '-'}</strong></td>
-    <td><span class="badge badge-${f.stato}">${f.stato}</span>${renderStatoSdiBadge(f)}</td>
+    <td><span class="badge badge-${f.stato}">${f.stato}</span>${renderStatoSdiBadge(f)}${renderBolloBadge(f)}</td>
     <td><select class="btn btn-outline btn-sm" onchange="cambiaStatoFattura(${f.id},this.value)">
       ${['ricevuta','pagata','scaduta','annullata'].map(s=>`<option value="${s}"${f.stato===s?' selected':''}>${s}</option>`).join('')}
     </select></td>
@@ -3992,6 +3992,7 @@ async function loadFattureBySection(section) {
     renderFattureRows('fatture-fuori-campo-body', (rows || []).filter(f => !f.iva || Number(f.iva) === 0));
     return;
   }
+  ensureBolloPanel();
   const rows = await api('GET', '/fatture?tipo=emessa');
   renderFattureRows('fatture-attive-body', rows || []);
 }
@@ -4091,6 +4092,109 @@ async function cercaFatturaSdi() {
   } catch (e) {
     if (out) out.innerHTML = `<span style="color:#b91c1c">${escapeHtml(e.message || 'Errore')}</span>`;
   }
+}
+
+// --- Bollo virtuale (Contabilita) -----------------------------------------
+function renderBolloBadge(f) {
+  if (!f.bollo_dichiarato) return '';
+  const stato = f.bollo_stato || 'DECLARED';
+  const done = stato === 'PAID' || stato === 'RECONCILED';
+  const testo = stato === 'RECONCILED' ? `Bollo assolto ${f.bollo_trimestre || ''}`
+    : stato === 'PAID' ? `Bollo pagato ${f.bollo_trimestre || ''}`
+    : `Bollo €${Number(f.bollo_importo || 2).toFixed(2)} ${f.bollo_trimestre || ''}`;
+  return `<span class="badge ${done ? 'badge-pagata' : 'badge-cliente'}" style="margin-left:4px" title="Bollo virtuale ${escapeAttr(f.bollo_trimestre || '')} - ${escapeAttr(stato)}">&#128209; ${escapeHtml(testo)}</span>`;
+}
+
+function ensureBolloPanel() {
+  const sec = document.getElementById('section-fatture-attive');
+  if (!sec || sec.querySelector('#bollo-panel')) return;
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+    <div id="bollo-panel" class="card" style="margin:0 0 12px 0;padding:12px">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <strong>&#128209; Bollo (Contabilità)</strong>
+        <button class="btn btn-outline btn-sm" onclick="ricalcolaBollo()" title="Ricalcola il bollo su tutte le fatture">Ricalcola</button>
+        <span style="font-size:12px;color:var(--text-muted)">versamento trimestrale aggregato, non 2€ a fattura</span>
+      </div>
+      <div id="bollo-dashboard" style="margin-top:10px;font-size:13px">Caricamento…</div>
+    </div>`;
+  const header = sec.querySelector('.page-header');
+  const node = wrap.firstElementChild;
+  if (header) header.insertAdjacentElement('afterend', node); else sec.prepend(node);
+  caricaBolloDashboard();
+}
+
+async function caricaBolloDashboard() {
+  const el = document.getElementById('bollo-dashboard');
+  if (!el) return;
+  try {
+    const r = await api('GET', '/contabilita/bollo/dashboard');
+    const s = r.settlements || [];
+    if (!s.length) { el.innerHTML = '<span style="color:var(--text-muted)">Nessun trimestre con bollo. Premi Ricalcola.</span>'; return; }
+    el.innerHTML = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
+      <thead><tr style="text-align:left;color:var(--text-muted);font-size:12px">
+        <th>Trimestre</th><th>Fatture</th><th>Previsto CRM</th><th>AdE A/B</th><th>Ufficiale</th><th>Scadenza</th><th>Stato</th><th></th></tr></thead>
+      <tbody>${s.map(x => {
+        const done = x.status === 'PAID' || x.status === 'RECONCILED';
+        return `<tr style="border-top:1px solid var(--border)">
+          <td><strong>${x.year}-${escapeHtml(x.quarter)}</strong></td>
+          <td>${x.fatture}</td>
+          <td>€${Number(x.calculated_amount || 0).toFixed(2)}</td>
+          <td>${x.adeListA}/${x.adeListB}</td>
+          <td>${x.official_ade_amount != null ? '€' + Number(x.official_ade_amount).toFixed(2) : '—'}</td>
+          <td>${escapeHtml(x.due_date || '—')}</td>
+          <td><span class="badge ${done ? 'badge-pagata' : 'badge-cliente'}">${escapeHtml(x.status)}</span></td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-outline btn-sm" onclick="dettaglioSettlement(${x.id})">Dettaglio</button>
+            ${!done ? `<button class="btn btn-accent btn-sm" onclick="pagaSettlement(${x.id})">Paga</button>` : ''}
+            ${x.status === 'PAID' ? `<button class="btn btn-outline btn-sm" onclick="riconciliaSettlement(${x.id})">Riconcilia</button>` : ''}
+          </td></tr>`;
+      }).join('')}</tbody></table></div>
+      <div id="bollo-dettaglio" style="margin-top:10px"></div>`;
+  } catch (e) { el.innerHTML = `<span style="color:#b91c1c">${escapeHtml(e.message || 'Errore')}</span>`; }
+}
+
+async function ricalcolaBollo() {
+  try {
+    const r = await api('POST', '/contabilita/bollo/ricalcola', {});
+    toast(`Bollo ricalcolato: ${r.conBollo} fatture con bollo su ${r.processate}`, 'success');
+    caricaBolloDashboard();
+    loadFattureBySection('fatture-attive');
+  } catch (e) { toast(e.message || 'Errore ricalcolo', 'error'); }
+}
+
+async function dettaglioSettlement(id) {
+  const el = document.getElementById('bollo-dettaglio');
+  if (!el) return;
+  try {
+    const r = await api('GET', `/contabilita/bollo/settlement/${id}/fatture`);
+    el.innerHTML = `<strong>Fatture del trimestre</strong><br>` + (r.fatture || []).map(f =>
+      `#${escapeHtml(String(f.numero || f.id))} · ${escapeHtml(f.controparte || '-')} · ${f.data || '-'} · bollo €${Number(f.bollo_importo || 0).toFixed(2)} · ${escapeHtml(f.bollo_stato || '')}`
+    ).join('<br>');
+  } catch (e) { el.innerHTML = escapeHtml(e.message || 'Errore'); }
+}
+
+async function pagaSettlement(id) {
+  const method = prompt('Metodo pagamento (portale_ade / F24 / manuale):', 'portale_ade');
+  if (method === null) return;
+  const taxCode = prompt('Codice tributo (es. Q3 -> 2523):', '2523') || null;
+  const officialAmount = prompt('Importo ufficiale versato (€, vuoto = usa il previsto):', '') || null;
+  try {
+    await api('POST', `/contabilita/bollo/settlement/${id}/paga`, { method, taxCode, officialAmount });
+    toast('Pagamento registrato', 'success');
+    caricaBolloDashboard();
+    loadFattureBySection('fatture-attive');
+  } catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+async function riconciliaSettlement(id) {
+  if (!confirm('Segnare il bollo del trimestre come riconciliato? Le fatture collegate risulteranno "bollo assolto".')) return;
+  try {
+    await api('POST', `/contabilita/bollo/settlement/${id}/riconcilia`, {});
+    toast('Bollo riconciliato', 'success');
+    caricaBolloDashboard();
+    loadFattureBySection('fatture-attive');
+  } catch (e) { toast(e.message || 'Errore', 'error'); }
 }
 
 async function loadFatture() {
