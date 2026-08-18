@@ -3939,7 +3939,7 @@ function renderFattureRows(targetId, rows) {
       ${renderSdiRowButton(f)}
       ${f.tipo === 'emessa' && f.tipo_documento !== 'nota_credito' ? `<button class="btn btn-outline btn-sm" onclick="creaNotaCredito(${f.id})" title="Nota di credito a storno di questa fattura">Nota credito</button>` : ''}
       ${f.tipo === 'emessa' && f.source === 'CRM' ? `<button class="btn btn-danger btn-sm" onclick="eliminaFattura(${f.id}, '${String(f.numero || f.id).replace(/'/g, "\\'")}')" title="Elimina: possibile solo finche non e stata trasmessa al SdI">Elimina</button>` : ''}
-      ${f.tipo === 'ricevuta' ? `<button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC01')" title="Comunica a SdI l accettazione della fattura ricevuta">Accetta</button><button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC02')" title="Comunica a SdI il rifiuto della fattura ricevuta">Rifiuta</button>` : ''}
+      ${f.tipo === 'ricevuta' && f.formato_effettivo === 'FPA12' ? `<button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC01')" title="Comunica a SdI l accettazione della fattura PA ricevuta">Accetta</button><button class="btn btn-outline btn-sm" onclick="testEsitoCommittenteSdi(${f.id},'EC02')" title="Comunica a SdI il rifiuto della fattura PA ricevuta">Rifiuta</button>` : ''}
     </div></td></tr>`).join('');
 }
 

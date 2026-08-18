@@ -36,6 +36,9 @@ async function sendEsitoCommittenteToSdi(fatturaId, options = {}) {
     options.originalFilename
     || metadata.nome_file_sdi
     || metadata.nome_file
+    // Le fatture importate dallo storico non portano il nome nel documento_meta,
+    // ma nella colonna `original_filename` valorizzata dalla pipeline di import.
+    || invoice.original_filename
     || ''
   ).trim();
   if (!/^\d{1,12}$/.test(identificativoSdi)) {

@@ -51,6 +51,7 @@ router.get('/', requirePermesso('fatture', 'read'), (req, res) => {
       COALESCE(a.ragione_sociale, f.cliente_fornitore_label) AS ragione_sociale,
       a.tipo AS anagrafica_tipo,
       a.tipologia_cliente AS anagrafica_tipologia,
+      COALESCE(f.formato_trasmissione, json_extract(f.documento_meta, '$.formato_trasmissione')) AS formato_effettivo,
       (SELECT COUNT(*) FROM fatture_sdi_flussi fl
         WHERE fl.fattura_id = f.id AND COALESCE(fl.direzione,'outbound') = 'outbound') AS sdi_flussi,
       (SELECT COUNT(*) FROM fatture_sdi_flussi fl
