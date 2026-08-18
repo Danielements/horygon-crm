@@ -17,11 +17,11 @@ const db = require('../db/database');
 const { writeSystemLog } = require('./system-log');
 const { writeAudit } = require('./audit');
 const {
-  addDays, createJob, getJob, summarizeJob
+  addDays, addMonths, createJob, getJob, summarizeJob
 } = require('./sdi-historical-sync');
 const { prepareRequest } = require('./sdi-backfill');
 const { advanceJobs } = require('./sdi-backfill-scheduler');
-const { getRemoteSignatureProvider } = require('./sdi-remote-signature');
+const { getQualifiedSignatureProvider } = require('./sdi-qualified-signature');
 
 // INCOMING = FattureRicevute (CESSIONARIO), OUTGOING = FattureEmesse (CEDENTE).
 // Le emesse dal CRM saranno di norma gia' presenti: OUTGOING serve a scoprire
@@ -41,7 +41,11 @@ function parseConfig(env = process.env) {
   const cron = String(env.SDI_DAILY_RECONCILIATION_CRON || '0 6 * * *').trim();
   const n = Number(env.SDI_DAILY_RECONCILIATION_LOOKBACK_DAYS);
   const lookbackDays = Number.isFinite(n) && n > 0 ? Math.floor(n) : 7;
-  return { enabled, cron, lookbackDays };
+  // Overlap con l'ultima riconciliazione completata: quanti giorni riprendere
+  // all'indietro dal punto di ripresa. Default = lookback.
+  const o = Number(env.SDI_DAILY_RECONCILIATION_OVERLAP_DAYS);
+  const overlapDays = Number.isFinite(o) && o >= 0 ? Math.floor(o) : lookbackDays;
+  return { enabled, cron, lookbackDays, overlapDays };
 }
 
 function toISODate(now = new Date()) {
@@ -54,6 +58,35 @@ function computeWindow(now = new Date(), lookbackDays = 7) {
   const to = toISODate(now);
   const from = addDays(to, -Math.abs(lookbackDays));
   return { from, to };
+}
+
+// Ultimo `to` di una riconciliazione andata a buon fine per la direzione: e' il
+// punto di ripresa. Deriva dai job del motore (nessuna tabella nuova).
+function lastSuccessfulTo(tenantId, requestType) {
+  const row = db.prepare(`
+    SELECT MAX(date_to) AS m FROM sdi_historical_sync_job
+    WHERE tenant_id = ? AND request_type = ? AND status IN ('COMPLETED','PARTIAL')
+  `).get(tenantId, requestType);
+  return row && row.m ? row.m : null;
+}
+
+// Finestra ancorata (tuo §7): la nuova richiesta riparte da
+// lastSuccessfulTo - overlap (non da oggi-7 fisso), cosi' i giorni di un periodo
+// saltato non sfuggono. Clampata a ~3 mesi (controllo SMTS 00201). Al primo giro,
+// senza storico, ripiega su [oggi-lookback, oggi].
+// Matematica pura della finestra, isolata per essere testabile senza DB.
+function windowFromAnchor(to, anchor, { overlapDays = 7, lookbackDays = 7 } = {}) {
+  let from = anchor ? addDays(anchor, -Math.abs(overlapDays)) : addDays(to, -Math.abs(lookbackDays));
+  const minFrom = addMonths(to, -3);
+  if (from < minFrom) from = minFrom;
+  if (from > to) from = to;
+  return { from, to, anchor: anchor || null };
+}
+
+function computeWindowForDirection(now, tenantId, requestType, opts = {}) {
+  const to = toISODate(now);
+  const anchor = lastSuccessfulTo(tenantId, requestType);
+  return windowFromAnchor(to, anchor, opts);
 }
 
 function emptyCounters() {
@@ -115,41 +148,47 @@ function classify(job) {
   return { jobId: job.id, state, counters: mapCounters(job, summary.outcomes) };
 }
 
-async function runDirection({ tenantId, requestType, from, to, utenteId = null, client = null }) {
-  // 1) c'e' gia' una richiesta pronta ma non firmata? non ne creo un'altra.
+async function runDirection({ tenantId, requestType, utenteId = null, client = null, now = new Date(), config = null }) {
+  const cfg = config || parseConfig();
+  const window = computeWindowForDirection(now, tenantId, requestType, { overlapDays: cfg.overlapDays, lookbackDays: cfg.lookbackDays });
+
+  // 1) richiesta pronta ma non firmata? non ne creo un'altra (no-stacking).
   const pending = pendingUnsignedJob(tenantId, requestType);
   if (pending) {
-    return { jobId: pending.id, state: 'SIGNATURE_REQUIRED', counters: emptyCounters(), reused: true };
+    return {
+      jobId: pending.id, state: 'SIGNATURE_REQUIRED', counters: emptyCounters(), reused: true,
+      window: { from: pending.date_from, to: pending.date_to }
+    };
   }
 
-  // 2) c'e' gia' un job attivo per questa esatta finestra? lo riuso, non ricreo.
-  let job = activeJobForWindow(tenantId, requestType, from, to);
+  // 2) job gia' attivo per questa finestra? lo riuso, non ricreo.
+  let job = activeJobForWindow(tenantId, requestType, window.from, window.to);
   if (!job) {
-    job = createJob({ tenantId, requestType, dateFrom: from, dateTo: to, utenteId });
+    job = createJob({ tenantId, requestType, dateFrom: window.from, dateTo: window.to, utenteId });
     try {
       await prepareRequest({ tenantId, jobId: job.id, utenteId });
     } catch (error) {
-      return { jobId: job.id, state: 'ERROR', counters: { ...emptyCounters(), errors: 1 }, error: error.message };
+      return { jobId: job.id, state: 'ERROR', counters: { ...emptyCounters(), errors: 1 }, error: error.message, window };
     }
     job = getJob(job.id);
   }
 
-  // 3) firma remota, se un giorno ci sara'. Oggi torna null -> resta CREATED.
+  // 3) firma automatica solo se il provider lo e' (oggi: mai -> resta CREATED).
   if (job.status === 'CREATED') {
-    const provider = getRemoteSignatureProvider();
-    if (provider && typeof provider.isAvailable === 'function' && provider.isAvailable()) {
-      await provider.signJob({ jobId: job.id, tenantId, utenteId });
+    const provider = getQualifiedSignatureProvider();
+    if (provider.isAutomatic()) {
+      await provider.sign({ jobId: job.id, tenantId, utenteId });
       job = getJob(job.id);
     }
   }
 
-  // 4) se firmato, un passo di avanzamento; il pilota completa nelle passate dopo.
+  // 4) se firmato, un passo; il pilota completa nelle passate dopo.
   if (ADVANCEABLE.has(job.status)) {
     await advanceJobs({ tenantId, client, utenteId });
     job = getJob(job.id);
   }
 
-  return classify(job);
+  return { ...classify(job), window };
 }
 
 function recordRun({ tenantId, trigger, window, incomingJobId, outgoingJobId, summary }) {
@@ -162,33 +201,36 @@ function recordRun({ tenantId, trigger, window, incomingJobId, outgoingJobId, su
 }
 
 async function runDailyReconciliation({
-  now = new Date(), tenantId = 1, utenteId = null, trigger = 'schedule',
-  client = null, lookbackDays = null
+  now = new Date(), tenantId = 1, utenteId = null, trigger = 'schedule', client = null
 } = {}) {
   const cfg = parseConfig();
-  const lookback = Number.isFinite(lookbackDays) && lookbackDays > 0 ? lookbackDays : cfg.lookbackDays;
-  const window = computeWindow(now, lookback);
-
-  const out = { trigger, window, incoming: null, outgoing: null };
+  const out = { trigger, incoming: null, outgoing: null };
   const jobIds = { incoming: null, outgoing: null };
+  const froms = [];
 
   for (const dir of DIRECTIONS) {
     let res;
     try {
-      res = await runDirection({ tenantId, requestType: dir.requestType, from: window.from, to: window.to, utenteId, client });
+      res = await runDirection({ tenantId, requestType: dir.requestType, utenteId, client, now, config: cfg });
     } catch (error) {
-      res = { jobId: null, state: 'ERROR', counters: { ...emptyCounters(), errors: 1 }, error: error.message };
+      res = { jobId: null, state: 'ERROR', counters: { ...emptyCounters(), errors: 1 }, error: error.message, window: null };
     }
-    out[dir.key] = { ...res.counters, state: res.state, jobId: res.jobId || null, ...(res.error ? { error: res.error } : {}) };
+    const win = res.window || null;
+    out[dir.key] = { ...res.counters, state: res.state, jobId: res.jobId || null, window: win, ...(res.error ? { error: res.error } : {}) };
     jobIds[dir.key] = res.jobId || null;
+    if (win && win.from) froms.push(win.from);
     // log separato per direzione
     writeSystemLog({
       livello: res.state === 'ERROR' ? 'error' : 'info',
       origine: `sdi.riconciliazione.${dir.key}`,
-      messaggio: `Riconciliazione ${dir.key} ${window.from}..${window.to}: ${res.state}`,
+      messaggio: `Riconciliazione ${dir.key} ${win ? win.from + '..' + win.to : '(finestra n/d)'}: ${res.state}`,
       dettagli: out[dir.key]
     });
   }
+
+  // Finestra complessiva per il record: to = oggi, from = il piu' vecchio dei due.
+  const to = toISODate(now);
+  const window = { from: froms.length ? froms.slice().sort()[0] : to, to };
 
   const runId = recordRun({
     tenantId, trigger, window,
@@ -204,7 +246,7 @@ async function runDailyReconciliation({
     dettagli: { trigger, window, incoming: out.incoming, outgoing: out.outgoing }
   });
 
-  return { runId, ...out };
+  return { runId, window, ...out };
 }
 
 // --- ricerca di una fattura attesa (generica, qualunque controparte) -------
@@ -312,6 +354,9 @@ module.exports = {
   SEARCH_STATES,
   parseConfig,
   computeWindow,
+  computeWindowForDirection,
+  windowFromAnchor,
+  lastSuccessfulTo,
   toISODate,
   emptyCounters,
   classifyJobState,

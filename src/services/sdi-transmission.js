@@ -1,4 +1,5 @@
 const fs = require('fs');
+const { sanitizeHeaders } = require('./log-sanitize');
 const path = require('path');
 const https = require('https');
 const tls = require('tls');
@@ -152,7 +153,7 @@ async function transmitGeneratedFlow(flowId, options = {}) {
     retryable,
     stato,
     fault: parsed.fault || null,
-    responseHeaders: response.headers,
+    responseHeaders: sanitizeHeaders(response.headers),
     responsePreview: response.body.slice(0, 1200),
     success
   };

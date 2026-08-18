@@ -1,4 +1,5 @@
 const https = require('https');
+const { sanitizeHeaders } = require('./log-sanitize');
 const { getSetting } = require('./google');
 const { postSoapToSdi } = require('./sdi-transmission');
 const { DEFAULT_ENDPOINT, SdiMassiveServicesClient } = require('./sdi-massive-client');
@@ -26,7 +27,7 @@ function createMassiveTransport({ mode = 'production' } = {}) {
     return {
       statusCode: response.statusCode,
       statusMessage: response.statusMessage,
-      headers: response.headers,
+      headers: sanitizeHeaders(response.headers),
       body: response.bodyBuffer
     };
   };

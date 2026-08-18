@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  parseConfig, computeWindow, classifyJobState, mapCounters, emptyCounters
+  parseConfig, computeWindow, windowFromAnchor, classifyJobState, mapCounters, emptyCounters
 } = require('../src/services/sdi-daily-reconciliation');
 
 test('parseConfig: default disabilitato, cron 06:00, lookback 7', () => {
@@ -69,4 +69,38 @@ test('mapCounters: ripiega sugli outcome se i contatori del job mancano', () => 
 
 test('emptyCounters: tutti a zero', () => {
   assert.deepEqual(emptyCounters(), { checked: 0, alreadyPresent: 0, newInvoices: 0, imported: 0, errors: 0 });
+});
+
+test('parseConfig: overlap default = lookback, oppure esplicito', () => {
+  assert.equal(parseConfig({}).overlapDays, 7);
+  assert.equal(parseConfig({ SDI_DAILY_RECONCILIATION_LOOKBACK_DAYS: '10' }).overlapDays, 10);
+  assert.equal(parseConfig({ SDI_DAILY_RECONCILIATION_OVERLAP_DAYS: '3' }).overlapDays, 3);
+  assert.equal(parseConfig({ SDI_DAILY_RECONCILIATION_OVERLAP_DAYS: '0' }).overlapDays, 0);
+});
+
+test('windowFromAnchor: ancorata all-ultima riconciliazione con overlap', () => {
+  // riparte da anchor - overlap, non da oggi-7.
+  assert.deepEqual(
+    windowFromAnchor('2026-08-18', '2026-08-18', { overlapDays: 7 }),
+    { from: '2026-08-11', to: '2026-08-18', anchor: '2026-08-18' }
+  );
+  // un buco: ultima completata 10 giorni fa -> copre tutto il buco (non solo 7gg).
+  assert.deepEqual(
+    windowFromAnchor('2026-08-18', '2026-08-08', { overlapDays: 7 }),
+    { from: '2026-08-01', to: '2026-08-18', anchor: '2026-08-08' }
+  );
+});
+
+test('windowFromAnchor: senza storico ripiega su [oggi-lookback, oggi]', () => {
+  assert.deepEqual(
+    windowFromAnchor('2026-08-18', null, { lookbackDays: 7 }),
+    { from: '2026-08-11', to: '2026-08-18', anchor: null }
+  );
+});
+
+test('windowFromAnchor: clamp a ~3 mesi (controllo 00201)', () => {
+  // anchor molto vecchio -> from non piu' indietro di 3 mesi da oggi.
+  const w = windowFromAnchor('2026-08-18', '2026-01-01', { overlapDays: 7 });
+  assert.equal(w.to, '2026-08-18');
+  assert.equal(w.from, '2026-05-18'); // addMonths(-3)
 });

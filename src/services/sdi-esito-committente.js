@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { sanitizeHeaders } = require('./log-sanitize');
 const fs = require('fs');
 const path = require('path');
 const { XMLParser } = require('fast-xml-parser');
@@ -141,7 +142,7 @@ async function sendEsitoCommittenteToSdi(fatturaId, options = {}) {
     retryable: parsed.retryable,
     fault: parsed.fault || null,
     scarto: parsed.scarto ? { ...parsed.scarto, xmlPath: scartoStorage?.relativePath || null } : null,
-    responseHeaders: response.headers,
+    responseHeaders: sanitizeHeaders(response.headers),
     responsePreview: response.body.slice(0, 1200),
     success
   };
