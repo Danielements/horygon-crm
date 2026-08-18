@@ -3982,6 +3982,7 @@ function ricaricaSezioneFatture() {
 async function loadFattureBySection(section) {
   ensureAccountingSections();
   if (section === 'fatture-passive') {
+    ensureRiconciliazioneToolbar();
     const rows = await api('GET', '/fatture?tipo=ricevuta');
     renderFattureRows('fatture-passive-body', rows || []);
     return;
@@ -3993,6 +3994,94 @@ async function loadFattureBySection(section) {
   }
   const rows = await api('GET', '/fatture?tipo=emessa');
   renderFattureRows('fatture-attive-body', rows || []);
+}
+
+// Riconciliazione SdI di sicurezza: toolbar in Fatture passive con "Verifica SdI
+// ora" e la ricerca di una fattura attesa (qualunque controparte).
+function ensureRiconciliazioneToolbar() {
+  const sec = document.getElementById('section-fatture-passive');
+  if (!sec || sec.querySelector('#sdi-riconciliazione-toolbar')) return;
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+    <div id="sdi-riconciliazione-toolbar" class="card" style="margin:0 0 12px 0;padding:12px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-accent btn-sm" onclick="verificaSdiRicezioneOra(this)" title="Riconciliazione di sicurezza: cerca su SdI le fatture non ancora nel CRM">&#128260; Verifica SdI ora</button>
+        <span id="sdi-riconc-stato" style="font-size:12px;color:var(--text-muted)"></span>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:flex-end">
+        <div class="form-group" style="margin:0"><label style="font-size:11px">Ragione sociale</label><input id="sdi-cerca-rs" type="text" placeholder="es. Bricofer"></div>
+        <div class="form-group" style="margin:0"><label style="font-size:11px">P.IVA / CF</label><input id="sdi-cerca-piva" type="text" style="width:130px"></div>
+        <div class="form-group" style="margin:0"><label style="font-size:11px">Da</label><input id="sdi-cerca-da" type="date"></div>
+        <div class="form-group" style="margin:0"><label style="font-size:11px">A</label><input id="sdi-cerca-a" type="date"></div>
+        <div class="form-group" style="margin:0"><label style="font-size:11px">Importo</label><input id="sdi-cerca-importo" type="number" step="0.01" style="width:110px"></div>
+        <button class="btn btn-outline btn-sm" onclick="cercaFatturaSdi()">&#128269; Cerca</button>
+      </div>
+      <div id="sdi-cerca-risultato" style="margin-top:10px;font-size:13px"></div>
+    </div>`;
+  const node = wrap.firstElementChild;
+  const header = sec.querySelector('.page-header');
+  if (header) header.insertAdjacentElement('afterend', node); else sec.prepend(node);
+  caricaStatoRiconciliazione();
+}
+
+async function caricaStatoRiconciliazione() {
+  const el = document.getElementById('sdi-riconc-stato');
+  if (!el) return;
+  try {
+    const st = await api('GET', '/sdi/storico/riconciliazione/stato');
+    const pend = (st.pendingSignature || []).length;
+    const last = st.lastRun ? `ultima verifica ${st.lastRun.creato_il}` : 'mai verificato';
+    el.innerHTML = `Automatica ${st.config && st.config.enabled ? 'ON' : 'OFF'} · ${last}`
+      + (pend ? ` · <strong style="color:#b45309">${pend} richieste da firmare</strong> (Storico SdI)` : '');
+  } catch { el.textContent = ''; }
+}
+
+async function verificaSdiRicezioneOra(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Verifica in corso…'; }
+  try {
+    const r = await api('POST', '/sdi/storico/riconciliazione/verifica-ora', {});
+    const inc = r.incoming || {}, out = r.outgoing || {};
+    toast(`Ricevute: ${inc.state} · Emesse: ${out.state}`, 'success');
+    if (inc.state === 'SIGNATURE_REQUIRED' || out.state === 'SIGNATURE_REQUIRED') {
+      toast('Richiesta SMTS pronta: firmala in Storico SdI', 'error');
+    }
+    caricaStatoRiconciliazione();
+    loadFattureBySection('fatture-passive');
+  } catch (e) {
+    toast(e.message || 'Errore verifica SdI', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '&#128260; Verifica SdI ora'; }
+  }
+}
+
+async function cercaFatturaSdi() {
+  const val = (id) => { const el = document.getElementById(id); return el && el.value ? el.value : null; };
+  const out = document.getElementById('sdi-cerca-risultato');
+  if (out) out.textContent = 'Ricerca…';
+  try {
+    const r = await api('POST', '/sdi/storico/riconciliazione/cerca', {
+      ragione_sociale: val('sdi-cerca-rs'),
+      piva: val('sdi-cerca-piva'),
+      data_da: val('sdi-cerca-da'),
+      data_a: val('sdi-cerca-a'),
+      importo: val('sdi-cerca-importo'),
+      direzione: 'passiva'
+    });
+    const colore = { PRESENT: 'badge-pagata', IMPORTED_FROM_SDI: 'badge-pagata', NOT_PRESENT: 'badge-scaduta', SIGNATURE_REQUIRED: 'badge-cliente' }[r.stateKey] || 'badge-cliente';
+    let html = `<span class="badge ${colore}">${escapeHtml(r.state)}</span>`;
+    if (r.matches && r.matches.length) {
+      html += '<div style="margin-top:8px">' + r.matches.map(m =>
+        `#${escapeHtml(String(m.numero || m.id))} · ${escapeHtml(m.controparte || '-')} · ${escapeHtml(m.data || m.data_ricezione || '-')} · EUR ${Number(m.totale || 0).toFixed(2)}`
+      ).join('<br>') + '</div>';
+    } else if (r.stateKey === 'NOT_PRESENT') {
+      html += ' <span style="color:var(--text-muted)">— usa "Verifica SdI ora" per andarla a prendere (richiede firma SMTS)</span>';
+    } else if (r.stateKey === 'SIGNATURE_REQUIRED' && r.job) {
+      html += ` <span style="color:var(--text-muted)">— richiesta ${escapeHtml(r.job.requestType)} ${escapeHtml(r.job.from)}..${escapeHtml(r.job.to)} in attesa di firma</span>`;
+    }
+    if (out) out.innerHTML = html;
+  } catch (e) {
+    if (out) out.innerHTML = `<span style="color:#b91c1c">${escapeHtml(e.message || 'Errore')}</span>`;
+  }
 }
 
 async function loadFatture() {

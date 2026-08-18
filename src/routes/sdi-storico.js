@@ -22,6 +22,11 @@ const {
   reprocessArchives,
   submitRequest
 } = require('../services/sdi-backfill');
+const {
+  runDailyReconciliation,
+  searchInvoice,
+  getReconciliationStatus
+} = require('../services/sdi-daily-reconciliation');
 
 // Backfill dello storico fatture dai Servizi Massivi.
 //
@@ -63,6 +68,54 @@ router.get('/stato', requirePermesso('fatture', 'read'), (req, res) => {
     payload.bloccante = error.message;
   }
   res.json(payload);
+});
+
+// --- Riconciliazione giornaliera di sicurezza -----------------------------
+//
+// Rete di sicurezza, non realtime. "Verifica SdI ora" fa a comando la stessa
+// passata dello scheduler: con firma manuale prepara le richieste e le lascia in
+// SIGNATURE_REQUIRED (niente rete finche' non firmi).
+
+router.post('/riconciliazione/verifica-ora', requirePermesso('fatture', 'edit'), async (req, res) => {
+  try {
+    const result = await runDailyReconciliation({
+      tenantId: currentTenantId(),
+      utenteId: req.user.id,
+      trigger: 'manual'
+    });
+    res.json(result);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+router.get('/riconciliazione/stato', requirePermesso('fatture', 'read'), (req, res) => {
+  try {
+    res.json(getReconciliationStatus({ tenantId: currentTenantId() }));
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Ricerca di una fattura attesa (qualunque controparte): dice se e' gia' nel CRM,
+// se e' arrivata da SdI, se non c'e', o se serve una firma SMTS per andarla a
+// prendere.
+router.post('/riconciliazione/cerca', requirePermesso('fatture', 'read'), (req, res) => {
+  const b = req.body || {};
+  try {
+    const result = searchInvoice({
+      tenantId: currentTenantId(),
+      ragioneSociale: b.ragione_sociale || b.ragioneSociale || null,
+      piva: b.piva || null,
+      dataDa: b.data_da || b.dataDa || null,
+      dataA: b.data_a || b.dataA || null,
+      importo: (b.importo !== undefined && b.importo !== null && b.importo !== '') ? Number(b.importo) : null,
+      direzione: b.direzione || null
+    });
+    res.json(result);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 // Pianifica le finestre temporali. L'intervallo massimo per richiesta e' tre

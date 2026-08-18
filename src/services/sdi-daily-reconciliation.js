@@ -207,8 +207,109 @@ async function runDailyReconciliation({
   return { runId, ...out };
 }
 
+// --- ricerca di una fattura attesa (generica, qualunque controparte) -------
+
+const SEARCH_STATES = {
+  PRESENT: 'PRESENTE NEL CRM',
+  IMPORTED_FROM_SDI: 'TROVATA SU SDI E IMPORTATA',
+  NOT_PRESENT: 'NON PRESENTE NEL CRM',
+  SIGNATURE_REQUIRED: 'RICHIESTA FIRMA SMTS'
+};
+
+function safeParse(json) {
+  try { return JSON.parse(json); } catch { return null; }
+}
+
+// Un job SMTS (riconciliazione o backfill) non concluso la cui finestra copre
+// l'intervallo cercato: se e' in attesa di firma, la fattura potrebbe arrivare
+// proprio da li'.
+function coveringPendingJob(tenantId, dataDa, dataA) {
+  const rows = db.prepare(`
+    SELECT * FROM sdi_historical_sync_job
+    WHERE tenant_id = ? AND request_type IN ('INCOMING','OUTGOING')
+      AND status NOT IN ('COMPLETED','FAILED','EXPIRED')
+    ORDER BY id DESC LIMIT 30
+  `).all(tenantId);
+  if (!dataDa && !dataA) return rows[0] || null;
+  return rows.find((j) => (!dataDa || j.date_from <= dataDa) && (!dataA || j.date_to >= dataA)) || null;
+}
+
+// Cerca una fattura per ragione sociale / P.IVA / intervallo date / importo
+// (tutti facoltativi). Vale per qualunque fattura, emessa o ricevuta.
+function searchInvoice({
+  tenantId = 1, ragioneSociale = null, piva = null,
+  dataDa = null, dataA = null, importo = null, direzione = null
+} = {}) {
+  const clauses = [];
+  const params = [];
+  if (direzione) {
+    clauses.push("COALESCE(f.direzione, CASE WHEN f.tipo = 'emessa' THEN 'attiva' ELSE 'passiva' END) = ?");
+    params.push(direzione);
+  }
+  if (piva) {
+    const p = String(piva).replace(/\s+/g, '');
+    clauses.push("(REPLACE(COALESCE(f.partita_iva,''),' ','') = ? OR REPLACE(COALESCE(f.codice_fiscale,''),' ','') = ? OR REPLACE(COALESCE(a.piva,''),' ','') = ? OR REPLACE(COALESCE(a.cf,''),' ','') = ?)");
+    params.push(p, p, p, p);
+  }
+  if (ragioneSociale) {
+    clauses.push("COALESCE(a.ragione_sociale, f.cliente_fornitore_label) LIKE ?");
+    params.push('%' + String(ragioneSociale).trim() + '%');
+  }
+  if (dataDa) { clauses.push("COALESCE(f.data, f.data_ricezione) >= ?"); params.push(dataDa); }
+  if (dataA) { clauses.push("COALESCE(f.data, f.data_ricezione) <= ?"); params.push(dataA); }
+
+  const sql = `
+    SELECT f.id, f.numero, f.numero_documento, f.data, f.data_ricezione, f.direzione, f.tipo,
+           f.totale, f.imponibile, f.iva, f.sdi_id, f.origine_importazione,
+           COALESCE(a.ragione_sociale, f.cliente_fornitore_label) AS controparte
+    FROM fatture f LEFT JOIN anagrafiche a ON a.id = f.anagrafica_id
+    ${clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''}
+    ORDER BY COALESCE(f.data, f.data_ricezione) DESC LIMIT 50
+  `;
+  let rows = db.prepare(sql).all(...params);
+
+  // Tolleranza importo: applicata dopo la query (1%, minimo 0,01).
+  if (importo !== null && importo !== '' && Number.isFinite(Number(importo))) {
+    const target = Number(importo);
+    const tol = Math.max(0.01, Math.abs(target) * 0.01);
+    rows = rows.filter((r) => r.totale != null && Math.abs(Number(r.totale) - target) <= tol);
+  }
+
+  if (rows.length) {
+    const daSdi = rows.every((r) => String(r.origine_importazione || '').toLowerCase().startsWith('sdi'));
+    const key = daSdi ? 'IMPORTED_FROM_SDI' : 'PRESENT';
+    return { stateKey: key, state: SEARCH_STATES[key], matches: rows };
+  }
+
+  const pending = coveringPendingJob(tenantId, dataDa, dataA);
+  if (pending) {
+    return {
+      stateKey: 'SIGNATURE_REQUIRED', state: SEARCH_STATES.SIGNATURE_REQUIRED, matches: [],
+      job: { id: pending.id, requestType: pending.request_type, from: pending.date_from, to: pending.date_to, status: pending.status }
+    };
+  }
+  return { stateKey: 'NOT_PRESENT', state: SEARCH_STATES.NOT_PRESENT, matches: [], canRequestSmts: true };
+}
+
+// Stato per la dashboard: ultima esecuzione + richieste in attesa di firma.
+function getReconciliationStatus({ tenantId = 1 } = {}) {
+  const lastRun = db.prepare('SELECT * FROM sdi_daily_reconciliation_run WHERE tenant_id = ? ORDER BY id DESC LIMIT 1').get(tenantId);
+  const pendingSignature = db.prepare(`
+    SELECT id, request_type, date_from, date_to, status
+    FROM sdi_historical_sync_job
+    WHERE tenant_id = ? AND status = 'CREATED' AND request_xml_path IS NOT NULL
+    ORDER BY id DESC LIMIT 20
+  `).all(tenantId);
+  return {
+    config: parseConfig(),
+    lastRun: lastRun ? { ...lastRun, summary: safeParse(lastRun.summary) } : null,
+    pendingSignature
+  };
+}
+
 module.exports = {
   DIRECTIONS,
+  SEARCH_STATES,
   parseConfig,
   computeWindow,
   toISODate,
@@ -217,6 +318,9 @@ module.exports = {
   mapCounters,
   pendingUnsignedJob,
   activeJobForWindow,
+  coveringPendingJob,
   runDirection,
-  runDailyReconciliation
+  runDailyReconciliation,
+  searchInvoice,
+  getReconciliationStatus
 };
