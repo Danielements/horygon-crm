@@ -23,3 +23,8 @@ services:
       - BASE_URL=${BASE_URL}
       - NODE_ENV=${NODE_ENV:-production}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+      # Riconciliazione giornaliera SdI: .env dell'host escluso dall'immagine
+      # (.dockerignore), quindi le variabili passano da qui.
+      - "SDI_DAILY_RECONCILIATION_ENABLED=${SDI_DAILY_RECONCILIATION_ENABLED:-false}"
+      - "SDI_DAILY_RECONCILIATION_CRON=${SDI_DAILY_RECONCILIATION_CRON:-0 6 * * *}"
+      - "SDI_DAILY_RECONCILIATION_LOOKBACK_DAYS=${SDI_DAILY_RECONCILIATION_LOOKBACK_DAYS:-7}"
