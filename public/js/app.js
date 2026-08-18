@@ -4008,6 +4008,7 @@ function ensureRiconciliazioneToolbar() {
         <button class="btn btn-accent btn-sm" onclick="verificaSdiRicezioneOra(this)" title="Riconciliazione di sicurezza: cerca su SdI le fatture non ancora nel CRM">&#128260; Verifica SdI ora</button>
         <span id="sdi-riconc-stato" style="font-size:12px;color:var(--text-muted)"></span>
       </div>
+      <div id="sdi-sync-overview" style="margin-top:8px;font-size:12px;color:var(--text-muted);line-height:1.6"></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:flex-end">
         <div class="form-group" style="margin:0"><label style="font-size:11px">Ragione sociale</label><input id="sdi-cerca-rs" type="text" placeholder="es. Bricofer"></div>
         <div class="form-group" style="margin:0"><label style="font-size:11px">P.IVA / CF</label><input id="sdi-cerca-piva" type="text" style="width:130px"></div>
@@ -4033,6 +4034,14 @@ async function caricaStatoRiconciliazione() {
     const last = st.lastRun ? `ultima verifica ${st.lastRun.creato_il}` : 'mai verificato';
     el.innerHTML = `Automatica ${st.config && st.config.enabled ? 'ON' : 'OFF'} · ${last}`
       + (pend ? ` · <strong style="color:#b45309">${pend} richieste da firmare</strong> (Storico SdI)` : '');
+    const ov = st.overview;
+    const so = document.getElementById('sdi-sync-overview');
+    if (so && ov) {
+      const v = (x) => x || 'mai';
+      so.innerHTML = `<strong>Ultima sincronizzazione SdI</strong><br>`
+        + `&#128229; Ricevute: ${ov.incoming.totali} tot · realtime ${v(ov.incoming.ultimoRealtime)} · reconciliation ${v(ov.incoming.ultimaReconciliation)}<br>`
+        + `&#128228; Emesse: ${ov.outgoing.totali} tot · trasmissione ${v(ov.outgoing.ultimaTrasmissione)} · reconciliation ${v(ov.outgoing.ultimaReconciliation)} · <strong>esterne importate ${ov.outgoing.esterneImportate}</strong>`;
+    }
   } catch { el.textContent = ''; }
 }
 

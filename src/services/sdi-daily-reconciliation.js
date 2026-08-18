@@ -333,7 +333,31 @@ function searchInvoice({
   return { stateKey: 'NOT_PRESENT', state: SEARCH_STATES.NOT_PRESENT, matches: [], canRequestSmts: true };
 }
 
-// Stato per la dashboard: ultima esecuzione + richieste in attesa di firma.
+// Panoramica "Ultima sincronizzazione SdI": ricevute (realtime + reconciliation)
+// ed emesse (trasmissione CRM + reconciliation + esterne importate).
+function getSyncOverview({ tenantId = 1 } = {}) {
+  const g = (sql, ...a) => db.prepare(sql).get(...a) || {};
+  const lastJobTo = (rt) => (g(
+    "SELECT MAX(date_to) AS m FROM sdi_historical_sync_job WHERE tenant_id = ? AND request_type = ? AND status IN ('COMPLETED','PARTIAL')",
+    tenantId, rt
+  ).m) || null;
+  return {
+    incoming: {
+      totali: g("SELECT COUNT(*) AS n FROM fatture WHERE direzione = 'passiva' OR tipo = 'ricevuta'").n || 0,
+      ultimoRealtime: g("SELECT MAX(creato_il) AS m FROM fatture WHERE (direzione = 'passiva' OR tipo = 'ricevuta') AND source = 'SDI_REALTIME'").m || null,
+      ultimaReconciliation: lastJobTo('INCOMING')
+    },
+    outgoing: {
+      totali: g("SELECT COUNT(*) AS n FROM fatture WHERE direzione = 'attiva' OR tipo = 'emessa'").n || 0,
+      ultimaTrasmissione: g("SELECT MAX(creato_il) AS m FROM fatture WHERE (direzione = 'attiva' OR tipo = 'emessa') AND source = 'CRM'").m || null,
+      ultimaReconciliation: lastJobTo('OUTGOING'),
+      esterneImportate: g("SELECT COUNT(*) AS n FROM fatture WHERE source = 'SDI_EXTERNAL'").n || 0
+    }
+  };
+}
+
+// Stato per la dashboard: ultima esecuzione + richieste in attesa di firma +
+// panoramica di sincronizzazione.
 function getReconciliationStatus({ tenantId = 1 } = {}) {
   const lastRun = db.prepare('SELECT * FROM sdi_daily_reconciliation_run WHERE tenant_id = ? ORDER BY id DESC LIMIT 1').get(tenantId);
   const pendingSignature = db.prepare(`
@@ -345,7 +369,8 @@ function getReconciliationStatus({ tenantId = 1 } = {}) {
   return {
     config: parseConfig(),
     lastRun: lastRun ? { ...lastRun, summary: safeParse(lastRun.summary) } : null,
-    pendingSignature
+    pendingSignature,
+    overview: getSyncOverview({ tenantId })
   };
 }
 
@@ -367,5 +392,6 @@ module.exports = {
   runDirection,
   runDailyReconciliation,
   searchInvoice,
-  getReconciliationStatus
+  getReconciliationStatus,
+  getSyncOverview
 };

@@ -23,7 +23,17 @@ const ARCHIVE_DIR = path.join(ROOT, 'uploads', 'sdi-storico');
 //   - una fattura importata dallo storico non e' piu' trasmissibile al SdI;
 //   - la stessa sincronizzazione ripetuta non crea duplicati.
 
-const SOURCES = new Set(['CRM', 'SDI_REALTIME', 'SDI_HISTORICAL_SYNC', 'SDI_MANUAL_IMPORT']);
+// SDI_EXTERNAL: una fattura EMESSA trovata su SdI ma non presente nel CRM, cioe'
+// emessa fuori dal CRM (gestionale del commercialista, Pass.go, portale AdE...).
+// Si importa come documento fiscale esistente, mai ritrasmissibile.
+const SOURCES = new Set(['CRM', 'SDI_REALTIME', 'SDI_HISTORICAL_SYNC', 'SDI_MANUAL_IMPORT', 'SDI_EXTERNAL']);
+
+// Una emessa (OUTGOING) importata da SdI ma non gia' nel CRM e' stata emessa
+// fuori dal CRM -> SDI_EXTERNAL. Le nostre (source CRM) e le ricevute restano
+// invariate. Isolata qui per essere testabile.
+function resolveImportSource(direction, source) {
+  return (direction === 'OUTGOING' && source !== 'CRM') ? 'SDI_EXTERNAL' : source;
+}
 
 // Ordine di ricerca del duplicato: dal criterio piu' forte al piu' debole.
 // Il nome file da solo non e' mai una chiave.
@@ -147,13 +157,19 @@ function importDocument({
     });
   }
 
+  // Una emessa presente su SdI ma non nel CRM e' stata emessa fuori dal CRM: la
+  // si marca SDI_EXTERNAL. Le emesse dal CRM sarebbero state deduplicate prima
+  // (match su IdentificativoSdI/hash) e non arriverebbero qui. Le ricevute e la
+  // source CRM restano come sono.
+  const effectiveSource = resolveImportSource(directionInfo.direction, source);
+
   const stored = persistOriginals({ tenantId, filename, unwrapped, originalSha256 });
   // Ogni documento e' atomico: un errore qui non travolge il resto dell'archivio.
   db.exec('BEGIN');
   let fatturaId;
   try {
     fatturaId = insertInvoice({
-      tenantId, parsed, direction: directionInfo.direction, source,
+      tenantId, parsed, direction: directionInfo.direction, source: effectiveSource,
       identificativoSdi, originalSha256, xmlSha256, filename, stored,
       counterparty: resolveCounterparty(directionInfo)
     });
@@ -427,5 +443,6 @@ module.exports = {
   DEDUP_LEVELS,
   SOURCES,
   documentIdentity,
-  importDocument
+  importDocument,
+  resolveImportSource
 };

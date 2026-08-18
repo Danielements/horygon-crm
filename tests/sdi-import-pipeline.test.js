@@ -110,7 +110,9 @@ test('una fattura storica viene importata e non e piu trasmissibile', () => {
   assert.equal(result.direction, 'OUTGOING');
 
   const row = db.prepare('SELECT * FROM fatture WHERE id = ?').get(result.fatturaId);
-  assert.equal(row.source, 'SDI_HISTORICAL_SYNC');
+  // Una EMESSA (OUTGOING) trovata su SdI ma non presente nel CRM e' stata emessa
+  // fuori dal CRM: viene marcata SDI_EXTERNAL (le nostre sarebbero deduplicate).
+  assert.equal(row.source, 'SDI_EXTERNAL');
   assert.equal(row.sdi_send_allowed, 0, 'una fattura storica non deve essere ritrasmettibile');
   assert.equal(row.tenant_id, TENANT);
   assert.equal(row.direzione, 'attiva');
