@@ -1029,6 +1029,73 @@ db.exec(`
   "tracciato_extra TEXT"
 ].forEach(col => ensureColumn('fatture', col));
 
+// Bollo virtuale: obbligo dichiarato per fattura, versamento trimestrale
+// aggregato (non un pagamento da 2 EUR per fattura).
+[
+  "bollo_dovuto INTEGER DEFAULT 0",
+  "bollo_dichiarato INTEGER DEFAULT 0",
+  "bollo_importo REAL DEFAULT 0",
+  "bollo_trimestre TEXT",
+  "bollo_fonte TEXT",              // CRM | XML | ADE_LIST_A | ADE_LIST_B
+  "bollo_settlement_id INTEGER",
+  "bollo_stato TEXT DEFAULT 'NOT_REQUIRED'"
+].forEach(col => ensureColumn('fatture', col));
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS stamp_duty_settlement (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER DEFAULT 1,
+    year INTEGER NOT NULL,
+    quarter TEXT NOT NULL,
+    calculated_amount REAL DEFAULT 0,
+    official_ade_amount REAL,
+    due_date TEXT,
+    status TEXT DEFAULT 'OPEN',
+    payment_method TEXT,
+    paid_at TEXT,
+    tax_code TEXT,
+    bank_transaction_id INTEGER,
+    receipt_path TEXT,
+    notes TEXT,
+    creato_il TEXT DEFAULT (datetime('now')),
+    aggiornato_il TEXT DEFAULT (datetime('now')),
+    UNIQUE (tenant_id, year, quarter)
+  );
+
+  CREATE TABLE IF NOT EXISTS stamp_duty_rule (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nature_code TEXT,
+    document_type TEXT,
+    fiscal_regime TEXT,
+    threshold REAL,
+    required INTEGER DEFAULT 1,
+    amount REAL DEFAULT 2.00,
+    exclusion_code TEXT,
+    legal_reference TEXT,
+    valid_from TEXT,
+    valid_to TEXT,
+    attiva INTEGER DEFAULT 1,
+    priorita INTEGER DEFAULT 0,
+    note_uso TEXT,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+`);
+
+// Seed di una regola di default, idempotente. Il bollo di 2,00 EUR e' dovuto
+// sugli importi non soggetti/esenti/non imponibili/esclusi oltre 77,47 EUR (DPR
+// 642/1972 art. 13; DM 17/06/2014), esclusi reverse charge (N6.*) e N7.
+// I casi N3 (esportazioni/intra) vanno confermati col commercialista: le regole
+// sono modificabili, non cablate nel codice.
+try {
+  const has = db.prepare("SELECT 1 FROM stamp_duty_rule WHERE legal_reference = 'DPR 642/1972 art.13; DM 17/06/2014' LIMIT 1").get();
+  if (!has) {
+    db.prepare(`INSERT INTO stamp_duty_rule
+      (nature_code, threshold, required, amount, exclusion_code, legal_reference, note_uso)
+      VALUES (NULL, 77.47, 1, 2.00, 'N6,N7', 'DPR 642/1972 art.13; DM 17/06/2014',
+      'Bollo sugli importi non soggetti/esenti/non imponibili oltre soglia; esclusi reverse charge (N6.*) e N7. Verificare i casi N3 export/intra.')`).run();
+  }
+} catch {}
+
 [
   "tenant_id INTEGER DEFAULT 1",
   "unita_misura TEXT",
