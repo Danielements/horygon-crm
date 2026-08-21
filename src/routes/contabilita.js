@@ -17,6 +17,7 @@ const commercialista = require('../services/commercialista-service');
 const auto = require('../services/automazione-service');
 const aiProvider = require('../services/ai-provider');
 const bankAi = require('../services/bank-ai-extraction');
+const receiptAi = require('../services/receipt-ai-extraction');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -448,6 +449,26 @@ router.delete('/nota-manuale/:id', canDelete, (req, res) => {
 router.get('/spese', canRead, (req, res) => {
   try { res.json({ spese: spese.listSpese({ stato: req.query.stato, dal: req.query.dal, al: req.query.al, categoria_id: req.query.categoria_id }) }); }
   catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Analizza una foto/PDF di scontrino/ricevuta con l'AI e restituisce i campi
+// per autocompilare la spesa. NON salva: l'utente rivede e conferma.
+router.post('/spese/analizza', canEdit, upload.single('file'), async (req, res) => {
+  try {
+    if (!aiProvider.isEnabled()) throw new Error('Estrazione AI non disponibile (chiave assente o disattivata)');
+    if (!req.file) throw new Error('File mancante');
+    const buf = fs.readFileSync(req.file.path);
+    const mime = (req.file.mimetype === 'application/pdf' || (req.file.mimetype || '').startsWith('image/')) ? req.file.mimetype : 'image/jpeg';
+    const campi = await receiptAi.extractReceipt(buf, { mime, filename: req.file.originalname });
+    // Il file dell'analisi e' temporaneo: il salvataggio spesa ricarica il file.
+    try { fs.unlinkSync(req.file.path); } catch {}
+    writeAudit({ utente_id: req.user.id, azione: 'contabilita.spesa.analizza-ai', entita_tipo: 'file', entita_id: null, dettagli: { totale: campi.totale } });
+    res.json({ campi });
+  } catch (e) {
+    try { if (req.file) fs.unlinkSync(req.file.path); } catch {}
+    try { db.prepare(`INSERT INTO system_log (livello, origine, messaggio, dettagli) VALUES ('error','contabilita-spesa-ai',?,?)`).run(e.message, JSON.stringify({ file: req.file && req.file.originalname })); } catch {}
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // Crea una spesa. Il documento (foto/PDF) e' opzionale: se presente viene

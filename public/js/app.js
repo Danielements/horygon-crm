@@ -4851,9 +4851,11 @@ async function contRenderSpese(el) {
 }
 
 async function contNuovaSpesa() {
-  const [catR, cenR, comR] = await Promise.all([
-    api('GET', '/contabilita/categorie'), api('GET', '/contabilita/centri-costo'), api('GET', '/contabilita/commesse')
+  const [catR, cenR, comR, aiR] = await Promise.all([
+    api('GET', '/contabilita/categorie'), api('GET', '/contabilita/centri-costo'), api('GET', '/contabilita/commesse'),
+    api('GET', '/contabilita/banca/ai-stato').catch(() => ({ abilitata: false }))
   ]);
+  const aiOn = !!aiR.abilitata;
   const opt = (list, blank) => `<option value="">${blank}</option>` + (list || []).map(o => `<option value="${o.id}">${escapeHtml(o.nome)}</option>`).join('');
   const body = `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
@@ -4868,8 +4870,9 @@ async function contNuovaSpesa() {
       <label style="font-size:13px">Categoria<select id="sp-cat" class="btn btn-outline" style="width:100%">${opt(catR.categorie.filter(c=>c.attiva), '—')}</select></label>
       <label style="font-size:13px">Centro<select id="sp-cen" class="btn btn-outline" style="width:100%">${opt(cenR.centri.filter(c=>c.attivo), '—')}</select></label>
       <label style="font-size:13px">Commessa<select id="sp-com" class="btn btn-outline" style="width:100%">${opt(comR.commesse, '—')}</select></label>
-      <label style="font-size:13px">Documento (foto/PDF)<input id="sp-file" type="file" accept="image/*,application/pdf" capture="environment" style="width:100%"></label>
+      <label style="font-size:13px">Documento (foto/PDF)<input id="sp-file" type="file" accept="image/*,application/pdf" capture="environment" style="width:100%"${aiOn ? ' onchange="document.getElementById(\'sp-ai-btn\').style.display=this.files.length?\'inline-block\':\'none\'"' : ''}></label>
     </div>
+    ${aiOn ? `<button id="sp-ai-btn" class="btn btn-accent btn-sm" style="display:none;margin-top:8px" onclick="contAnalizzaSpesaAI()">✨ Analizza con AI e compila</button>` : ''}
     <label style="display:block;font-size:13px;margin-top:8px">Note<input id="sp-note" type="text" style="width:100%;padding:6px;box-sizing:border-box"></label>`;
   const ok = await contDialog('Nuova spesa', null, body);
   if (!ok) return;
@@ -4884,6 +4887,29 @@ async function contNuovaSpesa() {
   if (file) fd.append('file', file);
   try { await apiForm('POST', '/contabilita/spese', fd); toast('Spesa registrata', 'success'); contRenderTab(); }
   catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+// OCR: manda la foto/PDF selezionato all'AI e precompila i campi. L'utente
+// rivede e conferma prima di salvare (l'AI e' un suggerimento).
+async function contAnalizzaSpesaAI() {
+  const fileInput = document.getElementById('sp-file');
+  const file = fileInput && fileInput.files[0];
+  if (!file) return toast('Scegli prima una foto o un PDF', 'error');
+  const stop = contLoadingOverlay('Lettura del documento con l\'AI in corso…\nUn attimo.');
+  const fd = new FormData(); fd.append('file', file);
+  let r;
+  try { r = await apiForm('POST', '/contabilita/spese/analizza', fd); }
+  catch (e) { stop(); return toast(e.message || 'Analisi fallita', 'error'); }
+  stop();
+  const c = r.campi || {};
+  const setIf = (id, val) => { if (val != null && val !== '') { const el = document.getElementById(id); if (el) el.value = val; } };
+  setIf('sp-data', c.data);
+  setIf('sp-fornitore', c.fornitore_nome);
+  setIf('sp-numero', c.numero_documento);
+  setIf('sp-imponibile', c.imponibile);
+  setIf('sp-iva', c.iva);
+  setIf('sp-totale', c.totale);
+  toast('Campi compilati dall\'AI — controlla e salva', 'success');
 }
 
 async function contApriDocumentoSpesa(id) {
@@ -5220,13 +5246,26 @@ function contCrudList(titolo, items, labelFn, editable, editFn, delFn, headerBtn
 // Dialog generico a promessa: `fields` (array) genera un form, oppure `bodyHtml`
 // per contenuto custom. Risolve con i valori (o true per bodyHtml) su Salva,
 // null su Annulla.
+// Colori tema espliciti per i popup: le variabili --bg-card ecc. sono su
+// body.theme-light/.theme-dark; se la classe manca (timing/mobile) var() e'
+// indefinito e lo sfondo diventa trasparente. Qui calcoliamo i colori a mano,
+// dalla classe tema o, in mancanza, da prefers-color-scheme.
+function contThemeColors() {
+  const b = document.body.classList;
+  const dark = b.contains('theme-dark') || (!b.contains('theme-light') && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  return dark
+    ? { bg: '#161b22', fg: '#e6edf3', border: '#30363d', input: '#0d1117', muted: '#9ea7bd' }
+    : { bg: '#ffffff', fg: '#1e293b', border: '#e2e8f0', input: '#f8fafc', muted: '#64748b' };
+}
+
 // Overlay bloccante di caricamento. Ritorna una funzione per chiuderlo.
 function contLoadingOverlay(testo) {
+  const c = contThemeColors();
   const ov = document.createElement('div');
   ov.className = 'cont-loading-overlay';
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px';
-  ov.innerHTML = `<div style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:12px;padding:24px 28px;text-align:center;box-shadow:0 12px 48px rgba(0,0,0,.4);max-width:420px">
-    <div class="cont-spinner" style="width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--accent,#2563eb);border-radius:50%;margin:0 auto 14px;animation:contspin .8s linear infinite"></div>
+  ov.innerHTML = `<div style="background:${c.bg};color:${c.fg};border:1px solid ${c.border};border-radius:12px;padding:24px 28px;text-align:center;box-shadow:0 12px 48px rgba(0,0,0,.4);max-width:420px;white-space:pre-line">
+    <div class="cont-spinner" style="width:32px;height:32px;border:3px solid ${c.border};border-top-color:var(--accent,#2563eb);border-radius:50%;margin:0 auto 14px;animation:contspin .8s linear infinite"></div>
     <div style="font-size:14px">${escapeHtml(testo || 'Attendere…')}</div></div>`;
   if (!document.getElementById('cont-spin-style')) {
     const st = document.createElement('style'); st.id = 'cont-spin-style';
@@ -5239,17 +5278,18 @@ function contLoadingOverlay(testo) {
 
 function contDialog(titolo, fields, bodyHtml) {
   return new Promise(resolve => {
+    const c = contThemeColors();
     const ov = document.createElement('div');
     ov.className = 'cont-dialog-overlay';
-    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
-    const inputStyle = 'width:100%;display:block;margin-top:4px;padding:8px;box-sizing:border-box;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:14px';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+    const inputStyle = `width:100%;display:block;margin-top:4px;padding:8px;box-sizing:border-box;background:${c.input};color:${c.fg};border:1px solid ${c.border};border-radius:6px;font-size:14px`;
     const form = fields ? fields.map(f => {
       if (f.type === 'select') return `<label style="display:block;margin-bottom:10px;font-size:13px">${escapeHtml(f.label)}
         <select data-key="${f.key}" style="${inputStyle}">${f.options.map(o => `<option value="${o}"${f.value===o?' selected':''}>${o}</option>`).join('')}</select></label>`;
       return `<label style="display:block;margin-bottom:10px;font-size:13px">${escapeHtml(f.label)}
         <input data-key="${f.key}" type="${f.type || 'text'}" value="${f.value != null ? escapeAttr(String(f.value)) : ''}" placeholder="${f.placeholder ? escapeAttr(f.placeholder) : ''}" style="${inputStyle}"${f.type==='number'?' step="0.01"':''}></label>`;
     }).join('') : (bodyHtml || '');
-    ov.innerHTML = `<div style="max-width:640px;width:100%;padding:18px;max-height:88vh;overflow:auto;background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:12px;box-shadow:0 12px 48px rgba(0,0,0,.4)">
+    ov.innerHTML = `<div style="max-width:640px;width:100%;padding:18px;max-height:88vh;overflow:auto;background:${c.bg};color:${c.fg};border:1px solid ${c.border};border-radius:12px;box-shadow:0 12px 48px rgba(0,0,0,.4)">
       <h3 style="margin:0 0 14px">${escapeHtml(titolo)}</h3>
       <div id="cont-dialog-body">${form}</div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
