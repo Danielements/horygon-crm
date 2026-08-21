@@ -29,10 +29,16 @@ approvare prima di partire con la Fase A.
   route `/scadenze`, `/prima-nota` (+ export CSV), `/cashflow`, `/anomalie`,
   `/nota-manuale`; tab Scadenze/Prima nota/Cash flow/Anomalie;
   `tests/gestione.test.js`.
-- Fasi D–F: da fare. **Fase D (Spese mobile + AI)** dipende da una scelta
-  esterna: disponibilita `OPENAI_API_KEY` e modello vision; il resto (upload,
-  storage, inserimento manuale, match banca) e' fattibile senza AI, con
-  kill-switch e fallback manuale (upload mai bloccato).
+- **Fase D (core) — Spese documentate e manuali: FATTA** (2026-08-21, commit
+  `655a991`). Scelta operativa: **niente estrazione AI**, inserimento manuale
+  (Daniele inserisce i costi a mano; l'allegato foto/PDF e' opzionale).
+  Consegnato: `cont_documenti` (sha256, originale intoccabile) + `cont_spese`;
+  `spese-service.js` (validazione, magic bytes, CRUD); spese in prima nota +
+  KPI dashboard; route `/spese` (+ download documento); tab Spese;
+  `tests/spese.test.js`. **Estrazione AI (OCR) rinviata**: l'adapter e i campi
+  con confidence restano da fare se e quando servira'.
+- Fasi E–F: da fare. E (anticipi/rimborsi/budget/report), F (commercialista:
+  checklist mese + export ZIP/XLSX).
 
 Principi fissati dalla specifica, che vincolano tutto il resto:
 
