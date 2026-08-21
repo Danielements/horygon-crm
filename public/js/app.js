@@ -4518,12 +4518,12 @@ async function contImportBancaPdf() {
   input.type = 'file'; input.accept = '.pdf,application/pdf,image/*';
   input.onchange = async () => {
     const file = input.files[0]; if (!file) return;
-    const box = document.getElementById('cont-content');
-    toast('Analizzo il PDF con l\'AI…', 'info');
+    const stopLoading = contLoadingOverlay('Analisi del PDF con l\'AI in corso…\nPuò richiedere una quindicina di secondi.');
     const fd = new FormData(); fd.append('file', file);
     let r;
     try { r = await apiForm('POST', '/contabilita/banca/pdf-analizza', fd); }
-    catch (e) { return toast(e.message || 'Analisi fallita', 'error'); }
+    catch (e) { stopLoading(); return toast(e.message || 'Analisi fallita', 'error'); }
+    stopLoading();
     const movs = r.movimenti || [], v = r.verifica || {};
     const bannerColor = v.coerente ? 'var(--success,#16a34a)' : 'var(--danger,#dc2626)';
     const bannerTxt = v.coerente
@@ -5220,25 +5220,45 @@ function contCrudList(titolo, items, labelFn, editable, editFn, delFn, headerBtn
 // Dialog generico a promessa: `fields` (array) genera un form, oppure `bodyHtml`
 // per contenuto custom. Risolve con i valori (o true per bodyHtml) su Salva,
 // null su Annulla.
+// Overlay bloccante di caricamento. Ritorna una funzione per chiuderlo.
+function contLoadingOverlay(testo) {
+  const ov = document.createElement('div');
+  ov.className = 'cont-loading-overlay';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.innerHTML = `<div style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:12px;padding:24px 28px;text-align:center;box-shadow:0 12px 48px rgba(0,0,0,.4);max-width:420px">
+    <div class="cont-spinner" style="width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--accent,#2563eb);border-radius:50%;margin:0 auto 14px;animation:contspin .8s linear infinite"></div>
+    <div style="font-size:14px">${escapeHtml(testo || 'Attendere…')}</div></div>`;
+  if (!document.getElementById('cont-spin-style')) {
+    const st = document.createElement('style'); st.id = 'cont-spin-style';
+    st.textContent = '@keyframes contspin{to{transform:rotate(360deg)}}';
+    document.head.appendChild(st);
+  }
+  document.body.appendChild(ov);
+  return () => ov.remove();
+}
+
 function contDialog(titolo, fields, bodyHtml) {
   return new Promise(resolve => {
     const ov = document.createElement('div');
     ov.className = 'cont-dialog-overlay';
     ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+    const inputStyle = 'width:100%;display:block;margin-top:4px;padding:8px;box-sizing:border-box;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:14px';
     const form = fields ? fields.map(f => {
       if (f.type === 'select') return `<label style="display:block;margin-bottom:10px;font-size:13px">${escapeHtml(f.label)}
-        <select data-key="${f.key}" class="btn btn-outline" style="width:100%;display:block;margin-top:4px">${f.options.map(o => `<option value="${o}"${f.value===o?' selected':''}>${o}</option>`).join('')}</select></label>`;
+        <select data-key="${f.key}" style="${inputStyle}">${f.options.map(o => `<option value="${o}"${f.value===o?' selected':''}>${o}</option>`).join('')}</select></label>`;
       return `<label style="display:block;margin-bottom:10px;font-size:13px">${escapeHtml(f.label)}
-        <input data-key="${f.key}" type="${f.type || 'text'}" value="${f.value != null ? escapeAttr(String(f.value)) : ''}" placeholder="${f.placeholder ? escapeAttr(f.placeholder) : ''}" style="width:100%;display:block;margin-top:4px;padding:8px;box-sizing:border-box"${f.type==='number'?' step="0.01"':''}></label>`;
+        <input data-key="${f.key}" type="${f.type || 'text'}" value="${f.value != null ? escapeAttr(String(f.value)) : ''}" placeholder="${f.placeholder ? escapeAttr(f.placeholder) : ''}" style="${inputStyle}"${f.type==='number'?' step="0.01"':''}></label>`;
     }).join('') : (bodyHtml || '');
-    ov.innerHTML = `<div class="card" style="max-width:640px;width:100%;padding:18px;max-height:88vh;overflow:auto">
+    ov.innerHTML = `<div style="max-width:640px;width:100%;padding:18px;max-height:88vh;overflow:auto;background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:12px;box-shadow:0 12px 48px rgba(0,0,0,.4)">
       <h3 style="margin:0 0 14px">${escapeHtml(titolo)}</h3>
       <div id="cont-dialog-body">${form}</div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
         <button class="btn btn-outline" data-act="cancel">Annulla</button>
         <button class="btn btn-accent" data-act="ok">Salva</button>
       </div></div>`;
-    const done = (val) => { ov.remove(); resolve(val); };
+    // La rimozione dell'overlay e' differita: cosi' il codice che chiama fa in
+    // tempo a leggere i campi del body prima che il dialog sparisca dal DOM.
+    const done = (val) => { resolve(val); setTimeout(() => ov.remove(), 0); };
     ov.querySelector('[data-act="cancel"]').onclick = () => done(null);
     ov.querySelector('[data-act="ok"]').onclick = () => {
       if (!fields) return done(true);
