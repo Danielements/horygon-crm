@@ -23,8 +23,16 @@ approvare prima di partire con la Fase A.
   riconciliazione parziale e uno-a-molti che riusa i pagamenti Fase A);
   route conti/template/banca(preview+import)/movimenti/riconciliazione; tab
   Banca (wizard import con template) e Riconciliazione; `tests/bank.test.js`.
-- **Fase C — Flussi gestionali: IN CORSO.**
-- Fasi D–F: da fare.
+- **Fase C — Flussi gestionali: FATTA** (2026-08-21, commit `2567f2b`).
+  Consegnato: `cont_nota_manuale`; `gestione-service.js` (scadenzario a bucket,
+  prima nota come vista cronologica con saldo, cash flow mensile, anomalie);
+  route `/scadenze`, `/prima-nota` (+ export CSV), `/cashflow`, `/anomalie`,
+  `/nota-manuale`; tab Scadenze/Prima nota/Cash flow/Anomalie;
+  `tests/gestione.test.js`.
+- Fasi D–F: da fare. **Fase D (Spese mobile + AI)** dipende da una scelta
+  esterna: disponibilita `OPENAI_API_KEY` e modello vision; il resto (upload,
+  storage, inserimento manuale, match banca) e' fattibile senza AI, con
+  kill-switch e fallback manuale (upload mai bloccato).
 
 Principi fissati dalla specifica, che vincolano tutto il resto:
 
