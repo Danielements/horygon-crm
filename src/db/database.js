@@ -1328,6 +1328,47 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_cont_spese_data ON cont_spese(data);
 `);
 
+// --- Contabilita Fase E: anticipi, rimborsi, budget ------------------------
+// Nota spese (rimborso) che aggrega spese pagate con anticipo personale; budget
+// per periodo e dimensione (categoria/centro/commessa) per il controllo di
+// gestione (consuntivo vs budget).
+[
+  "rimborso_id INTEGER",
+  "utente_anticipo TEXT"     // chi ha anticipato (nome o riferimento)
+].forEach(col => ensureColumn('cont_spese', col));
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS cont_rimborsi (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER DEFAULT 1,
+    beneficiario TEXT,                   -- a chi va il rimborso
+    utente_id INTEGER,                   -- eventuale utente interno collegato
+    periodo TEXT,                        -- etichetta libera (es. 2026-08)
+    totale REAL DEFAULT 0,               -- derivato dalle spese collegate
+    stato TEXT DEFAULT 'DRAFT',          -- DRAFT | TO_REVIEW | APPROVED | PAID
+    approvato_da INTEGER,
+    pagato_il TEXT,
+    pagamento_id INTEGER,                -- l'uscita generata al pagamento
+    note TEXT,
+    creato_da INTEGER,
+    creato_il TEXT DEFAULT (datetime('now')),
+    aggiornato_il TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS cont_budget (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER DEFAULT 1,
+    periodo TEXT NOT NULL,               -- 'YYYY' o 'YYYY-MM'
+    categoria_id INTEGER,
+    centro_costo_id INTEGER,
+    commessa_id INTEGER,
+    importo_budget REAL NOT NULL,
+    note TEXT,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_cont_budget_periodo ON cont_budget(periodo);
+`);
+
 [
   "tenant_id INTEGER DEFAULT 1",
   "unita_misura TEXT",

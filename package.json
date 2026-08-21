@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "test": "node --test --test-concurrency=1 --test-force-exit tests/outbound.test.js tests/iva.test.js tests/sdi.test.js tests/sdi-produzione.test.js tests/safe-zip-reader.test.js tests/sdi-massive.test.js tests/sdi-historical-sync.test.js tests/sdi-import-pipeline.test.js tests/sdi-messaggi-reali.test.js tests/sdi-firma-esterna.test.js tests/sdi-backfill.test.js tests/sdi-daily-reconciliation.test.js tests/log-sanitize.test.js tests/sdi-import-source.test.js tests/stamp-duty.test.js tests/contabilita.test.js tests/bank.test.js tests/gestione.test.js tests/spese.test.js"
+    "test": "node --test --test-concurrency=1 --test-force-exit tests/outbound.test.js tests/iva.test.js tests/sdi.test.js tests/sdi-produzione.test.js tests/safe-zip-reader.test.js tests/sdi-massive.test.js tests/sdi-historical-sync.test.js tests/sdi-import-pipeline.test.js tests/sdi-messaggi-reali.test.js tests/sdi-firma-esterna.test.js tests/sdi-backfill.test.js tests/sdi-daily-reconciliation.test.js tests/log-sanitize.test.js tests/sdi-import-source.test.js tests/stamp-duty.test.js tests/contabilita.test.js tests/bank.test.js tests/gestione.test.js tests/spese.test.js tests/controllo.test.js"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",

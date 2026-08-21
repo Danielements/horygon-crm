@@ -12,6 +12,7 @@ const cont = require('../services/contabilita-service');
 const bank = require('../services/bank-service');
 const gest = require('../services/gestione-service');
 const spese = require('../services/spese-service');
+const ctrl = require('../services/controllo-service');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -456,6 +457,68 @@ router.get('/spese/:id/documento', canRead, (req, res) => {
     res.setHeader('Content-Disposition', `inline; filename="${(doc.original_filename || 'documento').replace(/[^\w.\-]/g, '_')}"`);
     fs.createReadStream(doc.path).pipe(res);
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ===========================================================================
+// Fase E — Anticipi, rimborsi (nota spese), budget, controllo di gestione
+// ===========================================================================
+
+// --- Rimborsi --------------------------------------------------------------
+router.get('/rimborsi', canRead, (req, res) => {
+  try { res.json({ rimborsi: ctrl.listRimborsi() }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.get('/rimborsi/anticipi-disponibili', canRead, (req, res) => {
+  try { res.json({ spese: ctrl.anticipoDisponibili() }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.get('/rimborsi/:id', canRead, (req, res) => {
+  try { res.json(ctrl.getRimborso(Number(req.params.id))); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.post('/rimborsi', canEdit, (req, res) => {
+  try {
+    const r = ctrl.createRimborso(req.body || {}, req.user.id);
+    writeAudit({ utente_id: req.user.id, azione: 'contabilita.rimborso.crea', entita_tipo: 'cont_rimborso', entita_id: r.id, dettagli: {} });
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.post('/rimborsi/:id/spese', canEdit, (req, res) => {
+  try { res.json(ctrl.attachSpese(Number(req.params.id), (req.body || {}).spese_ids || [])); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.delete('/rimborsi/:id/spese/:spesaId', canEdit, (req, res) => {
+  try { res.json(ctrl.detachSpesa(Number(req.params.id), Number(req.params.spesaId))); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.post('/rimborsi/:id/stato', canEdit, (req, res) => {
+  const b = req.body || {};
+  try {
+    const r = ctrl.transitionRimborso(Number(req.params.id), b.stato, req.user.id, { pagato_il: b.pagato_il, metodo: b.metodo });
+    writeAudit({ utente_id: req.user.id, azione: 'contabilita.rimborso.stato', entita_tipo: 'cont_rimborso', entita_id: Number(req.params.id), dettagli: { stato: b.stato } });
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// --- Budget e report gestionale --------------------------------------------
+router.get('/budget', canRead, (req, res) => {
+  try { res.json({ budget: ctrl.listBudget(req.query.periodo) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.post('/budget', canEdit, (req, res) => {
+  try {
+    const r = ctrl.createBudget(req.body || {});
+    writeAudit({ utente_id: req.user.id, azione: 'contabilita.budget.crea', entita_tipo: 'cont_budget', entita_id: r.id, dettagli: {} });
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.delete('/budget/:id', canDelete, (req, res) => {
+  try { res.json(ctrl.deleteBudget(Number(req.params.id))); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.get('/report-gestionale', canRead, (req, res) => {
+  try { res.json(ctrl.reportGestionale(req.query.periodo)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // ===========================================================================

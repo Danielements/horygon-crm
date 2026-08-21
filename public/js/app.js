@@ -4208,6 +4208,7 @@ async function riconciliaSettlement(id) {
 const CONT_STATE = { tab: 'dashboard', anno: String(new Date().getFullYear()), fatturaFiltri: { direzione: '', stato_pagamento: '' } };
 
 function contShowTab(tab) {
+  if (tab !== CONT_STATE.tab) CONT_STATE.rimborsoId = null;
   CONT_STATE.tab = tab;
   document.querySelectorAll('#cont-tabs .cont-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   contRenderTab();
@@ -4237,6 +4238,8 @@ async function contRenderTab() {
     if (CONT_STATE.tab === 'prima-nota') return contRenderPrimaNota(el);
     if (CONT_STATE.tab === 'cashflow') return contRenderCashflow(el);
     if (CONT_STATE.tab === 'spese') return contRenderSpese(el);
+    if (CONT_STATE.tab === 'rimborsi') return contRenderRimborsi(el);
+    if (CONT_STATE.tab === 'budget') return contRenderBudget(el);
     if (CONT_STATE.tab === 'anomalie') return contRenderAnomalie(el);
     if (CONT_STATE.tab === 'centri') return contRenderCentri(el);
     if (CONT_STATE.tab === 'commesse') return contRenderCommesse(el);
@@ -4737,6 +4740,164 @@ async function contApriDocumentoSpesa(id) {
 async function contEliminaSpesa(id) {
   if (!confirm('Eliminare questa spesa? L\'eventuale documento allegato resta archiviato.')) return;
   try { await api('DELETE', `/contabilita/spese/${id}`); contRenderTab(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+// --- Rimborsi (nota spese) -------------------------------------------------
+const CONT_RIMB_STATO = { DRAFT: ['Bozza', 'badge-cliente'], TO_REVIEW: ['In revisione', 'badge-cliente'], APPROVED: ['Approvata', 'badge-pagata'], PAID: ['Pagata', 'badge-pagata'] };
+
+async function contRenderRimborsi(el) {
+  if (CONT_STATE.rimborsoId) return contRenderRimborsoDettaglio(el, CONT_STATE.rimborsoId);
+  const editable = canEditSection('contabilita');
+  const r = await api('GET', '/contabilita/rimborsi');
+  const rows = (r.rimborsi || []).map(x => {
+    const [lab, cls] = CONT_RIMB_STATO[x.stato] || [x.stato, 'badge-cliente'];
+    return `<tr style="cursor:pointer" onclick="CONT_STATE.rimborsoId=${x.id};contRenderTab()">
+      <td>${escapeHtml(x.beneficiario || '-')}</td>
+      <td>${escapeHtml(x.periodo || '-')}</td>
+      <td>${x.n_spese} spese</td>
+      <td style="text-align:right">${formatCurrencyIt(x.totale)}</td>
+      <td><span class="badge ${cls}">${lab}</span></td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="5" style="color:var(--text-muted)">Nessuna nota spese</td></tr>';
+  el.innerHTML = `
+    <p style="font-size:12px;color:var(--text-muted);margin:0 0 10px">Le note spese aggregano le spese pagate con <strong>anticipo personale</strong> (con ricevuta allegata sulla spesa). Flusso: Bozza → In revisione → Approvata → Pagata.</p>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:10px">${editable ? `<button class="btn btn-accent btn-sm" onclick="contNuovoRimborso()">+ Nuova nota spese</button>` : ''}</div>
+    <div class="table-wrapper"><table class="data-table">
+      <thead><tr><th>Beneficiario</th><th>Periodo</th><th>Spese</th><th style="text-align:right">Totale</th><th>Stato</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+}
+
+async function contNuovoRimborso() {
+  const vals = await contDialog('Nuova nota spese', [
+    { key: 'beneficiario', label: 'Beneficiario (chi ha anticipato)', type: 'text' },
+    { key: 'periodo', label: 'Periodo (es. 2026-08)', type: 'text' }
+  ]);
+  if (!vals || !vals.beneficiario) return;
+  try { const r = await api('POST', '/contabilita/rimborsi', vals); CONT_STATE.rimborsoId = r.id; contRenderTab(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+async function contRenderRimborsoDettaglio(el, id) {
+  const editable = canEditSection('contabilita');
+  const [r, dispR] = await Promise.all([api('GET', `/contabilita/rimborsi/${id}`), api('GET', '/contabilita/rimborsi/anticipi-disponibili')]);
+  const [lab, cls] = CONT_RIMB_STATO[r.stato] || [r.stato, 'badge-cliente'];
+  const isDraft = r.stato === 'DRAFT';
+  const speseRows = (r.spese || []).map(s => `<tr>
+      <td>${formatDateIt(s.data)}</td>
+      <td>${escapeHtml(s.fornitore_nome || '-')}${s.documento_id ? ' 📎' : ''}</td>
+      <td style="text-align:right">${formatCurrencyIt(s.totale)}</td>
+      <td>${isDraft && editable ? `<button class="btn btn-outline btn-sm" onclick="contRimbDetach(${id},${s.id})">Togli</button>` : ''}</td>
+    </tr>`).join('') || '<tr><td colspan="4" style="color:var(--text-muted)">Nessuna spesa collegata</td></tr>';
+  const disp = dispR.spese || [];
+  const aggiungibili = isDraft && editable && disp.length ? `
+    <div class="card" style="padding:10px;margin-top:12px">
+      <strong style="font-size:13px">Spese anticipo disponibili</strong>
+      <div style="margin-top:8px">${disp.map(s => `<label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:2px 0">
+        <input type="checkbox" class="rimb-disp" value="${s.id}"> ${formatDateIt(s.data)} · ${escapeHtml(s.fornitore_nome || '-')} · ${formatCurrencyIt(s.totale)}</label>`).join('')}</div>
+      <button class="btn btn-outline btn-sm" style="margin-top:8px" onclick="contRimbAttach(${id})">Aggiungi selezionate</button>
+    </div>` : '';
+  const azioni = editable ? {
+    DRAFT: `<button class="btn btn-accent btn-sm" onclick="contRimbStato(${id},'TO_REVIEW')">Invia in revisione</button>`,
+    TO_REVIEW: `<button class="btn btn-accent btn-sm" onclick="contRimbStato(${id},'APPROVED')">Approva</button> <button class="btn btn-outline btn-sm" onclick="contRimbStato(${id},'DRAFT')">Rimetti in bozza</button>`,
+    APPROVED: `<button class="btn btn-accent btn-sm" onclick="contRimbStato(${id},'PAID')">Segna pagata</button>`,
+    PAID: '<span style="color:var(--text-muted);font-size:12px">Rimborso pagato' + (r.pagato_il ? ' il ' + formatDateIt(r.pagato_il) : '') + '</span>'
+  }[r.stato] : '';
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+      <button class="btn btn-outline btn-sm" onclick="CONT_STATE.rimborsoId=null;contRenderTab()">← Elenco</button>
+      <div>${azioni}</div>
+    </div>
+    <div class="card" style="padding:12px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <div><strong>${escapeHtml(r.beneficiario || 'Nota spese')}</strong> · ${escapeHtml(r.periodo || '')} <span class="badge ${cls}">${lab}</span></div>
+        <strong>${formatCurrencyIt(r.totale)}</strong>
+      </div>
+    </div>
+    <div class="table-wrapper"><table class="data-table">
+      <thead><tr><th>Data</th><th>Fornitore</th><th style="text-align:right">Importo</th><th></th></tr></thead>
+      <tbody>${speseRows}</tbody></table></div>
+    ${aggiungibili}`;
+}
+
+async function contRimbAttach(id) {
+  const ids = [...document.querySelectorAll('.rimb-disp:checked')].map(c => Number(c.value));
+  if (!ids.length) return toast('Seleziona almeno una spesa', 'error');
+  try { await api('POST', `/contabilita/rimborsi/${id}/spese`, { spese_ids: ids }); contRenderTab(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+async function contRimbDetach(id, spesaId) {
+  try { await api('DELETE', `/contabilita/rimborsi/${id}/spese/${spesaId}`); contRenderTab(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+async function contRimbStato(id, stato) {
+  let extra = {};
+  if (stato === 'PAID') {
+    const v = await contDialog('Segna rimborso come pagato', [{ key: 'pagato_il', label: 'Data pagamento', type: 'date', value: new Date().toISOString().slice(0,10) }, { key: 'metodo', label: 'Metodo', type: 'text', value: 'bonifico' }]);
+    if (!v) return; extra = v;
+  }
+  try { await api('POST', `/contabilita/rimborsi/${id}/stato`, { stato, ...extra }); toast('Stato aggiornato', 'success'); contRenderTab(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+// --- Budget e report gestionale --------------------------------------------
+async function contRenderBudget(el) {
+  const editable = canEditSection('contabilita');
+  const periodo = CONT_STATE.budgetPeriodo || CONT_STATE.anno;
+  const [rep, budgetR, catR] = await Promise.all([
+    api('GET', `/contabilita/report-gestionale?periodo=${encodeURIComponent(periodo)}`),
+    api('GET', `/contabilita/budget?periodo=${encodeURIComponent(periodo)}`),
+    api('GET', '/contabilita/categorie')
+  ]);
+  const repRows = (rep.righe || []).map(x => {
+    const over = x.scostamento > 0;
+    return `<tr>
+      <td>${escapeHtml(x.categoria_nome || '-')}</td>
+      <td style="text-align:right">${formatCurrencyIt(x.budget)}</td>
+      <td style="text-align:right">${formatCurrencyIt(x.consuntivo)}</td>
+      <td style="text-align:right;color:${over?'var(--danger,#dc2626)':'var(--success,#16a34a)'}">${formatCurrencyIt(x.scostamento)}</td>
+      <td style="text-align:right">${x.perc!=null?x.perc+'%':'-'}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="5" style="color:var(--text-muted)">Nessun dato</td></tr>';
+  const budgetRows = (budgetR.budget || []).map(b => `<tr>
+      <td>${escapeHtml(b.categoria_nome || b.centro_nome || b.commessa_nome || '-')}</td>
+      <td style="text-align:right">${formatCurrencyIt(b.importo_budget)}</td>
+      <td>${editable ? `<button class="btn btn-outline btn-sm" onclick="contDeleteBudget(${b.id})">Elimina</button>` : ''}</td>
+    </tr>`).join('') || '<tr><td colspan="3" style="color:var(--text-muted)">Nessun budget impostato</td></tr>';
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+      <div style="font-size:13px">Periodo <strong>${escapeHtml(periodo)}</strong> · Budget ${formatCurrencyIt(rep.totali.budget)} · Consuntivo ${formatCurrencyIt(rep.totali.consuntivo)} · Scostamento <strong style="color:${rep.totali.scostamento>0?'var(--danger,#dc2626)':'var(--success,#16a34a)'}">${formatCurrencyIt(rep.totali.scostamento)}</strong></div>
+      ${editable ? `<button class="btn btn-accent btn-sm" onclick='contNuovoBudget(${JSON.stringify((catR.categorie||[]).filter(c=>c.attiva)).replace(/'/g,"&#39;")}, "${escapeAttr(periodo)}")'>+ Budget</button>` : ''}
+    </div>
+    <div class="card" style="padding:12px;margin-bottom:14px">
+      <strong style="font-size:13px">Consuntivo vs budget per categoria</strong>
+      <div class="table-wrapper" style="margin-top:8px"><table class="data-table">
+        <thead><tr><th>Categoria</th><th style="text-align:right">Budget</th><th style="text-align:right">Consuntivo</th><th style="text-align:right">Scostamento</th><th style="text-align:right">%</th></tr></thead>
+        <tbody>${repRows}</tbody></table></div>
+    </div>
+    <div class="card" style="padding:12px">
+      <strong style="font-size:13px">Budget impostati (${escapeHtml(periodo)})</strong>
+      <div class="table-wrapper" style="margin-top:8px"><table class="data-table">
+        <thead><tr><th>Dimensione</th><th style="text-align:right">Importo</th><th></th></tr></thead>
+        <tbody>${budgetRows}</tbody></table></div>
+    </div>`;
+}
+async function contNuovoBudget(categorie, periodo) {
+  const opt = (categorie || []).map(c => `<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join('');
+  const body = `
+    <label style="display:block;font-size:13px;margin-bottom:10px">Periodo (YYYY o YYYY-MM)<input id="bg-periodo" type="text" value="${escapeAttr(periodo||'')}" style="width:100%;padding:6px;box-sizing:border-box"></label>
+    <label style="display:block;font-size:13px;margin-bottom:10px">Categoria<select id="bg-cat" class="btn btn-outline" style="width:100%">${opt}</select></label>
+    <label style="display:block;font-size:13px">Importo budget<input id="bg-importo" type="number" step="0.01" style="width:100%;padding:6px;box-sizing:border-box"></label>`;
+  const ok = await contDialog('Nuovo budget', null, body);
+  if (!ok) return;
+  const payload = { periodo: document.getElementById('bg-periodo').value, categoria_id: document.getElementById('bg-cat').value, importo_budget: Number(document.getElementById('bg-importo').value) };
+  if (!payload.periodo || !(payload.importo_budget > 0)) return toast('Periodo e importo obbligatori', 'error');
+  try { await api('POST', '/contabilita/budget', payload); toast('Budget aggiunto', 'success'); contRenderTab(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+async function contDeleteBudget(id) {
+  if (!confirm('Eliminare questo budget?')) return;
+  try { await api('DELETE', `/contabilita/budget/${id}`); contRenderTab(); }
   catch (e) { toast(e.message || 'Errore', 'error'); }
 }
 
