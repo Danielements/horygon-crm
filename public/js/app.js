@@ -4607,7 +4607,7 @@ async function contElaboraMovimenti() {
 
 function contPropostaRow(x) {
   const dett = x.azione === 'crea_spesa' ? `${escapeHtml(x.spesa.fornitore_nome)}${x.categoria_nome ? ` · <span class="badge badge-cliente">${escapeHtml(x.categoria_nome)}</span>` : ''}`
-    : x.azione === 'riconcilia_fattura' ? `#${escapeHtml(String(x.fattura.numero || x.fattura.id))} · ${escapeHtml(x.fattura.controparte || '')}${x.verifiche ? ` <span title="importo">${x.verifiche.importo?'💶✓':'💶✗'}</span> <span title="controparte">${x.verifiche.controparte?'👤✓':'👤✗'}</span>` : ''}`
+    : x.azione === 'riconcilia_fattura' ? `#${escapeHtml(String(x.fattura.numero || x.fattura.id))} · ${escapeHtml(x.fattura.controparte || '')}${x.verifiche ? ` <span title="importo coincide">${x.verifiche.importo?'💶✓':'💶✗'}</span> <span title="controparte coincide">${x.verifiche.controparte?'👤✓':'👤✗'}</span>` : ''}${x.fattura.gia_pagata ? ' <span style="color:var(--danger,#dc2626)">(già segnata pagata — conferma per registrare l\'incasso)</span>' : ''}`
     : x.azione === 'entrata_manuale' ? escapeHtml(x.descrizione_voce || 'Versamento')
     : escapeHtml(x.motivo || '');
   const badge = x.sicura ? '<span class="badge badge-pagata">sicura</span>' : (x.azione === 'manuale' ? '<span class="badge badge-cliente">manuale</span>' : '<span class="badge badge-scaduta">da confermare</span>');

@@ -111,6 +111,25 @@ test('bonifico con controparte diversa NON e sicuro (verifica nomi)', () => {
   if (proposte[0].azione === 'riconcilia_fattura') assert.equal(proposte[0].sicura, false);
 });
 
+test('fattura segnata pagata a mano resta abbinabile (da confermare) e collegarla registra l\'incasso', () => {
+  const c = conto();
+  const f = insertFattura({ numero: '3', tipo: 'emessa', direzione: 'attiva', totale: 12200 });
+  // segnata pagata SOLO col flag manuale, nessun incasso registrato
+  db.prepare("UPDATE fatture SET stato = 'pagata', cliente_fornitore_label = 'Qube3 Srl' WHERE id = ?").run(f);
+  importa(c, [{ Data: '19/06/2026', Importo: '12200,00', Causale: 'BONIFICO A VOSTRO FAVORE BONIFICO SEPA DA: QUBE3 SRL PER: acconto compenso' }]);
+  const mov = bank.listMovimenti({ conto_id: c })[0];
+
+  const { proposte } = auto.proposteMovimenti({ conto_id: c });
+  assert.equal(proposte[0].azione, 'riconcilia_fattura');    // NON piu "manuale"
+  assert.equal(proposte[0].fattura.id, f);
+  assert.equal(proposte[0].fattura.gia_pagata, true);
+  assert.equal(proposte[0].sicura, false);                   // da confermare
+
+  auto.applicaProposta(mov.id, null, 1);
+  const pagato = db.prepare('SELECT COALESCE(SUM(importo_quota),0) AS p FROM cont_pagamenti_fatture WHERE fattura_id = ?').get(f).p;
+  assert.equal(pagato, 12200);                               // l'incasso reale ora e registrato
+});
+
 test('applicaSicure: elabora in blocco solo le proposte certe', () => {
   const c = conto();
   importa(c, [

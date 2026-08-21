@@ -139,22 +139,28 @@ function propostaPerMovimento(mov, regole) {
     if (candidata) {
       const importoOk = Math.abs(candidata.residuo - importo) <= EPS;
       const nomeOk = nameMatches(controparte, candidata.controparte);
+      // Auto solo se importo E controparte coincidono e la fattura non risulta
+      // gia' pagata (quel caso va confermato: collegarla registra l'incasso).
+      const sicura = importoOk && nomeOk && !candidata.gia_pagata;
+      const motivoPagata = candidata.gia_pagata ? ' — la fattura risulta gia segnata pagata: conferma per registrare l\'incasso reale' : '';
       return {
-        ...base, azione: 'riconcilia_fattura',
-        sicura: importoOk && nomeOk,             // auto solo se importo E controparte coincidono
-        fattura: { id: candidata.id, numero: candidata.numero, controparte: candidata.controparte, residuo: candidata.residuo },
+        ...base, azione: 'riconcilia_fattura', sicura,
+        fattura: { id: candidata.id, numero: candidata.numero, controparte: candidata.controparte, residuo: candidata.residuo, gia_pagata: candidata.gia_pagata },
         verifiche: { importo: importoOk, controparte: nomeOk, riferimento: !!ref },
-        motivo: `Bonifico ${direzione === 'passiva' ? 'a fornitore' : 'da cliente'}${ref ? ` (fattura ${ref})` : ''}`
+        motivo: `Bonifico ${direzione === 'passiva' ? 'a fornitore' : 'da cliente'}${ref ? ` (fattura ${ref})` : ''}${motivoPagata}`
       };
     }
-    return { ...base, azione: 'manuale', motivo: `Bonifico ${direzione === 'passiva' ? 'uscita' : 'entrata'}: nessuna fattura corrispondente` };
+    return { ...base, azione: 'manuale', motivo: `Bonifico ${direzione === 'passiva' ? 'uscita' : 'entrata'}: nessuna fattura corrispondente per importo/controparte` };
   }
 
   return { ...base, azione: 'manuale', motivo: 'Tipo non riconosciuto' };
 }
 
-// Cerca la fattura aperta piu probabile: per numero (se presente), poi per
-// importo esatto, poi per controparte.
+// Cerca la fattura piu probabile: per numero (se presente), poi per importo,
+// poi per controparte. Il pool esclude SOLO le fatture con incassi/pagamenti
+// gia' REGISTRATI (residuo_registrato = totale - quote registrate): una fattura
+// segnata "pagata" solo col flag manuale resta abbinabile (collegarla registra
+// l'incasso vero) ed e' marcata gia_pagata per chiedere conferma.
 function trovaFatturaCandidata(direzione, importo, controparte, ref) {
   const aperte = db.prepare(`
     SELECT f.id, f.numero, f.numero_documento, f.totale, f.stato, f.stato_pagamento,
@@ -163,7 +169,11 @@ function trovaFatturaCandidata(direzione, importo, controparte, ref) {
     FROM fatture f LEFT JOIN anagrafiche a ON a.id = f.anagrafica_id
     WHERE ${DIREZIONE_SQL} = ?
   `).all(direzione)
-    .map((f) => ({ ...f, residuo: cont.effectiveResiduo(f.totale, f.pagato, f.stato_pagamento, f.stato) }))
+    .map((f) => ({
+      ...f,
+      residuo: round2((Number(f.totale) || 0) - (Number(f.pagato) || 0)),   // residuo REGISTRATO
+      gia_pagata: cont.effectiveResiduo(f.totale, f.pagato, f.stato_pagamento, f.stato) <= EPS
+    }))
     .filter((f) => f.residuo > EPS);
 
   if (ref) {
