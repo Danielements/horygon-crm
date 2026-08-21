@@ -4436,14 +4436,15 @@ async function contRenderBanca(el) {
       <span style="font-size:12px;color:var(--text-muted)">${mov.length} movimenti</span>
     </div>
     <div class="table-wrapper"><table class="data-table">
-      <thead><tr><th>Data</th><th>Descrizione</th><th>Controparte</th><th style="text-align:right">Importo</th><th>Stato</th></tr></thead>
+      <thead><tr><th>Data</th><th>Descrizione</th><th>Controparte</th><th style="text-align:right">Importo</th><th>Stato</th><th></th></tr></thead>
       <tbody>${mov.map(m => `<tr>
         <td>${formatDateIt(m.data_operazione)}</td>
         <td>${escapeHtml(m.descrizione || '-')}</td>
         <td>${escapeHtml(m.controparte || '-')}</td>
         <td style="text-align:right;color:${m.importo<0?'var(--danger,#dc2626)':'var(--success,#16a34a)'}">${formatCurrencyIt(m.importo)}</td>
         <td><span class="badge ${statoBadge[m.stato_riconciliazione]||'badge-cliente'}">${escapeHtml(m.stato_riconciliazione)}</span></td>
-      </tr>`).join('') || '<tr><td colspan="5" style="color:var(--text-muted)">Nessun movimento</td></tr>'}</tbody>
+        <td>${editable && m.stato_riconciliazione !== 'da_riconciliare' ? `<button class="btn btn-outline btn-sm" title="Annulla elaborazione" onclick="contAnnullaElaborazione(${m.id})">↩</button>` : ''}</td>
+      </tr>`).join('') || '<tr><td colspan="6" style="color:var(--text-muted)">Nessun movimento</td></tr>'}</tbody>
     </table></div>`;
 }
 
@@ -4514,13 +4515,123 @@ function contApplyTemplate(templates) {
   if (t.decimale) document.getElementById('imp-decimale').value = t.decimale;
 }
 
-// --- Riconciliazione -------------------------------------------------------
+// --- Riconciliazione + automazione -----------------------------------------
 async function contRenderRiconciliazione(el) {
+  const editable = canEditSection('contabilita');
   const r = await api('GET', '/contabilita/movimenti?stato=da_riconciliare');
   const mov = r.movimenti || [];
   el.innerHTML = `
-    <p style="font-size:12px;color:var(--text-muted);margin:0 0 10px">${mov.length} movimenti da riconciliare. Il sistema propone le fatture candidate per punteggio.</p>
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+      <p style="font-size:12px;color:var(--text-muted);margin:0">${mov.length} movimenti da riconciliare. Automazione: crea spese dai pagamenti carta, oneri bancari, versamenti, e abbina le fatture quando importo e controparte coincidono.</p>
+      ${editable ? `<div style="display:flex;gap:6px">
+        <button class="btn btn-outline btn-sm" onclick="contGestioneRegole()">Regole</button>
+        <button class="btn btn-accent btn-sm" onclick="contElaboraMovimenti()">⚡ Elabora automaticamente</button>
+      </div>` : ''}
+    </div>
+    <div id="cont-auto-box"></div>
     <div id="cont-ric-list">${mov.map(contRicRow).join('') || '<div style="color:var(--text-muted)">Nulla da riconciliare</div>'}</div>`;
+}
+
+const CONT_AZIONE_LABEL = {
+  crea_spesa: 'Crea spesa', riconcilia_fattura: 'Abbina fattura', entrata_manuale: 'Registra entrata', ignora: 'Ignora', manuale: 'Manuale'
+};
+
+async function contElaboraMovimenti() {
+  const box = document.getElementById('cont-auto-box');
+  box.innerHTML = '<div style="color:var(--text-muted);font-size:13px">Analizzo i movimenti…</div>';
+  try {
+    const r = await api('GET', `/contabilita/automazione/proposte${CONT_STATE.contoId ? `?conto_id=${CONT_STATE.contoId}` : ''}`);
+    const p = r.proposte || [];
+    if (!p.length) { box.innerHTML = '<div class="card" style="padding:10px;color:var(--text-muted)">Nessun movimento da elaborare.</div>'; return; }
+    const rows = p.map(x => contPropostaRow(x)).join('');
+    box.innerHTML = `<div class="card" style="padding:12px;margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+        <strong style="font-size:13px">Proposte di automazione — ${r.riepilogo.sicure} sicure, ${r.riepilogo.manuali} da valutare</strong>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-accent btn-sm" onclick="contAutoApplicaSicure()">Applica tutte le sicure (${r.riepilogo.sicure})</button>
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('cont-auto-box').innerHTML=''">Chiudi</button>
+        </div>
+      </div>
+      <div class="table-wrapper"><table class="data-table">
+        <thead><tr><th></th><th>Data</th><th>Movimento</th><th style="text-align:right">Importo</th><th>Proposta</th><th></th></tr></thead>
+        <tbody>${rows}</tbody></table></div>
+    </div>`;
+  } catch (e) { box.innerHTML = `<div class="card" style="padding:10px;color:var(--danger)">${escapeHtml(e.message || 'Errore')}</div>`; }
+}
+
+function contPropostaRow(x) {
+  const dett = x.azione === 'crea_spesa' ? `${escapeHtml(x.spesa.fornitore_nome)}${x.categoria_nome ? ` · <span class="badge badge-cliente">${escapeHtml(x.categoria_nome)}</span>` : ''}`
+    : x.azione === 'riconcilia_fattura' ? `#${escapeHtml(String(x.fattura.numero || x.fattura.id))} · ${escapeHtml(x.fattura.controparte || '')}${x.verifiche ? ` <span title="importo">${x.verifiche.importo?'💶✓':'💶✗'}</span> <span title="controparte">${x.verifiche.controparte?'👤✓':'👤✗'}</span>` : ''}`
+    : x.azione === 'entrata_manuale' ? escapeHtml(x.descrizione_voce || 'Versamento')
+    : escapeHtml(x.motivo || '');
+  const badge = x.sicura ? '<span class="badge badge-pagata">sicura</span>' : (x.azione === 'manuale' ? '<span class="badge badge-cliente">manuale</span>' : '<span class="badge badge-scaduta">da confermare</span>');
+  const puoApplicare = x.azione !== 'manuale';
+  return `<tr>
+    <td>${badge}</td>
+    <td>${formatDateIt(x.data)}</td>
+    <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeAttr(x.descrizione||'')}">${escapeHtml((x.descrizione||'').slice(0,60))}</td>
+    <td style="text-align:right;color:${x.importo<0?'var(--danger,#dc2626)':'var(--success,#16a34a)'}">${formatCurrencyIt(x.importo)}</td>
+    <td><strong>${CONT_AZIONE_LABEL[x.azione]||x.azione}</strong><br><span style="font-size:12px;color:var(--text-muted)">${dett}</span></td>
+    <td style="white-space:nowrap">${puoApplicare ? `<button class="btn btn-outline btn-sm" onclick="contAutoApplica(${x.movimento_id})">Applica</button>` : ''}</td>
+  </tr>`;
+}
+
+async function contAutoApplica(movId) {
+  try { await api('POST', '/contabilita/automazione/applica', { movimento_id: movId }); toast('Movimento elaborato', 'success'); contElaboraMovimenti(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+async function contAutoApplicaSicure() {
+  if (!confirm('Applicare tutte le proposte sicure? Potrai annullare le singole voci in seguito.')) return;
+  try { const r = await api('POST', '/contabilita/automazione/applica-sicure', { conto_id: CONT_STATE.contoId || undefined }); toast(`Applicate ${r.applicate}${r.errori?`, ${r.errori} errori`:''}`, 'success'); contRenderTab(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+// Gestione regole in un dialog
+async function contGestioneRegole() {
+  document.querySelectorAll('.cont-dialog-overlay').forEach(o => o.remove()); // evita lo stacking
+  const [regR, catR] = await Promise.all([api('GET', '/contabilita/regole'), api('GET', '/contabilita/categorie')]);
+  const cats = (catR.categorie || []).filter(c => c.attiva);
+  const regole = regR.regole || [];
+  const list = regole.map(r => `<tr>
+      <td>${escapeHtml(r.nome || r.match_valore)}</td>
+      <td style="color:var(--text-muted)">${escapeHtml(r.match_campo)} ${escapeHtml(r.match_tipo)} "${escapeHtml(r.match_valore)}"</td>
+      <td>${escapeHtml(r.azione)}${r.categoria_nome ? ` → ${escapeHtml(r.categoria_nome)}` : ''}</td>
+      <td><button class="btn btn-outline btn-sm" onclick="contDeleteRegola(${r.id})">✕</button></td>
+    </tr>`).join('') || '<tr><td colspan="4" style="color:var(--text-muted)">Nessuna regola</td></tr>';
+  const catOpt = `<option value="">— categoria —</option>` + cats.map(c => `<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join('');
+  const body = `
+    <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">Se la causale del movimento contiene il testo indicato, l'automazione assegna la categoria (o ignora il movimento).</p>
+    <div class="table-wrapper" style="margin-bottom:12px"><table class="data-table"><tbody>${list}</tbody></table></div>
+    <div class="card" style="padding:10px">
+      <strong style="font-size:13px">Nuova regola</strong>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px">
+        <input id="rg-nome" type="text" placeholder="Nome (es. Pizzerie)" style="padding:6px">
+        <input id="rg-valore" type="text" placeholder="Testo da cercare (es. PIZZERIA)" style="padding:6px">
+        <select id="rg-azione" class="btn btn-outline" onchange="document.getElementById('rg-cat').style.display=this.value==='categoria'?'block':'none'">
+          <option value="categoria">Assegna categoria</option><option value="ignora">Ignora movimento</option></select>
+        <select id="rg-cat" class="btn btn-outline">${catOpt}</select>
+      </div>
+      <button class="btn btn-accent btn-sm" style="margin-top:8px" onclick="contSalvaRegola()">Aggiungi regola</button>
+    </div>`;
+  await contDialog('Regole di automazione', null, body);
+}
+async function contSalvaRegola() {
+  const nome = document.getElementById('rg-nome').value;
+  const valore = document.getElementById('rg-valore').value;
+  const azione = document.getElementById('rg-azione').value;
+  const cat = document.getElementById('rg-cat').value;
+  if (!valore) return toast('Indica il testo da cercare', 'error');
+  try { await api('POST', '/contabilita/regole', { nome, match_valore: valore, azione, categoria_id: azione === 'categoria' ? (cat || null) : null }); toast('Regola aggiunta', 'success'); contGestioneRegole(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+async function contDeleteRegola(id) {
+  try { await api('DELETE', `/contabilita/regole/${id}`); contGestioneRegole(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+async function contAnnullaElaborazione(movId) {
+  if (!confirm('Annullare l\'elaborazione? La spesa o l\'abbinamento generati verranno rimossi e il movimento tornera da riconciliare.')) return;
+  try { await api('POST', `/contabilita/automazione/${movId}/annulla`, {}); toast('Elaborazione annullata', 'success'); contRenderTab(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
 }
 
 function contRicRow(m) {

@@ -14,6 +14,7 @@ const gest = require('../services/gestione-service');
 const spese = require('../services/spese-service');
 const ctrl = require('../services/controllo-service');
 const commercialista = require('../services/commercialista-service');
+const auto = require('../services/automazione-service');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -519,6 +520,75 @@ router.delete('/budget/:id', canDelete, (req, res) => {
 });
 router.get('/report-gestionale', canRead, (req, res) => {
   try { res.json(ctrl.reportGestionale(req.query.periodo)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ===========================================================================
+// Fase G — Automazione movimenti bancari (regole, spese auto, auto-match)
+// ===========================================================================
+
+router.get('/automazione/proposte', canRead, (req, res) => {
+  try { res.json(auto.proposteMovimenti({ conto_id: req.query.conto_id })); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.post('/automazione/applica', canEdit, (req, res) => {
+  const b = req.body || {};
+  try {
+    if (!b.movimento_id) throw new Error('movimento_id obbligatorio');
+    const r = auto.applicaProposta(Number(b.movimento_id), b.override || null, req.user.id);
+    writeAudit({ utente_id: req.user.id, azione: 'contabilita.automazione.applica', entita_tipo: 'cont_movimento', entita_id: Number(b.movimento_id), dettagli: r });
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.post('/automazione/applica-sicure', canEdit, (req, res) => {
+  const b = req.body || {};
+  try {
+    const r = auto.applicaSicure({ conto_id: b.conto_id }, req.user.id);
+    writeAudit({ utente_id: req.user.id, azione: 'contabilita.automazione.applica-sicure', entita_tipo: 'cont_conto', entita_id: b.conto_id ? Number(b.conto_id) : null, dettagli: { applicate: r.applicate, errori: r.errori } });
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.post('/automazione/:movimentoId/annulla', canEdit, (req, res) => {
+  try {
+    const r = auto.annullaElaborazione(Number(req.params.movimentoId));
+    writeAudit({ utente_id: req.user.id, azione: 'contabilita.automazione.annulla', entita_tipo: 'cont_movimento', entita_id: Number(req.params.movimentoId), dettagli: r });
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// --- Regole di automazione (editabili) -------------------------------------
+router.get('/regole', canRead, (req, res) => {
+  try { res.json({ regole: auto.listRegole() }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.post('/regole', canEdit, (req, res) => {
+  const b = req.body || {};
+  try {
+    if (!b.match_valore) throw new Error('Valore da cercare obbligatorio');
+    const info = db.prepare(`INSERT INTO cont_regole (nome, match_campo, match_tipo, match_valore, azione, categoria_id, centro_costo_id, commessa_id, priorita, attiva)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      b.nome || null, b.match_campo || 'descrizione', b.match_tipo || 'contiene', b.match_valore,
+      b.azione || 'categoria', b.categoria_id || null, b.centro_costo_id || null, b.commessa_id || null,
+      b.priorita || 0, b.attiva === 0 ? 0 : 1);
+    res.json({ id: Number(info.lastInsertRowid) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.put('/regole/:id', canEdit, (req, res) => {
+  const b = req.body || {};
+  try {
+    db.prepare(`UPDATE cont_regole SET nome=?, match_campo=COALESCE(?,match_campo), match_tipo=COALESCE(?,match_tipo),
+      match_valore=COALESCE(?,match_valore), azione=COALESCE(?,azione), categoria_id=?, centro_costo_id=?, commessa_id=?,
+      priorita=COALESCE(?,priorita), attiva=COALESCE(?,attiva) WHERE id=?`).run(
+      b.nome ?? null, b.match_campo ?? null, b.match_tipo ?? null, b.match_valore ?? null, b.azione ?? null,
+      b.categoria_id ?? null, b.centro_costo_id ?? null, b.commessa_id ?? null, b.priorita ?? null, b.attiva ?? null, Number(req.params.id));
+    res.json({ ok: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.delete('/regole/:id', canDelete, (req, res) => {
+  try { db.prepare('DELETE FROM cont_regole WHERE id = ?').run(Number(req.params.id)); res.json({ ok: true }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 

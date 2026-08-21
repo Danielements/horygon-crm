@@ -81,12 +81,15 @@ function createSpesa(input, documentoId, userId) {
   const v = validateSpesa(input);
   if (!v.ok) throw new Error(v.error);
   const s = v.normalized;
+  const fonte = ['manuale', 'ocr', 'auto'].includes(input.fonte) ? input.fonte : 'manuale';
   const info = db.prepare(`INSERT INTO cont_spese
-    (documento_id, data, fornitore_nome, fornitore_piva, numero_documento, imponibile, iva, totale, valuta, metodo_pagamento, categoria_id, centro_costo_id, commessa_id, pagata_con, stato, fonte, note, creato_da)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manuale', ?, ?)`).run(
+    (documento_id, data, fornitore_nome, fornitore_piva, numero_documento, imponibile, iva, totale, valuta, metodo_pagamento, categoria_id, centro_costo_id, commessa_id, pagata_con, movimento_bancario_id, stato, fonte, origine_automatica, note, creato_da)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     documentoId || null, s.data, s.fornitore_nome, s.fornitore_piva, s.numero_documento,
     s.imponibile, s.iva, s.totale, s.valuta, s.metodo_pagamento,
-    s.categoria_id, s.centro_costo_id, s.commessa_id, s.pagata_con, s.stato, s.note,
+    s.categoria_id, s.centro_costo_id, s.commessa_id, s.pagata_con,
+    input.movimento_bancario_id != null ? Number(input.movimento_bancario_id) : null,
+    s.stato, fonte, input.origine_automatica ? 1 : 0, s.note,
     userId != null ? Number(userId) : null);
   return { id: Number(info.lastInsertRowid) };
 }

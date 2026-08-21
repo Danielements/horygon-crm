@@ -1369,6 +1369,36 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_cont_budget_periodo ON cont_budget(periodo);
 `);
 
+// --- Contabilita Fase G: automazione movimenti bancari ---------------------
+// Regole editabili (pattern nella causale -> azione) per classificare in
+// automatico i movimenti: spese non documentate dai pagamenti carta, oneri
+// bancari, versamenti; e auto-match con le fatture quando importo E controparte
+// coincidono. Tutto reversibile.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS cont_regole (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER DEFAULT 1,
+    nome TEXT,
+    match_campo TEXT DEFAULT 'descrizione',   -- descrizione | controparte | merchant
+    match_tipo TEXT DEFAULT 'contiene',       -- contiene | inizia | uguale | regex
+    match_valore TEXT NOT NULL,
+    azione TEXT NOT NULL DEFAULT 'categoria',  -- categoria | crea_spesa | ignora
+    categoria_id INTEGER,
+    centro_costo_id INTEGER,
+    commessa_id INTEGER,
+    priorita INTEGER DEFAULT 0,
+    attiva INTEGER DEFAULT 1,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_cont_regole_attiva ON cont_regole(attiva, priorita);
+`);
+
+// Traccia l'origine automatica di una spesa/pagamento, per poter annullare
+// l'elaborazione di un movimento.
+[
+  "origine_automatica INTEGER DEFAULT 0"
+].forEach(col => ensureColumn('cont_spese', col));
+
 [
   "tenant_id INTEGER DEFAULT 1",
   "unita_misura TEXT",
