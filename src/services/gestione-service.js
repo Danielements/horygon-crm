@@ -8,6 +8,7 @@
 // Report gestionale interno: non e' un bilancio ne' una liquidazione IVA.
 
 const db = require('../db/database');
+const cont = require('./contabilita-service');
 
 const EPS = 0.005;
 function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
@@ -62,13 +63,13 @@ const DIREZIONE_SQL = `COALESCE(f.direzione, CASE WHEN f.tipo = 'emessa' THEN 'a
 
 function openInvoices(direzione) {
   return db.prepare(`
-    SELECT f.id, f.numero, f.numero_documento, f.data, f.scadenza, f.totale,
+    SELECT f.id, f.numero, f.numero_documento, f.data, f.scadenza, f.totale, f.stato, f.stato_pagamento,
            COALESCE(a.ragione_sociale, f.cliente_fornitore_label) AS controparte,
            (SELECT COALESCE(SUM(importo_quota),0) FROM cont_pagamenti_fatture pf WHERE pf.fattura_id = f.id) AS pagato
     FROM fatture f LEFT JOIN anagrafiche a ON a.id = f.anagrafica_id
     WHERE ${DIREZIONE_SQL} = ?
   `).all(direzione)
-    .map((f) => ({ ...f, residuo: round2((Number(f.totale) || 0) - (Number(f.pagato) || 0)) }))
+    .map((f) => ({ ...f, residuo: cont.effectiveResiduo(f.totale, f.pagato, f.stato_pagamento, f.stato) }))
     .filter((f) => f.residuo > EPS);
 }
 

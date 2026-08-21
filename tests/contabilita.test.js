@@ -28,6 +28,20 @@ test('computePaymentStatus: non pagata / parziale / pagata / sovra-pagata', () =
   assert.equal(cont.computePaymentStatus(122, 200), 'OVERPAID');
 });
 
+test('effectivePaymentStatus: i pagamenti registrati vincono, poi il flag manuale', () => {
+  // con incasso registrato: deriva dai pagamenti
+  assert.equal(cont.effectivePaymentStatus(122, 122, 'da_pagare', 'ricevuta'), 'PAID');
+  assert.equal(cont.effectivePaymentStatus(122, 50, 'da_pagare', 'ricevuta'), 'PARTIALLY_PAID');
+  // senza incasso: rispetta il flag manuale (stato o stato_pagamento)
+  assert.equal(cont.effectivePaymentStatus(122, 0, 'da_pagare', 'pagata'), 'PAID');
+  assert.equal(cont.effectivePaymentStatus(122, 0, 'pagata', 'ricevuta'), 'PAID');
+  assert.equal(cont.effectivePaymentStatus(122, 0, 'parziale', 'ricevuta'), 'PARTIALLY_PAID');
+  assert.equal(cont.effectivePaymentStatus(122, 0, 'da_pagare', 'ricevuta'), 'UNPAID');
+  // residuo azzerato dal flag manuale
+  assert.equal(cont.effectiveResiduo(122, 0, 'da_pagare', 'pagata'), 0);
+  assert.equal(cont.effectiveResiduo(122, 0, 'da_pagare', 'ricevuta'), 122);
+});
+
 test('paymentStatusToCache: mappa sulla cache italiana', () => {
   assert.equal(cont.paymentStatusToCache('UNPAID'), 'da_pagare');
   assert.equal(cont.paymentStatusToCache('PARTIALLY_PAID'), 'parziale');
@@ -96,6 +110,14 @@ test('pagamenti: un pagamento su piu fatture (allocazione molti-a-molti)', () =>
 test('pagamenti: le quote non possono superare l\'importo del pagamento', () => {
   const id = insertFattura({ numero: 'A/4', tipo: 'emessa', direzione: 'attiva', totale: 100 });
   assert.throws(() => cont.registerPayment({ verso: 'incasso', importo: 50, allocazioni: [{ fattura_id: id, importo_quota: 80 }] }, 1));
+});
+
+test('vista contabile: fattura segnata pagata a mano risulta PAID senza incasso registrato', () => {
+  const id = insertFattura({ numero: 'MAN/1', tipo: 'emessa', direzione: 'attiva', totale: 200 });
+  db.prepare("UPDATE fatture SET stato = 'pagata' WHERE id = ?").run(id);
+  const riga = cont.listInvoicesContabile({ direzione: 'attiva' }).find((f) => f.id === id);
+  assert.equal(riga.payment_status, 'PAID');
+  assert.equal(riga.residuo, 0);
 });
 
 test('nota di credito: e\' una fattura con tipo_documento nota_credito, riusata dalla vista', () => {

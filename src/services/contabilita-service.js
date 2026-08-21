@@ -31,6 +31,25 @@ function computePaymentStatus(totale, paid) {
   return 'PARTIALLY_PAID';
 }
 
+// Stato pagamento EFFETTIVO: i pagamenti registrati hanno la precedenza; se non
+// ce ne sono, si rispetta il flag manuale della fattura (stato='pagata' dal
+// controllo rapido, o stato_pagamento='pagata'/'parziale' dalla scheda). Cosi'
+// una fattura segnata pagata a mano non risulta piu "da incassare".
+function effectivePaymentStatus(totale, pagato, statoPagamentoManuale, statoFattura) {
+  if (round2(pagato) > EPS) return computePaymentStatus(totale, pagato);
+  if (statoFattura === 'pagata' || statoPagamentoManuale === 'pagata') return 'PAID';
+  if (statoPagamentoManuale === 'parziale') return 'PARTIALLY_PAID';
+  return 'UNPAID';
+}
+
+// Residuo effettivo coerente con lo stato effettivo (una fattura pagata a mano
+// ha residuo 0 anche senza incasso registrato).
+function effectiveResiduo(totale, pagato, statoPagamentoManuale, statoFattura) {
+  if (round2(pagato) > EPS) return round2(totale - pagato);
+  if (statoFattura === 'pagata' || statoPagamentoManuale === 'pagata') return 0;
+  return round2(totale - pagato);
+}
+
 // Mappa il paymentStatus derivato sulla cache italiana gia usata dall'UI
 // fatture (da_pagare/parziale/pagata). OVERPAID resta 'pagata' in cache: il
 // dettaglio sovra-pagamento vive nell'API contabile.
@@ -234,8 +253,8 @@ function listInvoicesContabile(filters = {}) {
   `).all(...params, Number(filters.limit) || 500);
 
   return rows.map((r) => {
-    const status = computePaymentStatus(r.totale, r.pagato);
-    return { ...r, payment_status: status, residuo: round2((Number(r.totale) || 0) - (Number(r.pagato) || 0)) };
+    const status = effectivePaymentStatus(r.totale, r.pagato, r.stato_pagamento, r.stato);
+    return { ...r, payment_status: status, residuo: effectiveResiduo(r.totale, r.pagato, r.stato_pagamento, r.stato) };
   });
 }
 
@@ -261,10 +280,17 @@ function dashboard(filters = {}) {
 
   // Da incassare / da pagare: residuo per direzione su tutte le fatture (non
   // solo dell'anno: uno scaduto vecchio conta comunque).
+  // Residuo per direzione, rispettando i pagamenti registrati e, in loro
+  // assenza, il flag manuale "pagata" (stato o stato_pagamento).
   const residui = db.prepare(`
     SELECT ${DIREZIONE_SQL} AS direzione,
-           COALESCE(SUM(f.totale),0) - COALESCE(SUM(
-             (SELECT COALESCE(SUM(importo_quota),0) FROM cont_pagamenti_fatture pf WHERE pf.fattura_id = f.id)
+           COALESCE(SUM(
+             CASE
+               WHEN (SELECT COALESCE(SUM(importo_quota),0) FROM cont_pagamenti_fatture pf WHERE pf.fattura_id = f.id) > 0.005
+                 THEN f.totale - (SELECT COALESCE(SUM(importo_quota),0) FROM cont_pagamenti_fatture pf WHERE pf.fattura_id = f.id)
+               WHEN f.stato = 'pagata' OR f.stato_pagamento = 'pagata' THEN 0
+               ELSE f.totale
+             END
            ),0) AS residuo
     FROM fatture f
     GROUP BY direzione
@@ -316,6 +342,8 @@ module.exports = {
   // puri
   round2,
   computePaymentStatus,
+  effectivePaymentStatus,
+  effectiveResiduo,
   paymentStatusToCache,
   validateSplit,
   // pagamenti

@@ -217,13 +217,13 @@ function reconciliationCandidates(movimentoId, limit = 10) {
   const direzione = expectedDirection(mov.segno);
 
   const fatture = db.prepare(`
-    SELECT f.id, f.numero, f.numero_documento, f.data, f.scadenza, f.totale,
+    SELECT f.id, f.numero, f.numero_documento, f.data, f.scadenza, f.totale, f.stato, f.stato_pagamento,
            ${DIREZIONE_SQL} AS direzione,
            COALESCE(a.ragione_sociale, f.cliente_fornitore_label) AS controparte,
            (SELECT COALESCE(SUM(importo_quota),0) FROM cont_pagamenti_fatture pf WHERE pf.fattura_id = f.id) AS pagato
     FROM fatture f LEFT JOIN anagrafiche a ON a.id = f.anagrafica_id
     WHERE ${DIREZIONE_SQL} = ?
-  `).all(direzione).map((f) => ({ ...f, residuo: round2((Number(f.totale) || 0) - (Number(f.pagato) || 0)) }))
+  `).all(direzione).map((f) => ({ ...f, residuo: cont.effectiveResiduo(f.totale, f.pagato, f.stato_pagamento, f.stato) }))
     .filter((f) => f.residuo > EPS);
 
   return fatture
