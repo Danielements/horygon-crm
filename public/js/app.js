@@ -4233,6 +4233,10 @@ async function contRenderTab() {
     if (CONT_STATE.tab === 'fatture') return contRenderFatture(el);
     if (CONT_STATE.tab === 'banca') return contRenderBanca(el);
     if (CONT_STATE.tab === 'riconciliazione') return contRenderRiconciliazione(el);
+    if (CONT_STATE.tab === 'scadenze') return contRenderScadenze(el);
+    if (CONT_STATE.tab === 'prima-nota') return contRenderPrimaNota(el);
+    if (CONT_STATE.tab === 'cashflow') return contRenderCashflow(el);
+    if (CONT_STATE.tab === 'anomalie') return contRenderAnomalie(el);
     if (CONT_STATE.tab === 'centri') return contRenderCentri(el);
     if (CONT_STATE.tab === 'commesse') return contRenderCommesse(el);
     if (CONT_STATE.tab === 'categorie') return contRenderCategorie(el);
@@ -4559,6 +4563,119 @@ async function contRicIgnora(movId) {
   if (!confirm('Ignorare questo movimento? Non risultera piu tra quelli da riconciliare.')) return;
   try { await api('POST', `/contabilita/riconciliazione/${movId}/ignora`, {}); contRenderTab(); }
   catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+// --- Scadenze --------------------------------------------------------------
+const CONT_BUCKET_LABEL = { scaduto: 'Scaduto', e7: '≤ 7gg', e30: '≤ 30gg', e60: '≤ 60gg', e90: '≤ 90gg', oltre: '> 90gg', senza_scadenza: 'Senza scad.' };
+
+async function contRenderScadenze(el) {
+  const d = await api('GET', '/contabilita/scadenze');
+  const blocco = (titolo, sez, colore) => {
+    const b = sez.totali;
+    const chips = Object.keys(CONT_BUCKET_LABEL).filter(k => b[k]).map(k =>
+      `<span class="badge ${k==='scaduto'?'badge-scaduta':'badge-cliente'}" style="margin:2px">${CONT_BUCKET_LABEL[k]}: ${formatCurrencyIt(b[k])}</span>`).join('') || '<span style="color:var(--text-muted)">nessuna</span>';
+    const rows = sez.items.map(f => `<tr>
+        <td>#${escapeHtml(String(f.numero||f.id))}</td>
+        <td>${escapeHtml(f.controparte||'-')}</td>
+        <td>${formatDateIt(f.scadenza)}</td>
+        <td>${f.giorni_alla_scadenza==null?'-':(f.giorni_alla_scadenza<0?`<span style="color:var(--danger,#dc2626)">${f.giorni_alla_scadenza}gg</span>`:`${f.giorni_alla_scadenza}gg`)}</td>
+        <td style="text-align:right">${formatCurrencyIt(f.residuo)}</td>
+      </tr>`).join('') || '<tr><td colspan="5" style="color:var(--text-muted)">Nessuna</td></tr>';
+    return `<div class="card" style="padding:12px;margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center"><strong style="color:${colore}">${titolo}</strong><strong>${formatCurrencyIt(sez.totale)}</strong></div>
+      <div style="margin:8px 0">${chips}</div>
+      <div class="table-wrapper"><table class="data-table">
+        <thead><tr><th>Fattura</th><th>Controparte</th><th>Scadenza</th><th>Giorni</th><th style="text-align:right">Residuo</th></tr></thead>
+        <tbody>${rows}</tbody></table></div></div>`;
+  };
+  el.innerHTML = `<p style="font-size:12px;color:var(--text-muted);margin:0 0 10px">Riferimento: ${formatDateIt(d.oggi)}</p>
+    ${blocco('Da incassare', d.da_incassare, 'var(--success,#16a34a)')}
+    ${blocco('Da pagare', d.da_pagare, 'var(--danger,#dc2626)')}`;
+}
+
+// --- Prima nota ------------------------------------------------------------
+const CONT_FONTE_LABEL = { pagamento: 'Pagamento', banca: 'Banca', manuale: 'Manuale' };
+async function contRenderPrimaNota(el) {
+  const editable = canEditSection('contabilita');
+  const r = await api('GET', '/contabilita/prima-nota');
+  const rows = (r.righe || []).map(x => `<tr>
+      <td>${formatDateIt(x.data)}</td>
+      <td><span class="badge badge-cliente">${CONT_FONTE_LABEL[x.fonte]||x.fonte}</span></td>
+      <td>${escapeHtml(x.descrizione||'-')}${x.controparte?` · ${escapeHtml(x.controparte)}`:''}</td>
+      <td style="text-align:right;color:var(--success,#16a34a)">${x.entrata?formatCurrencyIt(x.entrata):''}</td>
+      <td style="text-align:right;color:var(--danger,#dc2626)">${x.uscita?formatCurrencyIt(x.uscita):''}</td>
+      <td style="text-align:right">${formatCurrencyIt(x.saldo)}</td>
+    </tr>`).join('') || '<tr><td colspan="6" style="color:var(--text-muted)">Nessun movimento</td></tr>';
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+      <div style="font-size:13px">Entrate <strong style="color:var(--success,#16a34a)">${formatCurrencyIt(r.totali.entrate)}</strong> · Uscite <strong style="color:var(--danger,#dc2626)">${formatCurrencyIt(r.totali.uscite)}</strong> · Netto <strong>${formatCurrencyIt(r.totali.netto)}</strong></div>
+      <div style="display:flex;gap:6px">
+        ${editable ? `<button class="btn btn-outline btn-sm" onclick="contNuovaNotaManuale()">+ Voce manuale</button>` : ''}
+        <button class="btn btn-outline btn-sm" onclick="contExportPrimaNota()">Esporta CSV</button>
+      </div>
+    </div>
+    <div class="table-wrapper"><table class="data-table">
+      <thead><tr><th>Data</th><th>Fonte</th><th>Descrizione</th><th style="text-align:right">Entrata</th><th style="text-align:right">Uscita</th><th style="text-align:right">Saldo</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+}
+
+async function contNuovaNotaManuale() {
+  const vals = await contDialog('Nuova voce di prima nota', [
+    { key: 'data', label: 'Data', type: 'date', value: new Date().toISOString().slice(0,10) },
+    { key: 'descrizione', label: 'Descrizione', type: 'text' },
+    { key: 'verso', label: 'Tipo', type: 'select', value: 'uscita', options: ['uscita', 'entrata'] },
+    { key: 'importo', label: 'Importo', type: 'number' }
+  ]);
+  if (!vals || !(Number(vals.importo) > 0)) return;
+  try { await api('POST', '/contabilita/nota-manuale', vals); toast('Voce aggiunta', 'success'); contRenderTab(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+async function contExportPrimaNota() {
+  try {
+    const res = await fetch('/api/contabilita/prima-nota/export', { headers: { 'Authorization': `Bearer ${TOKEN}` } });
+    if (!res.ok) throw new Error('Export fallito');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'prima-nota.csv'; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+// --- Cash flow -------------------------------------------------------------
+async function contRenderCashflow(el) {
+  const r = await api('GET', '/contabilita/cashflow');
+  const mesi = r.mesi || [];
+  const maxAbs = Math.max(1, ...mesi.map(m => Math.max(m.entrate, m.uscite)));
+  const rows = mesi.map(m => {
+    const wE = Math.round((m.entrate / maxAbs) * 100), wU = Math.round((m.uscite / maxAbs) * 100);
+    return `<tr>
+      <td>${escapeHtml(m.mese)}</td>
+      <td style="width:40%"><div style="background:var(--success,#16a34a);height:14px;width:${wE}%;border-radius:3px" title="${formatCurrencyIt(m.entrate)}"></div></td>
+      <td style="width:40%"><div style="background:var(--danger,#dc2626);height:14px;width:${wU}%;border-radius:3px" title="${formatCurrencyIt(m.uscite)}"></div></td>
+      <td style="text-align:right">${formatCurrencyIt(m.netto)}</td>
+      <td style="text-align:right"><strong>${formatCurrencyIt(m.saldo)}</strong></td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="5" style="color:var(--text-muted)">Nessun movimento di cassa registrato</td></tr>';
+  el.innerHTML = `<p style="font-size:12px;color:var(--text-muted);margin:0 0 10px">Cassa dai pagamenti/incassi registrati. Saldo iniziale conti: ${formatCurrencyIt(r.saldo_iniziale)}.</p>
+    <div class="table-wrapper"><table class="data-table">
+      <thead><tr><th>Mese</th><th>Entrate</th><th>Uscite</th><th style="text-align:right">Netto</th><th style="text-align:right">Saldo</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+}
+
+// --- Anomalie --------------------------------------------------------------
+async function contRenderAnomalie(el) {
+  const r = await api('GET', '/contabilita/anomalie');
+  const grav = { alta: 'badge-scaduta', media: 'badge-cliente', bassa: 'badge-cliente' };
+  const rows = (r.anomalie || []).map(a => `<tr>
+      <td><span class="badge ${grav[a.gravita]||'badge-cliente'}">${escapeHtml(a.gravita)}</span></td>
+      <td>${escapeHtml(a.tipo)}</td>
+      <td>${escapeHtml(a.messaggio)}</td>
+    </tr>`).join('') || '<tr><td colspan="3" style="color:var(--success,#16a34a)">Nessuna anomalia rilevata ✓</td></tr>';
+  el.innerHTML = `<p style="font-size:13px;margin:0 0 10px">${r.totale} anomalie — alta ${r.per_gravita.alta||0}, media ${r.per_gravita.media||0}, bassa ${r.per_gravita.bassa||0}</p>
+    <div class="table-wrapper"><table class="data-table">
+      <thead><tr><th>Gravità</th><th>Tipo</th><th>Dettaglio</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
 }
 
 async function contRenderCentri(el) {

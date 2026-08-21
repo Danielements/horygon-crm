@@ -10,6 +10,7 @@ const { writeAudit } = require('../services/audit');
 const svc = require('../services/stamp-duty-service');
 const cont = require('../services/contabilita-service');
 const bank = require('../services/bank-service');
+const gest = require('../services/gestione-service');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -343,6 +344,58 @@ router.post('/riconciliazione/:movimentoId/ignora', canEdit, (req, res) => {
     writeAudit({ utente_id: req.user.id, azione: 'contabilita.riconcilia.ignora', entita_tipo: 'cont_movimento', entita_id: Number(req.params.movimentoId), dettagli: r });
     res.json(r);
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ===========================================================================
+// Fase C — Flussi gestionali: scadenzario, prima nota, cash flow, anomalie
+// ===========================================================================
+
+router.get('/scadenze', canRead, (req, res) => {
+  try { res.json(gest.scadenzario(req.query.oggi)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.get('/cashflow', canRead, (req, res) => {
+  try { res.json(gest.cashflow({ dal: req.query.dal, al: req.query.al })); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.get('/anomalie', canRead, (req, res) => {
+  try { res.json(gest.anomalie(req.query.oggi)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.get('/prima-nota', canRead, (req, res) => {
+  try { res.json(gest.primaNota({ dal: req.query.dal, al: req.query.al })); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Export prima nota in CSV (separatore ; per Excel italiano).
+router.get('/prima-nota/export', canRead, (req, res) => {
+  try {
+    const { righe } = gest.primaNota({ dal: req.query.dal, al: req.query.al });
+    const esc = (v) => {
+      const s = v == null ? '' : String(v);
+      return /[";\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = ['Data', 'Fonte', 'Descrizione', 'Controparte', 'Entrata', 'Uscita', 'Saldo'];
+    const lines = [header.join(';')].concat(righe.map((r) => [r.data, r.fonte, r.descrizione, r.controparte, r.entrata, r.uscita, r.saldo].map(esc).join(';')));
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="prima-nota.csv"');
+    res.send('﻿' + lines.join('\r\n'));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.post('/nota-manuale', canEdit, (req, res) => {
+  try {
+    const r = gest.addNotaManuale(req.body || {}, req.user.id);
+    writeAudit({ utente_id: req.user.id, azione: 'contabilita.nota-manuale.crea', entita_tipo: 'cont_nota_manuale', entita_id: r.id, dettagli: {} });
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.delete('/nota-manuale/:id', canDelete, (req, res) => {
+  try { res.json(gest.deleteNotaManuale(Number(req.params.id))); }
+  catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // ===========================================================================

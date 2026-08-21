@@ -1261,6 +1261,27 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_cont_mov_stato ON cont_movimenti_bancari(stato_riconciliazione);
 `);
 
+// --- Contabilita Fase C: flussi gestionali ---------------------------------
+// La prima nota completa e' una VISTA che unisce fatture, pagamenti, movimenti
+// banca e queste voci manuali (non derivabili dalle altre fonti).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS cont_nota_manuale (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER DEFAULT 1,
+    data TEXT,
+    descrizione TEXT,
+    verso TEXT NOT NULL DEFAULT 'uscita',   -- entrata | uscita
+    importo REAL NOT NULL,
+    categoria_id INTEGER,
+    centro_costo_id INTEGER,
+    commessa_id INTEGER,
+    note TEXT,
+    creato_da INTEGER,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_cont_nota_data ON cont_nota_manuale(data);
+`);
+
 [
   "tenant_id INTEGER DEFAULT 1",
   "unita_misura TEXT",
