@@ -1282,6 +1282,52 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_cont_nota_data ON cont_nota_manuale(data);
 `);
 
+// --- Contabilita Fase D: spese documentate e manuali -----------------------
+// Ricevute/scontrini/PDF archiviati (originale mai distrutto) e spese
+// gestionali con inserimento MANUALE (nessuna estrazione AI in questa fase:
+// l'adapter resta disattivato). Le spese confermate entrano in prima nota.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS cont_documenti (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER DEFAULT 1,
+    path TEXT NOT NULL,
+    preview_path TEXT,
+    sha256 TEXT,
+    mime TEXT,
+    dimensione INTEGER,
+    original_filename TEXT,
+    caricato_da INTEGER,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS cont_spese (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER DEFAULT 1,
+    documento_id INTEGER,
+    data TEXT,
+    fornitore_nome TEXT,
+    fornitore_piva TEXT,
+    numero_documento TEXT,
+    imponibile REAL,
+    iva REAL,
+    totale REAL NOT NULL,
+    valuta TEXT DEFAULT 'EUR',
+    metodo_pagamento TEXT,
+    categoria_id INTEGER,
+    centro_costo_id INTEGER,
+    commessa_id INTEGER,
+    pagata_con TEXT DEFAULT 'azienda',   -- azienda | anticipo_personale (Fase E)
+    movimento_bancario_id INTEGER,       -- match banca (logico)
+    stato TEXT DEFAULT 'confermata',     -- bozza | confermata | archiviata
+    fonte TEXT DEFAULT 'manuale',        -- manuale | ocr (futuro)
+    note TEXT,
+    creato_da INTEGER,
+    creato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (documento_id) REFERENCES cont_documenti(id) ON DELETE SET NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_cont_spese_data ON cont_spese(data);
+`);
+
 [
   "tenant_id INTEGER DEFAULT 1",
   "unita_misura TEXT",

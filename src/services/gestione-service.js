@@ -127,6 +127,17 @@ function primaNota(filters = {}) {
     });
   });
 
+  // Spese documentate/manuali confermate (uscite)
+  db.prepare(`SELECT id, data, fornitore_nome, numero_documento, totale FROM cont_spese
+    WHERE stato != 'archiviata' AND COALESCE(data,'') BETWEEN ? AND ?`).all(dal, al).forEach((s) => {
+    righe.push({
+      fonte: 'spesa', ref_id: s.id, data: s.data,
+      descrizione: [s.fornitore_nome, s.numero_documento].filter(Boolean).join(' ') || 'Spesa',
+      controparte: s.fornitore_nome || null,
+      entrata: 0, uscita: round2(s.totale)
+    });
+  });
+
   // Voci manuali
   db.prepare(`SELECT id, data, descrizione, verso, importo FROM cont_nota_manuale
     WHERE COALESCE(data,'') BETWEEN ? AND ?`).all(dal, al).forEach((n) => {

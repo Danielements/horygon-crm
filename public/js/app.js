@@ -4236,6 +4236,7 @@ async function contRenderTab() {
     if (CONT_STATE.tab === 'scadenze') return contRenderScadenze(el);
     if (CONT_STATE.tab === 'prima-nota') return contRenderPrimaNota(el);
     if (CONT_STATE.tab === 'cashflow') return contRenderCashflow(el);
+    if (CONT_STATE.tab === 'spese') return contRenderSpese(el);
     if (CONT_STATE.tab === 'anomalie') return contRenderAnomalie(el);
     if (CONT_STATE.tab === 'centri') return contRenderCentri(el);
     if (CONT_STATE.tab === 'commesse') return contRenderCommesse(el);
@@ -4264,6 +4265,7 @@ async function contRenderDashboard(el) {
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
       ${contCard('Da incassare', `<span style="color:var(--success,#16a34a)">${formatCurrencyIt(d.da_incassare)}</span>`, 'residuo su fatture attive')}
       ${contCard('Da pagare', `<span style="color:var(--danger,#dc2626)">${formatCurrencyIt(d.da_pagare)}</span>`, 'residuo su fatture passive')}
+      ${contCard('Spese documentate', formatCurrencyIt(d.spese_documentate || 0), `${d.counts.spese || 0} spese ${d.anno}`)}
     </div>
     <div style="display:flex;gap:12px;flex-wrap:wrap">
       ${contCard('Categorie', d.counts.categorie)}
@@ -4661,6 +4663,81 @@ async function contRenderCashflow(el) {
     <div class="table-wrapper"><table class="data-table">
       <thead><tr><th>Mese</th><th>Entrate</th><th>Uscite</th><th style="text-align:right">Netto</th><th style="text-align:right">Saldo</th></tr></thead>
       <tbody>${rows}</tbody></table></div>`;
+}
+
+// --- Spese documentate e manuali -------------------------------------------
+async function contRenderSpese(el) {
+  const editable = canEditSection('contabilita');
+  const r = await api('GET', '/contabilita/spese');
+  const spese = r.spese || [];
+  const totale = spese.reduce((s, x) => s + (Number(x.totale) || 0), 0);
+  const rows = spese.map(s => `<tr>
+      <td>${formatDateIt(s.data)}</td>
+      <td>${escapeHtml(s.fornitore_nome || '-')}${s.numero_documento ? ` <span style="color:var(--text-muted)">${escapeHtml(s.numero_documento)}</span>` : ''}</td>
+      <td>${escapeHtml(s.categoria_nome || '-')}${s.centro_nome ? ` · ${escapeHtml(s.centro_nome)}` : ''}</td>
+      <td style="text-align:right">${formatCurrencyIt(s.totale)}</td>
+      <td>${s.documento_id ? `<a href="#" onclick="contApriDocumentoSpesa(${s.id});return false" title="${escapeAttr(s.documento_nome||'documento')}">📎</a>` : '-'}</td>
+      <td style="white-space:nowrap">${editable ? `<button class="btn btn-outline btn-sm" onclick="contEliminaSpesa(${s.id})">Elimina</button>` : ''}</td>
+    </tr>`).join('') || '<tr><td colspan="6" style="color:var(--text-muted)">Nessuna spesa</td></tr>';
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+      <div style="font-size:13px">${spese.length} spese · totale <strong>${formatCurrencyIt(totale)}</strong></div>
+      ${editable ? `<button class="btn btn-accent btn-sm" onclick="contNuovaSpesa()">+ Spesa</button>` : ''}
+    </div>
+    <div class="table-wrapper"><table class="data-table">
+      <thead><tr><th>Data</th><th>Fornitore</th><th>Categoria</th><th style="text-align:right">Totale</th><th>Doc.</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+}
+
+async function contNuovaSpesa() {
+  const [catR, cenR, comR] = await Promise.all([
+    api('GET', '/contabilita/categorie'), api('GET', '/contabilita/centri-costo'), api('GET', '/contabilita/commesse')
+  ]);
+  const opt = (list, blank) => `<option value="">${blank}</option>` + (list || []).map(o => `<option value="${o.id}">${escapeHtml(o.nome)}</option>`).join('');
+  const body = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <label style="font-size:13px">Data<input id="sp-data" type="date" value="${new Date().toISOString().slice(0,10)}" style="width:100%;padding:6px;box-sizing:border-box"></label>
+      <label style="font-size:13px">Totale *<input id="sp-totale" type="number" step="0.01" style="width:100%;padding:6px;box-sizing:border-box"></label>
+      <label style="font-size:13px">Fornitore<input id="sp-fornitore" type="text" style="width:100%;padding:6px;box-sizing:border-box"></label>
+      <label style="font-size:13px">N. documento<input id="sp-numero" type="text" style="width:100%;padding:6px;box-sizing:border-box"></label>
+      <label style="font-size:13px">Imponibile<input id="sp-imponibile" type="number" step="0.01" style="width:100%;padding:6px;box-sizing:border-box"></label>
+      <label style="font-size:13px">IVA<input id="sp-iva" type="number" step="0.01" style="width:100%;padding:6px;box-sizing:border-box"></label>
+      <label style="font-size:13px">Metodo<input id="sp-metodo" type="text" placeholder="contanti, carta…" style="width:100%;padding:6px;box-sizing:border-box"></label>
+      <label style="font-size:13px">Pagata con<select id="sp-pagatacon" class="btn btn-outline" style="width:100%"><option value="azienda">Azienda</option><option value="anticipo_personale">Anticipo personale</option></select></label>
+      <label style="font-size:13px">Categoria<select id="sp-cat" class="btn btn-outline" style="width:100%">${opt(catR.categorie.filter(c=>c.attiva), '—')}</select></label>
+      <label style="font-size:13px">Centro<select id="sp-cen" class="btn btn-outline" style="width:100%">${opt(cenR.centri.filter(c=>c.attivo), '—')}</select></label>
+      <label style="font-size:13px">Commessa<select id="sp-com" class="btn btn-outline" style="width:100%">${opt(comR.commesse, '—')}</select></label>
+      <label style="font-size:13px">Documento (foto/PDF)<input id="sp-file" type="file" accept="image/*,application/pdf" capture="environment" style="width:100%"></label>
+    </div>
+    <label style="display:block;font-size:13px;margin-top:8px">Note<input id="sp-note" type="text" style="width:100%;padding:6px;box-sizing:border-box"></label>`;
+  const ok = await contDialog('Nuova spesa', null, body);
+  if (!ok) return;
+  const totale = Number(document.getElementById('sp-totale').value);
+  if (!(totale > 0)) return toast('Totale obbligatorio', 'error');
+  const fd = new FormData();
+  const set = (k, id) => { const v = document.getElementById(id).value; if (v !== '') fd.append(k, v); };
+  set('data', 'sp-data'); fd.append('totale', totale); set('fornitore_nome', 'sp-fornitore'); set('numero_documento', 'sp-numero');
+  set('imponibile', 'sp-imponibile'); set('iva', 'sp-iva'); set('metodo_pagamento', 'sp-metodo'); set('pagata_con', 'sp-pagatacon');
+  set('categoria_id', 'sp-cat'); set('centro_costo_id', 'sp-cen'); set('commessa_id', 'sp-com'); set('note', 'sp-note');
+  const file = document.getElementById('sp-file').files[0];
+  if (file) fd.append('file', file);
+  try { await apiForm('POST', '/contabilita/spese', fd); toast('Spesa registrata', 'success'); contRenderTab(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+async function contApriDocumentoSpesa(id) {
+  try {
+    const res = await fetch(`/api/contabilita/spese/${id}/documento`, { headers: { 'Authorization': `Bearer ${TOKEN}` } });
+    if (!res.ok) throw new Error('Documento non disponibile');
+    const blob = await res.blob();
+    window.open(URL.createObjectURL(blob), '_blank');
+  } catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+async function contEliminaSpesa(id) {
+  if (!confirm('Eliminare questa spesa? L\'eventuale documento allegato resta archiviato.')) return;
+  try { await api('DELETE', `/contabilita/spese/${id}`); contRenderTab(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
 }
 
 // --- Anomalie --------------------------------------------------------------

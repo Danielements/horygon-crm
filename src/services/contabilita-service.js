@@ -272,11 +272,16 @@ function dashboard(filters = {}) {
   const daIncassare = round2((residui.find((d) => d.direzione === 'attiva') || {}).residuo || 0);
   const daPagare = round2((residui.find((d) => d.direzione === 'passiva') || {}).residuo || 0);
 
+  // Spese documentate/manuali dell'anno (costi extra-fattura)
+  const speseAnno = db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(totale),0) AS tot
+    FROM cont_spese WHERE stato != 'archiviata' AND COALESCE(data,'') LIKE ?`).get(likeAnno);
+
   const counts = {
     categorie: db.prepare('SELECT COUNT(*) AS n FROM cont_categorie WHERE attiva = 1').get().n,
     centri_costo: db.prepare('SELECT COUNT(*) AS n FROM cont_centri_costo WHERE attivo = 1').get().n,
     commesse_aperte: db.prepare("SELECT COUNT(*) AS n FROM cont_commesse WHERE stato = 'aperta'").get().n,
-    pagamenti: db.prepare('SELECT COUNT(*) AS n FROM cont_pagamenti').get().n
+    pagamenti: db.prepare('SELECT COUNT(*) AS n FROM cont_pagamenti').get().n,
+    spese: speseAnno.n
   };
 
   return {
@@ -286,6 +291,7 @@ function dashboard(filters = {}) {
     margine_lordo: round2(attive.imponibile - passive.imponibile),
     da_incassare: daIncassare,
     da_pagare: daPagare,
+    spese_documentate: round2(speseAnno.tot),
     counts
   };
 }

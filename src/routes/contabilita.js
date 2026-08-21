@@ -11,6 +11,7 @@ const svc = require('../services/stamp-duty-service');
 const cont = require('../services/contabilita-service');
 const bank = require('../services/bank-service');
 const gest = require('../services/gestione-service');
+const spese = require('../services/spese-service');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -396,6 +397,65 @@ router.post('/nota-manuale', canEdit, (req, res) => {
 router.delete('/nota-manuale/:id', canDelete, (req, res) => {
   try { res.json(gest.deleteNotaManuale(Number(req.params.id))); }
   catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ===========================================================================
+// Fase D (core) — Spese documentate e manuali (nessuna estrazione AI)
+// ===========================================================================
+
+router.get('/spese', canRead, (req, res) => {
+  try { res.json({ spese: spese.listSpese({ stato: req.query.stato, dal: req.query.dal, al: req.query.al, categoria_id: req.query.categoria_id }) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Crea una spesa. Il documento (foto/PDF) e' opzionale: se presente viene
+// archiviato con SHA-256 e validato (MIME + magic bytes); l'upload non viene
+// mai bloccato dai campi (si compila a mano).
+router.post('/spese', canEdit, upload.single('file'), (req, res) => {
+  try {
+    let documentoId = null;
+    if (req.file) {
+      try {
+        const doc = spese.saveDocumento(req.file, req.user.id);
+        documentoId = doc.id;
+      } catch (docErr) {
+        try { fs.unlinkSync(req.file.path); } catch {}
+        throw docErr;
+      }
+    }
+    const r = spese.createSpesa(req.body || {}, documentoId, req.user.id);
+    writeAudit({ utente_id: req.user.id, azione: 'contabilita.spesa.crea', entita_tipo: 'cont_spesa', entita_id: r.id, dettagli: { documento_id: documentoId } });
+    res.json({ ...r, documento_id: documentoId });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.put('/spese/:id', canEdit, (req, res) => {
+  try {
+    const r = spese.updateSpesa(Number(req.params.id), req.body || {});
+    writeAudit({ utente_id: req.user.id, azione: 'contabilita.spesa.modifica', entita_tipo: 'cont_spesa', entita_id: Number(req.params.id), dettagli: {} });
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.delete('/spese/:id', canDelete, (req, res) => {
+  try {
+    const r = spese.deleteSpesa(Number(req.params.id));
+    writeAudit({ utente_id: req.user.id, azione: 'contabilita.spesa.elimina', entita_tipo: 'cont_spesa', entita_id: Number(req.params.id), dettagli: r });
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Scarica il documento allegato a una spesa.
+router.get('/spese/:id/documento', canRead, (req, res) => {
+  try {
+    const s = db.prepare('SELECT documento_id FROM cont_spese WHERE id = ?').get(Number(req.params.id));
+    if (!s || !s.documento_id) return res.status(404).json({ error: 'Nessun documento' });
+    const doc = spese.getDocumento(s.documento_id);
+    if (!doc || !fs.existsSync(doc.path)) return res.status(404).json({ error: 'File non trovato' });
+    res.setHeader('Content-Type', doc.mime || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${(doc.original_filename || 'documento').replace(/[^\w.\-]/g, '_')}"`);
+    fs.createReadStream(doc.path).pipe(res);
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // ===========================================================================
