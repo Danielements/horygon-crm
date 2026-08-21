@@ -4231,6 +4231,8 @@ async function contRenderTab() {
   try {
     if (CONT_STATE.tab === 'dashboard') return contRenderDashboard(el);
     if (CONT_STATE.tab === 'fatture') return contRenderFatture(el);
+    if (CONT_STATE.tab === 'banca') return contRenderBanca(el);
+    if (CONT_STATE.tab === 'riconciliazione') return contRenderRiconciliazione(el);
     if (CONT_STATE.tab === 'centri') return contRenderCentri(el);
     if (CONT_STATE.tab === 'commesse') return contRenderCommesse(el);
     if (CONT_STATE.tab === 'categorie') return contRenderCategorie(el);
@@ -4381,6 +4383,182 @@ async function contClassifica(fatturaId) {
     toast('Classificazione salvata', 'success');
     contRenderTab();
   } catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+// --- Banca: conti, import estratto conto, movimenti ------------------------
+const CONT_BANK_FIELDS = [
+  ['data_operazione', 'Data operazione *'],
+  ['importo', 'Importo (con segno)'],
+  ['entrata', 'Entrata (avere)'],
+  ['uscita', 'Uscita (dare)'],
+  ['descrizione', 'Descrizione'],
+  ['controparte', 'Controparte'],
+  ['iban_controparte', 'IBAN controparte'],
+  ['trn', 'TRN'],
+  ['cro', 'CRO'],
+  ['data_valuta', 'Data valuta']
+];
+
+async function contRenderBanca(el) {
+  const editable = canEditSection('contabilita');
+  const [contiR, movR] = await Promise.all([
+    api('GET', '/contabilita/conti'),
+    api('GET', `/contabilita/movimenti${CONT_STATE.contoId ? `?conto_id=${CONT_STATE.contoId}` : ''}`)
+  ]);
+  const conti = contiR.conti || [], mov = movR.movimenti || [];
+  const contiRows = conti.map(c => `<span class="badge ${c.attivo ? 'badge-pagata' : 'badge-cliente'}" style="margin-right:6px">${escapeHtml(c.nome)}${c.iban ? ` · ${escapeHtml(c.iban)}` : ''}</span>`).join('') || '<span style="color:var(--text-muted)">Nessun conto</span>';
+  const statoBadge = { da_riconciliare: 'badge-cliente', riconciliato: 'badge-pagata', parziale: 'badge-scaduta', ignorato: 'badge-cliente' };
+  el.innerHTML = `
+    <div class="card" style="padding:12px;margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <div><strong>Conti</strong><div style="margin-top:6px">${contiRows}</div></div>
+        <div style="display:flex;gap:6px">
+          ${editable ? `<button class="btn btn-outline btn-sm" onclick="contNuovoConto()">+ Conto</button>` : ''}
+          ${editable && conti.length ? `<button class="btn btn-accent btn-sm" onclick="contImportBanca()">Importa estratto conto</button>` : ''}
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+      <select class="btn btn-outline btn-sm" onchange="CONT_STATE.contoId=this.value||null;contRenderTab()">
+        <option value="">Tutti i conti</option>
+        ${conti.map(c => `<option value="${c.id}"${String(CONT_STATE.contoId)===String(c.id)?' selected':''}>${escapeHtml(c.nome)}</option>`).join('')}
+      </select>
+      <span style="font-size:12px;color:var(--text-muted)">${mov.length} movimenti</span>
+    </div>
+    <div class="table-wrapper"><table class="data-table">
+      <thead><tr><th>Data</th><th>Descrizione</th><th>Controparte</th><th style="text-align:right">Importo</th><th>Stato</th></tr></thead>
+      <tbody>${mov.map(m => `<tr>
+        <td>${formatDateIt(m.data_operazione)}</td>
+        <td>${escapeHtml(m.descrizione || '-')}</td>
+        <td>${escapeHtml(m.controparte || '-')}</td>
+        <td style="text-align:right;color:${m.importo<0?'var(--danger,#dc2626)':'var(--success,#16a34a)'}">${formatCurrencyIt(m.importo)}</td>
+        <td><span class="badge ${statoBadge[m.stato_riconciliazione]||'badge-cliente'}">${escapeHtml(m.stato_riconciliazione)}</span></td>
+      </tr>`).join('') || '<tr><td colspan="5" style="color:var(--text-muted)">Nessun movimento</td></tr>'}</tbody>
+    </table></div>`;
+}
+
+async function contNuovoConto() {
+  const vals = await contDialog('Nuovo conto', [
+    { key: 'nome', label: 'Nome', type: 'text' },
+    { key: 'iban', label: 'IBAN', type: 'text' },
+    { key: 'intestatario', label: 'Intestatario', type: 'text' },
+    { key: 'saldo_iniziale', label: 'Saldo iniziale', type: 'number' }
+  ]);
+  if (!vals || !vals.nome) return;
+  try { await api('POST', '/contabilita/conti', vals); toast('Conto creato', 'success'); contRenderTab(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+// Wizard import: upload -> preview colonne -> mapping -> import.
+async function contImportBanca() {
+  const [contiR, tplR] = await Promise.all([api('GET', '/contabilita/conti'), api('GET', '/contabilita/banca/template')]);
+  const conti = (contiR.conti || []).filter(c => c.attivo), templates = tplR.template || [];
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = '.csv,.xlsx,.xls';
+  input.onchange = async () => {
+    const file = input.files[0]; if (!file) return;
+    const fd = new FormData(); fd.append('file', file);
+    let preview;
+    try { preview = await apiForm('POST', '/contabilita/banca/preview', fd); }
+    catch (e) { return toast(e.message || 'Errore lettura file', 'error'); }
+    const cols = preview.colonne || [];
+    const colOpts = (sel) => `<option value="">—</option>` + cols.map(c => `<option value="${escapeAttr(c)}"${sel===c?' selected':''}>${escapeHtml(c)}</option>`).join('');
+    const fieldsHtml = `
+      <label style="display:block;margin-bottom:10px;font-size:13px">Conto
+        <select id="imp-conto" class="btn btn-outline" style="width:100%;display:block;margin-top:4px">${conti.map(c=>`<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join('')}</select></label>
+      ${templates.length ? `<label style="display:block;margin-bottom:10px;font-size:13px">Template salvato (opzionale)
+        <select id="imp-tpl" class="btn btn-outline" style="width:100%;display:block;margin-top:4px" onchange="contApplyTemplate(${JSON.stringify(templates).replace(/"/g,'&quot;')})">
+          <option value="">— mapping manuale —</option>${templates.map(t=>`<option value="${t.id}">${escapeHtml(t.nome)}</option>`).join('')}</select></label>` : ''}
+      <p style="font-size:12px;color:var(--text-muted);margin:6px 0">${preview.righe_totali} righe. Mappa le colonne (Data e Importo o Entrata/Uscita sono obbligatorie):</p>
+      <div style="max-height:40vh;overflow:auto">${CONT_BANK_FIELDS.map(([k,lab])=>`<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+        <span style="width:150px;font-size:13px">${lab}</span>
+        <select class="imp-map btn btn-outline btn-sm" data-field="${k}" style="flex:1">${colOpts()}</select></div>`).join('')}</div>
+      <label style="display:block;margin-top:10px;font-size:13px">Separatore decimale
+        <select id="imp-decimale" class="btn btn-outline" style="margin-left:6px"><option value=",">, (italiano)</option><option value=".">.</option></select></label>`;
+    const ok = await contDialog('Importa estratto conto', null, fieldsHtml);
+    if (!ok) return;
+    const mapping = {};
+    document.querySelectorAll('.imp-map').forEach(s => { if (s.value) mapping[s.dataset.field] = s.value; });
+    if (!mapping.data_operazione || (!mapping.importo && !mapping.entrata && !mapping.uscita)) return toast('Mappa almeno Data e Importo (o Entrata/Uscita)', 'error');
+    const conto_id = document.getElementById('imp-conto').value;
+    const decimale = document.getElementById('imp-decimale').value;
+    const fd2 = new FormData(); fd2.append('file', file); fd2.append('conto_id', conto_id); fd2.append('mapping', JSON.stringify(mapping)); fd2.append('decimale', decimale);
+    try {
+      const r = await apiForm('POST', '/contabilita/banca/import', fd2);
+      toast(`Import: ${r.importate} nuovi, ${r.duplicate} duplicati${r.scartate?`, ${r.scartate} scartati`:''}`, 'success');
+      if (confirm('Salvare questo mapping come template per la prossima volta?')) {
+        const nome = prompt('Nome template (es. banca/formato):');
+        if (nome) await api('POST', '/contabilita/banca/template', { nome, mapping, decimale });
+      }
+      contRenderTab();
+    } catch (e) { toast(e.message || 'Errore import', 'error'); }
+  };
+  input.click();
+}
+
+function contApplyTemplate(templates) {
+  const id = Number(document.getElementById('imp-tpl').value);
+  const t = templates.find(x => x.id === id);
+  if (!t) return;
+  document.querySelectorAll('.imp-map').forEach(s => { s.value = (t.mapping && t.mapping[s.dataset.field]) || ''; });
+  if (t.decimale) document.getElementById('imp-decimale').value = t.decimale;
+}
+
+// --- Riconciliazione -------------------------------------------------------
+async function contRenderRiconciliazione(el) {
+  const r = await api('GET', '/contabilita/movimenti?stato=da_riconciliare');
+  const mov = r.movimenti || [];
+  el.innerHTML = `
+    <p style="font-size:12px;color:var(--text-muted);margin:0 0 10px">${mov.length} movimenti da riconciliare. Il sistema propone le fatture candidate per punteggio.</p>
+    <div id="cont-ric-list">${mov.map(contRicRow).join('') || '<div style="color:var(--text-muted)">Nulla da riconciliare</div>'}</div>`;
+}
+
+function contRicRow(m) {
+  return `<div class="card" style="padding:10px;margin-bottom:8px" id="ric-mov-${m.id}">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <div><strong>${formatDateIt(m.data_operazione)}</strong> · ${escapeHtml(m.descrizione || '-')}
+        <span style="color:${m.importo<0?'var(--danger,#dc2626)':'var(--success,#16a34a)'};font-weight:600;margin-left:6px">${formatCurrencyIt(m.importo)}</span></div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-outline btn-sm" onclick="contRicProposte(${m.id})">Proposte</button>
+        <button class="btn btn-outline btn-sm" onclick="contRicIgnora(${m.id})">Ignora</button>
+      </div>
+    </div>
+    <div id="ric-cand-${m.id}"></div>
+  </div>`;
+}
+
+async function contRicProposte(movId) {
+  const box = document.getElementById(`ric-cand-${movId}`);
+  box.innerHTML = '<div style="color:var(--text-muted);font-size:12px;margin-top:8px">Cerco candidati…</div>';
+  try {
+    const r = await api('GET', `/contabilita/riconciliazione/${movId}/proposte`);
+    const cand = r.candidati || [];
+    if (!cand.length) { box.innerHTML = '<div style="color:var(--text-muted);font-size:12px;margin-top:8px">Nessuna fattura candidata. Usa Ignora o classifica manualmente.</div>'; return; }
+    box.innerHTML = `<div style="margin-top:8px;border-top:1px solid var(--border,#ddd);padding-top:8px">
+      ${cand.map(f => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 0">
+        <div style="font-size:13px">#${escapeHtml(String(f.numero||f.id))} · ${escapeHtml(f.controparte||'-')} · residuo ${formatCurrencyIt(f.residuo)}
+          <span class="badge badge-cliente" title="punteggio">${Math.round(f.score*100)}%</span></div>
+        <button class="btn btn-accent btn-sm" onclick="contRicAbbina(${movId}, ${f.id}, ${f.residuo})">Abbina</button>
+      </div>`).join('')}</div>`;
+  } catch (e) { box.innerHTML = `<div style="color:var(--danger);font-size:12px">${escapeHtml(e.message||'Errore')}</div>`; }
+}
+
+async function contRicAbbina(movId, fatturaId, residuo) {
+  const vals = await contDialog('Abbina movimento a fattura', [
+    { key: 'importo_quota', label: 'Quota da imputare', type: 'number', value: residuo != null ? residuo : '' }
+  ]);
+  if (!vals) return;
+  try {
+    const r = await api('POST', `/contabilita/riconciliazione/${movId}/abbina`, { allocazioni: [{ fattura_id: fatturaId, importo_quota: Number(vals.importo_quota) }] });
+    toast(`Movimento ${r.stato}`, 'success');
+    contRenderTab();
+  } catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+async function contRicIgnora(movId) {
+  if (!confirm('Ignorare questo movimento? Non risultera piu tra quelli da riconciliare.')) return;
+  try { await api('POST', `/contabilita/riconciliazione/${movId}/ignora`, {}); contRenderTab(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
 }
 
 async function contRenderCentri(el) {

@@ -1,10 +1,52 @@
 const express = require('express');
+const fs = require('fs');
+const multer = require('multer');
+const XLSX = require('xlsx');
+const csvParse = require('csv-parse/sync');
 const router = express.Router();
 const db = require('../db/database');
 const { authMiddleware, requirePermesso } = require('../middleware/auth');
 const { writeAudit } = require('../services/audit');
 const svc = require('../services/stamp-duty-service');
 const cont = require('../services/contabilita-service');
+const bank = require('../services/bank-service');
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = './uploads/contabilita';
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`)
+});
+const upload = multer({ storage });
+
+// Legge un CSV/XLSX in righe-oggetto chiavate dall'intestazione. Per i CSV si
+// usa csv-parse tenendo i valori come TESTO (XLSX interpreterebbe "122,00" come
+// 12200, formato migliaia US): l'importo lo normalizza bank-service col
+// separatore decimale scelto. Per gli XLSX i numeri sono gia numeri reali.
+function parseUploadedRows(filePath, originalName) {
+  const ext = String(originalName || filePath).toLowerCase().split('.').pop();
+  if (ext === 'csv' || ext === 'txt') {
+    const text = fs.readFileSync(filePath, 'utf8').replace(/^﻿/, '');
+    const firstLine = text.split(/\r?\n/)[0] || '';
+    const delimiter = firstLine.includes(';') ? ';' : (firstLine.includes('\t') ? '\t' : ',');
+    const righe = csvParse.parse(text, { delimiter, columns: true, skip_empty_lines: true, relax_column_count: true, trim: true, bom: true });
+    const colonne = righe.length ? Object.keys(righe[0]) : firstLine.split(delimiter).map((s) => s.trim());
+    return { colonne, righe };
+  }
+  const wb = XLSX.readFile(filePath, { cellDates: true });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', blankrows: false });
+  if (!matrix.length) return { colonne: [], righe: [] };
+  const header = matrix[0].map((h) => String(h).trim());
+  const righe = matrix.slice(1).map((arr) => {
+    const o = {};
+    header.forEach((h, i) => { o[h] = arr[i] != null ? arr[i] : ''; });
+    return o;
+  });
+  return { colonne: header, righe };
+}
 
 router.use(authMiddleware);
 
@@ -189,6 +231,117 @@ router.delete('/commesse/:id', canDelete, (req, res) => {
   try {
     db.prepare("UPDATE cont_commesse SET stato = 'chiusa' WHERE id = ?").run(Number(req.params.id));
     res.json({ ok: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ===========================================================================
+// Fase B — Banca e riconciliazione
+// ===========================================================================
+
+// --- Conti -----------------------------------------------------------------
+router.get('/conti', canRead, (req, res) => {
+  try { res.json({ conti: bank.listConti() }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.post('/conti', canEdit, (req, res) => {
+  const b = req.body || {};
+  try {
+    if (!b.nome) throw new Error('Nome obbligatorio');
+    const info = db.prepare(`INSERT INTO cont_conti (nome, iban, intestatario, valuta, saldo_iniziale, attivo)
+      VALUES (?, ?, ?, ?, ?, ?)`).run(b.nome, b.iban || null, b.intestatario || null, b.valuta || 'EUR',
+      b.saldo_iniziale != null ? Number(b.saldo_iniziale) : 0, b.attivo === 0 ? 0 : 1);
+    res.json({ id: Number(info.lastInsertRowid) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.put('/conti/:id', canEdit, (req, res) => {
+  const b = req.body || {};
+  try {
+    db.prepare(`UPDATE cont_conti SET nome = COALESCE(?, nome), iban = ?, intestatario = ?,
+      valuta = COALESCE(?, valuta), saldo_iniziale = COALESCE(?, saldo_iniziale), attivo = COALESCE(?, attivo) WHERE id = ?`)
+      .run(b.nome ?? null, b.iban ?? null, b.intestatario ?? null, b.valuta ?? null,
+        b.saldo_iniziale != null ? Number(b.saldo_iniziale) : null, b.attivo ?? null, Number(req.params.id));
+    res.json({ ok: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// --- Template di mapping ---------------------------------------------------
+router.get('/banca/template', canRead, (req, res) => {
+  try { res.json({ template: bank.listTemplate() }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.post('/banca/template', canEdit, (req, res) => {
+  const b = req.body || {};
+  try {
+    if (!b.nome) throw new Error('Nome obbligatorio');
+    const mapping = typeof b.mapping === 'string' ? b.mapping : JSON.stringify(b.mapping || {});
+    if (b.id) {
+      db.prepare(`UPDATE cont_banca_template SET nome = ?, mapping = ?, formato_data = ?, separatore = ?, decimale = ? WHERE id = ?`)
+        .run(b.nome, mapping, b.formato_data || null, b.separatore || ',', b.decimale || ',', Number(b.id));
+      return res.json({ id: Number(b.id) });
+    }
+    const info = db.prepare(`INSERT INTO cont_banca_template (nome, mapping, formato_data, separatore, decimale)
+      VALUES (?, ?, ?, ?, ?)`).run(b.nome, mapping, b.formato_data || null, b.separatore || ',', b.decimale || ',');
+    res.json({ id: Number(info.lastInsertRowid) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// --- Upload/preview/import estratto conto ----------------------------------
+router.post('/banca/preview', canEdit, upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) throw new Error('File mancante');
+    const parsed = parseUploadedRows(req.file.path, req.file.originalname);
+    res.json({ colonne: parsed.colonne, righe_totali: parsed.righe.length, anteprima: parsed.righe.slice(0, 15), file_path: req.file.path });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.post('/banca/import', canEdit, upload.single('file'), (req, res) => {
+  const b = req.body || {};
+  try {
+    // Il file puo arrivare col multipart, oppure si riusa un file_path del preview.
+    const filePath = req.file ? req.file.path : b.file_path;
+    if (!filePath) throw new Error('File mancante');
+    if (!b.conto_id) throw new Error('Conto obbligatorio');
+
+    let template = null;
+    if (b.template_id) {
+      template = bank.listTemplate().find((t) => t.id === Number(b.template_id)) || null;
+    } else if (b.mapping) {
+      template = { mapping: typeof b.mapping === 'string' ? JSON.parse(b.mapping) : b.mapping, decimale: b.decimale || ',', formato_data: b.formato_data || null };
+    }
+    if (!template || !template.mapping || !Object.keys(template.mapping).length) throw new Error('Mapping colonne obbligatorio');
+
+    const parsed = parseUploadedRows(filePath, (req.file && req.file.originalname) || b.file_name || filePath);
+    const r = bank.importMovements({ conto_id: Number(b.conto_id), template, rows: parsed.righe, fileName: (req.file && req.file.originalname) || null, userId: req.user.id });
+    writeAudit({ utente_id: req.user.id, azione: 'contabilita.banca.import', entita_tipo: 'cont_conto', entita_id: Number(b.conto_id), dettagli: r });
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// --- Movimenti -------------------------------------------------------------
+router.get('/movimenti', canRead, (req, res) => {
+  try {
+    res.json({ movimenti: bank.listMovimenti({ conto_id: req.query.conto_id, stato: req.query.stato, dal: req.query.dal, al: req.query.al, limit: req.query.limit }) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// --- Riconciliazione -------------------------------------------------------
+router.get('/riconciliazione/:movimentoId/proposte', canRead, (req, res) => {
+  try { res.json({ candidati: bank.reconciliationCandidates(Number(req.params.movimentoId), Number(req.query.limit) || 10) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.post('/riconciliazione/:movimentoId/abbina', canEdit, (req, res) => {
+  const b = req.body || {};
+  try {
+    const r = bank.reconcile(Number(req.params.movimentoId), b.allocazioni || b.righe || [], req.user.id);
+    writeAudit({ utente_id: req.user.id, azione: 'contabilita.riconcilia.abbina', entita_tipo: 'cont_movimento', entita_id: Number(req.params.movimentoId), dettagli: { stato: r.stato, pagamento_id: r.pagamento_id } });
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+router.post('/riconciliazione/:movimentoId/ignora', canEdit, (req, res) => {
+  try {
+    const r = bank.ignoreMovement(Number(req.params.movimentoId));
+    writeAudit({ utente_id: req.user.id, azione: 'contabilita.riconcilia.ignora', entita_tipo: 'cont_movimento', entita_id: Number(req.params.movimentoId), dettagli: r });
+    res.json(r);
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 

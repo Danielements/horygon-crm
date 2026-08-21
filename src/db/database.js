@@ -1191,6 +1191,76 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_cont_pf_pagamento ON cont_pagamenti_fatture(pagamento_id);
 `);
 
+// --- Contabilita Fase B: banca e riconciliazione ---------------------------
+// Conti/carte, movimenti bancari (import idempotente via fingerprint UNIQUE),
+// template di mapping colonne per banca (nessuna banca cablata), batch import.
+// La riconciliazione riusa cont_pagamenti/cont_pagamenti_fatture: un movimento
+// abbinato genera un pagamento collegato (movimento_bancario_id) e aggiorna il
+// paymentStatus derivato delle fatture.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS cont_conti (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER DEFAULT 1,
+    nome TEXT NOT NULL,
+    iban TEXT,
+    intestatario TEXT,
+    valuta TEXT DEFAULT 'EUR',
+    saldo_iniziale REAL DEFAULT 0,
+    attivo INTEGER DEFAULT 1,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS cont_banca_template (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER DEFAULT 1,
+    nome TEXT NOT NULL,
+    mapping TEXT,                        -- JSON { campo: nomeColonna }
+    formato_data TEXT,                   -- es. DD/MM/YYYY
+    separatore TEXT DEFAULT ',',
+    decimale TEXT DEFAULT ',',
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS cont_banca_import (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER DEFAULT 1,
+    conto_id INTEGER,
+    template_id INTEGER,
+    file_origine TEXT,
+    righe_totali INTEGER DEFAULT 0,
+    righe_importate INTEGER DEFAULT 0,
+    righe_duplicate INTEGER DEFAULT 0,
+    creato_da INTEGER,
+    creato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (conto_id) REFERENCES cont_conti(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS cont_movimenti_bancari (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER DEFAULT 1,
+    conto_id INTEGER NOT NULL,
+    data_operazione TEXT,
+    data_valuta TEXT,
+    importo REAL NOT NULL,               -- con segno: + entrata, - uscita
+    segno INTEGER,                       -- 1 entrata, -1 uscita (derivato)
+    descrizione TEXT,
+    controparte TEXT,
+    iban_controparte TEXT,
+    trn TEXT,
+    cro TEXT,
+    transaction_id TEXT,
+    raw_data TEXT,                       -- riga originale (JSON)
+    fingerprint TEXT UNIQUE,             -- idempotenza reimport
+    import_id INTEGER,
+    stato_riconciliazione TEXT DEFAULT 'da_riconciliare', -- da_riconciliare|riconciliato|parziale|ignorato
+    creato_il TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (conto_id) REFERENCES cont_conti(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_cont_mov_conto ON cont_movimenti_bancari(conto_id);
+  CREATE INDEX IF NOT EXISTS idx_cont_mov_stato ON cont_movimenti_bancari(stato_riconciliazione);
+`);
+
 [
   "tenant_id INTEGER DEFAULT 1",
   "unita_misura TEXT",
