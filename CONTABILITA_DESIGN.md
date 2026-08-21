@@ -16,8 +16,15 @@ approvare prima di partire con la Fase A.
   (paymentStatus derivato + cache in `fatture.stato_pagamento`, split
   classificazione, pagamenti M:N, dashboard); route `/api/contabilita`; menu +
   sezione a tab nella SPA; `tests/contabilita.test.js` (suite verde).
-- **Fase B — Banca & riconciliazione: IN CORSO.**
-- Fasi C–F: da fare.
+- **Fase B — Banca & riconciliazione: FATTA** (2026-08-21, commit `668d051`).
+  Consegnato: tabelle `cont_conti`/`cont_banca_template`/`cont_banca_import`/
+  `cont_movimenti_bancari` (fingerprint UNIQUE); `bank-service.js` (parsing
+  importi IT/US e date, mapping colonne, import idempotente, matchScore,
+  riconciliazione parziale e uno-a-molti che riusa i pagamenti Fase A);
+  route conti/template/banca(preview+import)/movimenti/riconciliazione; tab
+  Banca (wizard import con template) e Riconciliazione; `tests/bank.test.js`.
+- **Fase C — Flussi gestionali: IN CORSO.**
+- Fasi D–F: da fare.
 
 Principi fissati dalla specifica, che vincolano tutto il resto:
 
