@@ -15,6 +15,8 @@ const spese = require('../services/spese-service');
 const ctrl = require('../services/controllo-service');
 const commercialista = require('../services/commercialista-service');
 const auto = require('../services/automazione-service');
+const aiProvider = require('../services/ai-provider');
+const bankAi = require('../services/bank-ai-extraction');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -318,6 +320,43 @@ router.post('/banca/import', canEdit, upload.single('file'), (req, res) => {
     const parsed = parseUploadedRows(filePath, (req.file && req.file.originalname) || b.file_name || filePath);
     const r = bank.importMovements({ conto_id: Number(b.conto_id), template, rows: parsed.righe, fileName: (req.file && req.file.originalname) || null, userId: req.user.id });
     writeAudit({ utente_id: req.user.id, azione: 'contabilita.banca.import', entita_tipo: 'cont_conto', entita_id: Number(b.conto_id), dettagli: r });
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// --- Import PDF via AI (disattivabile) -------------------------------------
+// Stato AI: se non configurata/abilitata, il frontend nasconde l'opzione PDF.
+router.get('/banca/ai-stato', canRead, (req, res) => {
+  res.json({ configurata: aiProvider.isConfigured(), abilitata: aiProvider.isEnabled(), modello: aiProvider.DEFAULT_MODEL });
+});
+
+// Analizza un PDF di estratto conto con l'AI e verifica i movimenti contro i
+// totali del riepilogo. NON importa: ritorna l'anteprima da confermare.
+router.post('/banca/pdf-analizza', canEdit, upload.single('file'), async (req, res) => {
+  try {
+    if (!aiProvider.isEnabled()) throw new Error('Estrazione AI non disponibile (chiave assente o disattivata)');
+    if (!req.file) throw new Error('File PDF mancante');
+    const buf = fs.readFileSync(req.file.path);
+    const mime = req.file.mimetype && req.file.mimetype.startsWith('image/') ? req.file.mimetype : 'application/pdf';
+    const result = await bankAi.extractBankStatement(buf, { mime, filename: req.file.originalname });
+    writeAudit({ utente_id: req.user.id, azione: 'contabilita.banca.pdf-analizza', entita_tipo: 'file', entita_id: null, dettagli: { movimenti: result.movimenti.length, coerente: result.verifica.coerente } });
+    res.json(result);
+  } catch (e) {
+    try {
+      db.prepare(`INSERT INTO system_log (livello, origine, messaggio, dettagli) VALUES ('error','contabilita-banca-ai',?,?)`)
+        .run(e.message, JSON.stringify({ file: req.file && req.file.originalname }));
+    } catch {}
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Importa i movimenti gia' estratti/confermati dall'anteprima AI.
+router.post('/banca/importa-parsed', canEdit, (req, res) => {
+  const b = req.body || {};
+  try {
+    if (!b.conto_id) throw new Error('Conto obbligatorio');
+    const r = bank.importParsedMovements({ conto_id: Number(b.conto_id), movimenti: b.movimenti || [], fileName: b.file_name || 'estratto-pdf', userId: req.user.id, source: 'AI_PDF' });
+    writeAudit({ utente_id: req.user.id, azione: 'contabilita.banca.importa-parsed', entita_tipo: 'cont_conto', entita_id: Number(b.conto_id), dettagli: r });
     res.json(r);
   } catch (e) { res.status(400).json({ error: e.message }); }
 });

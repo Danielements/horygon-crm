@@ -4411,11 +4411,13 @@ const CONT_BANK_FIELDS = [
 
 async function contRenderBanca(el) {
   const editable = canEditSection('contabilita');
-  const [contiR, movR] = await Promise.all([
+  const [contiR, movR, aiR] = await Promise.all([
     api('GET', '/contabilita/conti'),
-    api('GET', `/contabilita/movimenti${CONT_STATE.contoId ? `?conto_id=${CONT_STATE.contoId}` : ''}`)
+    api('GET', `/contabilita/movimenti${CONT_STATE.contoId ? `?conto_id=${CONT_STATE.contoId}` : ''}`),
+    api('GET', '/contabilita/banca/ai-stato').catch(() => ({ abilitata: false }))
   ]);
   const conti = contiR.conti || [], mov = movR.movimenti || [];
+  const aiOn = !!aiR.abilitata;
   const contiRows = conti.map(c => `<span class="badge ${c.attivo ? 'badge-pagata' : 'badge-cliente'}" style="margin-right:6px">${escapeHtml(c.nome)}${c.iban ? ` · ${escapeHtml(c.iban)}` : ''}</span>`).join('') || '<span style="color:var(--text-muted)">Nessun conto</span>';
   const statoBadge = { da_riconciliare: 'badge-cliente', riconciliato: 'badge-pagata', parziale: 'badge-scaduta', ignorato: 'badge-cliente' };
   el.innerHTML = `
@@ -4424,7 +4426,8 @@ async function contRenderBanca(el) {
         <div><strong>Conti</strong><div style="margin-top:6px">${contiRows}</div></div>
         <div style="display:flex;gap:6px">
           ${editable ? `<button class="btn btn-outline btn-sm" onclick="contNuovoConto()">+ Conto</button>` : ''}
-          ${editable && conti.length ? `<button class="btn btn-accent btn-sm" onclick="contImportBanca()">Importa estratto conto</button>` : ''}
+          ${editable && conti.length ? `<button class="btn btn-accent btn-sm" onclick="contImportBanca()">Importa CSV/XLSX</button>` : ''}
+          ${editable && conti.length && aiOn ? `<button class="btn btn-accent btn-sm" onclick="contImportBancaPdf()" title="L'AI legge il PDF e verifica i totali">Importa PDF (AI)</button>` : ''}
         </div>
       </div>
     </div>
@@ -4501,6 +4504,49 @@ async function contImportBanca() {
         const nome = prompt('Nome template (es. banca/formato):');
         if (nome) await api('POST', '/contabilita/banca/template', { nome, mapping, decimale });
       }
+      contRenderTab();
+    } catch (e) { toast(e.message || 'Errore import', 'error'); }
+  };
+  input.click();
+}
+
+// Import PDF via AI: analizza -> anteprima con verifica totali -> conferma.
+async function contImportBancaPdf() {
+  const contiR = await api('GET', '/contabilita/conti');
+  const conti = (contiR.conti || []).filter(c => c.attivo);
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = '.pdf,application/pdf,image/*';
+  input.onchange = async () => {
+    const file = input.files[0]; if (!file) return;
+    const box = document.getElementById('cont-content');
+    toast('Analizzo il PDF con l\'AI…', 'info');
+    const fd = new FormData(); fd.append('file', file);
+    let r;
+    try { r = await apiForm('POST', '/contabilita/banca/pdf-analizza', fd); }
+    catch (e) { return toast(e.message || 'Analisi fallita', 'error'); }
+    const movs = r.movimenti || [], v = r.verifica || {};
+    const bannerColor = v.coerente ? 'var(--success,#16a34a)' : 'var(--danger,#dc2626)';
+    const bannerTxt = v.coerente
+      ? `✓ Verifica totali OK — entrate ${formatCurrencyIt(v.somma_entrate)}, uscite ${formatCurrencyIt(v.somma_uscite)}`
+      : `⚠ Attenzione: i movimenti estratti NON tornano coi totali dichiarati (entrate ${formatCurrencyIt(v.somma_entrate)} vs ${formatCurrencyIt(v.dichiarato && v.dichiarato.entrate)}, uscite ${formatCurrencyIt(v.somma_uscite)} vs ${formatCurrencyIt(v.dichiarato && v.dichiarato.uscite)}). Controlla prima di importare.`;
+    const rows = movs.map((m, i) => `<tr>
+        <td>${formatDateIt(m.data_operazione)}</td>
+        <td>${escapeHtml(m.descrizione || '-')}</td>
+        <td style="text-align:right;color:${m.importo<0?'var(--danger,#dc2626)':'var(--success,#16a34a)'}">${formatCurrencyIt(m.importo)}</td>
+      </tr>`).join('');
+    const body = `
+      <label style="display:block;font-size:13px;margin-bottom:10px">Conto
+        <select id="pdf-conto" class="btn btn-outline" style="width:100%;display:block;margin-top:4px">${conti.map(c=>`<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join('')}</select></label>
+      <div style="padding:8px;border-radius:6px;background:${v.coerente?'rgba(22,163,74,.1)':'rgba(220,38,38,.1)'};color:${bannerColor};font-size:13px;margin-bottom:10px">${bannerTxt}</div>
+      <p style="font-size:12px;color:var(--text-muted);margin:0 0 6px">${movs.length} movimenti estratti dall'AI. Controlla, poi importa.</p>
+      <div style="max-height:40vh;overflow:auto"><table class="data-table"><thead><tr><th>Data</th><th>Descrizione</th><th style="text-align:right">Importo</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    window.__PDF_MOVS = movs;
+    const ok = await contDialog('Anteprima estratto conto (AI)', null, body);
+    if (!ok) return;
+    const conto_id = document.getElementById('pdf-conto').value;
+    try {
+      const imp = await api('POST', '/contabilita/banca/importa-parsed', { conto_id, movimenti: window.__PDF_MOVS, file_name: file.name });
+      toast(`Importati ${imp.importate} movimenti (${imp.duplicate} duplicati)`, 'success');
       contRenderTab();
     } catch (e) { toast(e.message || 'Errore import', 'error'); }
   };

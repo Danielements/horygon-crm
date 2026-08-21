@@ -196,6 +196,44 @@ function importMovements({ conto_id, template, rows, fileName, userId }) {
   }
 }
 
+// Importa movimenti GIA' normalizzati (es. estratti dall'AI dal PDF), con la
+// stessa idempotenza dell'import da file. movimenti: [{data_operazione, importo,
+// descrizione, controparte?, data_valuta?}].
+function importParsedMovements({ conto_id, movimenti, fileName, userId, source }) {
+  const conto = db.prepare('SELECT id FROM cont_conti WHERE id = ?').get(Number(conto_id));
+  if (!conto) throw new Error('Conto inesistente');
+  const list = Array.isArray(movimenti) ? movimenti : [];
+
+  db.exec('BEGIN');
+  try {
+    const imp = db.prepare(`INSERT INTO cont_banca_import (conto_id, file_origine, righe_totali, creato_da)
+      VALUES (?, ?, ?, ?)`).run(Number(conto_id), fileName || null, list.length, userId != null ? Number(userId) : null);
+    const importId = Number(imp.lastInsertRowid);
+    const ins = db.prepare(`INSERT OR IGNORE INTO cont_movimenti_bancari
+      (conto_id, data_operazione, data_valuta, importo, segno, descrizione, controparte, iban_controparte, trn, cro, transaction_id, raw_data, fingerprint, import_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+
+    let importate = 0, duplicate = 0, scartate = 0;
+    for (const raw of list) {
+      const importo = round2(raw.importo);
+      const data = raw.data_operazione ? String(raw.data_operazione).slice(0, 10) : null;
+      if (importo == null || Number.isNaN(importo) || !data) { scartate++; continue; }
+      const m = { data_operazione: data, importo, descrizione: raw.descrizione || null, trn: raw.trn || null, cro: raw.cro || null, transaction_id: raw.transaction_id || null };
+      const fp = computeFingerprint(Number(conto_id), m);
+      const r = ins.run(Number(conto_id), data, raw.data_valuta || null, importo, importo >= 0 ? 1 : -1,
+        m.descrizione, raw.controparte || null, raw.iban_controparte || null, m.trn, m.cro, m.transaction_id,
+        JSON.stringify(raw), fp, importId);
+      if (r.changes > 0) importate++; else duplicate++;
+    }
+    db.prepare('UPDATE cont_banca_import SET righe_importate = ?, righe_duplicate = ? WHERE id = ?').run(importate, duplicate, importId);
+    db.exec('COMMIT');
+    return { import_id: importId, righe_totali: list.length, importate, duplicate, scartate };
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
 function listMovimenti(filters = {}) {
   const where = ['1=1'];
   const params = [];
@@ -282,6 +320,7 @@ module.exports = {
   listConti,
   listTemplate,
   importMovements,
+  importParsedMovements,
   listMovimenti,
   reconciliationCandidates,
   reconcile,
