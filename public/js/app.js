@@ -4241,6 +4241,7 @@ async function contRenderTab() {
     if (CONT_STATE.tab === 'rimborsi') return contRenderRimborsi(el);
     if (CONT_STATE.tab === 'budget') return contRenderBudget(el);
     if (CONT_STATE.tab === 'anomalie') return contRenderAnomalie(el);
+    if (CONT_STATE.tab === 'commercialista') return contRenderCommercialista(el);
     if (CONT_STATE.tab === 'centri') return contRenderCentri(el);
     if (CONT_STATE.tab === 'commesse') return contRenderCommesse(el);
     if (CONT_STATE.tab === 'categorie') return contRenderCategorie(el);
@@ -4914,6 +4915,47 @@ async function contRenderAnomalie(el) {
     <div class="table-wrapper"><table class="data-table">
       <thead><tr><th>Gravità</th><th>Tipo</th><th>Dettaglio</th></tr></thead>
       <tbody>${rows}</tbody></table></div>`;
+}
+
+// --- Commercialista: checklist stato-mese + export pacchetto ---------------
+function contMeseCorrente() { return new Date().toISOString().slice(0, 7); }
+
+async function contRenderCommercialista(el) {
+  const periodo = CONT_STATE.commPeriodo || contMeseCorrente();
+  CONT_STATE.commPeriodo = periodo;
+  const s = await api('GET', `/contabilita/commercialista/stato?periodo=${encodeURIComponent(periodo)}`);
+  const voci = (s.voci || []).map(v => `<tr>
+      <td>${v.esito === 'ok' ? '<span style="color:var(--success,#16a34a)">✓</span>' : '<span style="color:var(--danger,#dc2626)">!</span>'}</td>
+      <td>${escapeHtml(v.label)}</td>
+      <td style="color:var(--text-muted)">${escapeHtml(v.dettaglio)}</td>
+    </tr>`).join('');
+  el.innerHTML = `
+    <p style="font-size:12px;color:var(--text-muted);margin:0 0 12px">Prepara il pacchetto per il commercialista: controlla lo stato del mese e scarica un ZIP con i riepiloghi e gli XML/P7M originali. Non fa contabilità fiscale, impacchetta e basta.</p>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+      <span style="font-size:13px">Periodo (mese)</span>
+      <input type="month" value="${escapeAttr(periodo)}" onchange="CONT_STATE.commPeriodo=this.value;contRenderTab()" class="btn btn-outline btn-sm">
+      <span class="badge ${s.pronto ? 'badge-pagata' : 'badge-scaduta'}">${s.pronto ? 'Pronto da inviare' : 'Ci sono punti da sistemare'}</span>
+    </div>
+    <div class="card" style="padding:12px;margin-bottom:14px">
+      <strong style="font-size:13px">Checklist stato del mese</strong>
+      <div class="table-wrapper" style="margin-top:8px"><table class="data-table">
+        <tbody>${voci}</tbody></table></div>
+    </div>
+    <button class="btn btn-accent" onclick="contExportCommercialista()">⬇ Scarica pacchetto ZIP</button>`;
+}
+
+async function contExportCommercialista() {
+  const periodo = CONT_STATE.commPeriodo || contMeseCorrente();
+  try {
+    const res = await fetch(`/api/contabilita/commercialista/export?periodo=${encodeURIComponent(periodo)}`, { headers: { 'Authorization': `Bearer ${TOKEN}` } });
+    if (!res.ok) throw new Error('Export fallito');
+    const conteggi = res.headers.get('X-Export-Conteggi');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `commercialista-${periodo}.zip`; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    if (conteggi) { const c = JSON.parse(conteggi); toast(`Pacchetto: ${c.fatture} fatture, ${c.spese} spese, ${c.allegati} allegati`, 'success'); }
+  } catch (e) { toast(e.message || 'Errore', 'error'); }
 }
 
 async function contRenderCentri(el) {

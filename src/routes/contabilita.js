@@ -13,6 +13,7 @@ const bank = require('../services/bank-service');
 const gest = require('../services/gestione-service');
 const spese = require('../services/spese-service');
 const ctrl = require('../services/controllo-service');
+const commercialista = require('../services/commercialista-service');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -519,6 +520,26 @@ router.delete('/budget/:id', canDelete, (req, res) => {
 router.get('/report-gestionale', canRead, (req, res) => {
   try { res.json(ctrl.reportGestionale(req.query.periodo)); }
   catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ===========================================================================
+// Fase F — Commercialista: checklist stato-mese + export ZIP con originali
+// ===========================================================================
+
+router.get('/commercialista/stato', canRead, (req, res) => {
+  try { res.json(commercialista.statoMese(req.query.periodo)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.get('/commercialista/export', canRead, (req, res) => {
+  try {
+    const { filename, buffer, conteggi } = commercialista.buildExport(req.query.periodo);
+    writeAudit({ utente_id: req.user.id, azione: 'contabilita.commercialista.export', entita_tipo: 'periodo', entita_id: null, dettagli: { periodo: req.query.periodo, ...conteggi } });
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('X-Export-Conteggi', JSON.stringify(conteggi));
+    res.send(buffer);
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // ===========================================================================
