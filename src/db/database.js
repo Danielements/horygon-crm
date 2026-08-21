@@ -1096,6 +1096,101 @@ try {
   }
 } catch {}
 
+// --- Contabilita gestionale (pre-contabilita / controllo di gestione) -------
+// Fase A: classificazione (categorie/centri di costo/commesse + allocazione con
+// split), e pagamenti/incassi con abbinamento molti-a-molti alle fatture. Le
+// fatture NON si duplicano: la vista contabile legge da `fatture`. Il
+// paymentStatus e' DERIVATO da cont_pagamenti_fatture e messo in cache in
+// `fatture.stato_pagamento` (da_pagare/parziale/pagata). Mono-tenant come il
+// resto del CRM (tenant_id=1). Nessuna categoria/centro cablati: solo un seed
+// opzionale e disattivabile.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS cont_categorie (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER DEFAULT 1,
+    nome TEXT NOT NULL,
+    tipo TEXT NOT NULL DEFAULT 'COST',   -- COST | REVENUE | NEUTRAL
+    parent_id INTEGER,
+    colore TEXT,
+    ordine INTEGER DEFAULT 0,
+    attiva INTEGER DEFAULT 1,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS cont_centri_costo (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER DEFAULT 1,
+    nome TEXT NOT NULL,
+    codice TEXT,
+    parent_id INTEGER,
+    note TEXT,
+    attivo INTEGER DEFAULT 1,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS cont_commesse (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER DEFAULT 1,
+    nome TEXT NOT NULL,
+    codice TEXT,
+    anagrafica_id INTEGER,
+    valore_previsto REAL,
+    budget REAL,
+    data_inizio TEXT,
+    data_fine TEXT,
+    stato TEXT DEFAULT 'aperta',         -- aperta | chiusa | sospesa
+    note TEXT,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+
+  -- Allocazione polimorfica di un documento a categoria/centro/commessa, con
+  -- split percentuale: una riga per quota (la somma per entita deve fare 100).
+  CREATE TABLE IF NOT EXISTS cont_classificazioni (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER DEFAULT 1,
+    entita_tipo TEXT NOT NULL,           -- fattura | spesa | movimento | pagamento
+    entita_id INTEGER NOT NULL,
+    categoria_id INTEGER,
+    centro_costo_id INTEGER,
+    commessa_id INTEGER,
+    percentuale REAL DEFAULT 100,
+    importo REAL,
+    note TEXT,
+    creato_da INTEGER,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS cont_pagamenti (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER DEFAULT 1,
+    verso TEXT NOT NULL,                 -- incasso | pagamento
+    data TEXT,
+    importo REAL NOT NULL,
+    metodo TEXT,
+    movimento_bancario_id INTEGER,       -- collegamento logico (Fase B)
+    anagrafica_id INTEGER,
+    stato TEXT DEFAULT 'registrato',
+    note TEXT,
+    creato_da INTEGER,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+
+  -- Ponte molti-a-molti: un pagamento su piu fatture, piu pagamenti su una
+  -- fattura. Il paymentStatus della fattura deriva da qui.
+  CREATE TABLE IF NOT EXISTS cont_pagamenti_fatture (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pagamento_id INTEGER NOT NULL,
+    fattura_id INTEGER NOT NULL,
+    importo_quota REAL NOT NULL,
+    FOREIGN KEY (pagamento_id) REFERENCES cont_pagamenti(id) ON DELETE CASCADE,
+    FOREIGN KEY (fattura_id) REFERENCES fatture(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_cont_class_entita ON cont_classificazioni(entita_tipo, entita_id);
+  CREATE INDEX IF NOT EXISTS idx_cont_pf_fattura ON cont_pagamenti_fatture(fattura_id);
+  CREATE INDEX IF NOT EXISTS idx_cont_pf_pagamento ON cont_pagamenti_fatture(pagamento_id);
+`);
+
 [
   "tenant_id INTEGER DEFAULT 1",
   "unita_misura TEXT",
@@ -1164,7 +1259,7 @@ const APP_SECTIONS = [
   'clienti', 'fornitori', 'contatti', 'prodotti', 'magazzino', 'preventivi',
   'ordini', 'ddt', 'container', 'fatture', 'proforme', 'spedizioni',
   'attivita', 'documenti', 'mepa', 'cig', 'analytics', 'statistics',
-  'settings', 'mappa', 'utenti', 'ai', 'system_log'
+  'contabilita', 'settings', 'mappa', 'utenti', 'ai', 'system_log'
 ];
 
 const upsertRole = db.prepare(`
@@ -1187,7 +1282,10 @@ const upsertPerm = db.prepare(`
 `);
 
 APP_SECTIONS.forEach(section => {
-  const readonlyRead = section === 'utenti' || section === 'settings' ? 0 : 1;
+  // La contabilita e' sensibile: readonly e commerciale non la vedono (come
+  // utenti/settings). L'accesso e' per amministrazione, admin, superadmin e
+  // commercialista (sola lettura).
+  const readonlyRead = ['utenti', 'settings', 'contabilita'].includes(section) ? 0 : 1;
   upsertPerm.run(1, section, readonlyRead, 0, 0, 0);
 
   const commercialeEditable = ['clienti', 'fornitori', 'contatti', 'preventivi', 'ordini', 'attivita', 'documenti', 'mappa'].includes(section);
@@ -1197,15 +1295,15 @@ APP_SECTIONS.forEach(section => {
   upsertPerm.run(3, section, 1, 1, section === 'settings' ? 0 : 1, section === 'utenti' || section === 'settings' ? 1 : 0);
   upsertPerm.run(4, section, 1, 1, 1, 1);
 
-  const amministrazioneReadable = ['clienti', 'fornitori', 'contatti', 'fatture', 'ordini', 'preventivi', 'documenti', 'analytics', 'statistics', 'mappa'].includes(section);
-  const amministrazioneEditable = ['fatture', 'documenti', 'analytics', 'statistics'].includes(section);
+  const amministrazioneReadable = ['clienti', 'fornitori', 'contatti', 'fatture', 'ordini', 'preventivi', 'documenti', 'analytics', 'statistics', 'contabilita', 'mappa'].includes(section);
+  const amministrazioneEditable = ['fatture', 'documenti', 'analytics', 'statistics', 'contabilita'].includes(section);
   upsertPerm.run(5, section, amministrazioneReadable ? 1 : 0, amministrazioneEditable ? 1 : 0, 0, 0);
 
   const logisticaReadable = ['clienti', 'fornitori', 'contatti', 'prodotti', 'magazzino', 'ordini', 'ddt', 'container', 'proforme', 'spedizioni', 'documenti', 'mappa', 'analytics'].includes(section);
   const logisticaEditable = ['magazzino', 'ordini', 'ddt', 'container', 'proforme', 'spedizioni', 'documenti'].includes(section);
   upsertPerm.run(6, section, logisticaReadable ? 1 : 0, logisticaEditable ? 1 : 0, 0, 0);
 
-  const commercialistaReadable = ['fatture', 'documenti', 'analytics', 'statistics'].includes(section);
+  const commercialistaReadable = ['fatture', 'documenti', 'analytics', 'statistics', 'contabilita'].includes(section);
   upsertPerm.run(7, section, commercialistaReadable ? 1 : 0, 0, 0, 0);
 });
 

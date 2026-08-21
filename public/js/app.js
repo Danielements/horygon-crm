@@ -328,6 +328,7 @@ const NAV_PERMISSION_MAP = {
   'fatture-attive': 'fatture',
   'fatture-passive': 'fatture',
   'fatture-fuori-campo': 'fatture',
+  contabilita: 'contabilita',
   cig: 'cig',
   mepa: 'mepa',
   rdo: 'mepa',
@@ -553,7 +554,7 @@ function organizeNavigationLayout() {
     { label: 'Operativo', sections: ['attivita', 'notifiche'] },
     { label: 'Anagrafiche', sections: ['clienti', 'fornitori', 'contatti', 'mappa'] },
     { label: 'Logistica', sections: ['prodotti', 'kit', 'magazzino', 'preventivi', 'ordini', 'ddt', 'container', 'documenti'] },
-    { label: 'Contabilita', sections: ['fatture-attive', 'fatture-passive', 'fatture-fuori-campo', 'storico-sdi'] },
+    { label: 'Contabilita', sections: ['contabilita', 'fatture-attive', 'fatture-passive', 'fatture-fuori-campo', 'storico-sdi'] },
     { label: 'Statistica', sections: ['mepa', 'rdo', 'analytics'] },
     { label: 'Amministrazione', sections: ['settings', 'utenti', 'audit-log', 'system-log', 'automazioni'] }
   ];
@@ -581,6 +582,7 @@ function organizeNavigationLayout() {
         : section === 'ddt' ? getItem('ddt', 'DDT', '&#128666;')
         : section === 'container' ? getItem('container', 'Container CN', '&#128674;')
         : section === 'documenti' ? getItem('documenti', 'Documenti', '&#128193;')
+        : section === 'contabilita' ? getItem('contabilita', 'Contabilita', '&#128176;')
         : section === 'fatture-attive' ? getItem('fatture-attive', 'Fatture attive', '&#129534;')
         : section === 'fatture-passive' ? getItem('fatture-passive', 'Fatture passive', '&#129534;')
         : section === 'fatture-fuori-campo' ? getItem('fatture-fuori-campo', 'Fuori campo IVA', '&#129534;')
@@ -752,6 +754,7 @@ function navigateTo(section) {
       'fatture-passive': 'Fatture passive',
       'fatture-fuori-campo': 'Fuori campo IVA',
       'storico-sdi': 'Storico SdI',
+      contabilita: 'Contabilita',
       mepa: 'CPV MEPA',
       analytics: 'Analisi',
       notifiche: 'Notifiche',
@@ -779,6 +782,7 @@ function navigateTo(section) {
     'fatture-passive': () => loadFattureBySection('fatture-passive'),
     'fatture-fuori-campo': () => loadFattureBySection('fatture-fuori-campo'),
     'storico-sdi': loadStoricoSdi,
+    contabilita: loadContabilita,
     attivita: loadAttivita, documenti: loadDocumenti,
     statistics: loadStatistics, settings: loadSettingsPage,
     'audit-log': loadAuditLog,
@@ -4195,6 +4199,326 @@ async function riconciliaSettlement(id) {
     caricaBolloDashboard();
     loadFattureBySection('fatture-attive');
   } catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+// ===========================================================================
+// Contabilita gestionale (Fase A) — dashboard, fatture contabili, pagamenti,
+// classificazione (split), CRUD categorie/centri/commesse.
+// ===========================================================================
+const CONT_STATE = { tab: 'dashboard', anno: String(new Date().getFullYear()), fatturaFiltri: { direzione: '', stato_pagamento: '' } };
+
+function contShowTab(tab) {
+  CONT_STATE.tab = tab;
+  document.querySelectorAll('#cont-tabs .cont-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  contRenderTab();
+}
+
+async function loadContabilita() {
+  const sel = document.getElementById('cont-anno');
+  if (sel && !sel.options.length) {
+    const y = new Date().getFullYear();
+    for (let a = y; a >= y - 5; a--) sel.add(new Option(a, a));
+    sel.value = CONT_STATE.anno;
+  }
+  if (sel) CONT_STATE.anno = sel.value;
+  await contRenderTab();
+}
+
+async function contRenderTab() {
+  const el = document.getElementById('cont-content');
+  if (!el) return;
+  el.innerHTML = '<div style="color:var(--text-muted)">Caricamento…</div>';
+  try {
+    if (CONT_STATE.tab === 'dashboard') return contRenderDashboard(el);
+    if (CONT_STATE.tab === 'fatture') return contRenderFatture(el);
+    if (CONT_STATE.tab === 'centri') return contRenderCentri(el);
+    if (CONT_STATE.tab === 'commesse') return contRenderCommesse(el);
+    if (CONT_STATE.tab === 'categorie') return contRenderCategorie(el);
+  } catch (e) {
+    el.innerHTML = `<div class="card" style="color:var(--danger)">Errore: ${escapeHtml(e.message || String(e))}</div>`;
+  }
+}
+
+function contCard(label, value, sub) {
+  return `<div class="card" style="padding:14px;min-width:150px;flex:1">
+    <div style="font-size:12px;color:var(--text-muted)">${escapeHtml(label)}</div>
+    <div style="font-size:20px;font-weight:600;margin-top:4px">${value}</div>
+    ${sub ? `<div style="font-size:12px;color:var(--text-muted);margin-top:2px">${sub}</div>` : ''}
+  </div>`;
+}
+
+async function contRenderDashboard(el) {
+  const d = await api('GET', `/contabilita/dashboard?anno=${encodeURIComponent(CONT_STATE.anno)}`);
+  el.innerHTML = `
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      ${contCard(`Fatturato attivo ${d.anno}`, formatCurrencyIt(d.attive.imponibile), `${d.attive.n} fatture · IVA ${formatCurrencyIt(d.attive.iva)}`)}
+      ${contCard(`Costi (passive) ${d.anno}`, formatCurrencyIt(d.passive.imponibile), `${d.passive.n} fatture · IVA ${formatCurrencyIt(d.passive.iva)}`)}
+      ${contCard('Margine lordo', formatCurrencyIt(d.margine_lordo), 'attivo - passivo (imponibili)')}
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      ${contCard('Da incassare', `<span style="color:var(--success,#16a34a)">${formatCurrencyIt(d.da_incassare)}</span>`, 'residuo su fatture attive')}
+      ${contCard('Da pagare', `<span style="color:var(--danger,#dc2626)">${formatCurrencyIt(d.da_pagare)}</span>`, 'residuo su fatture passive')}
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      ${contCard('Categorie', d.counts.categorie)}
+      ${contCard('Centri di costo', d.counts.centri_costo)}
+      ${contCard('Commesse aperte', d.counts.commesse_aperte)}
+      ${contCard('Pagamenti registrati', d.counts.pagamenti)}
+    </div>
+    <p style="font-size:12px;color:var(--text-muted);margin-top:16px">
+      Report gestionale interno di HORYGON S.R.L. — non e' un bilancio ne' una liquidazione IVA.
+    </p>`;
+}
+
+const CONT_PAY_BADGE = {
+  UNPAID: ['Da pagare', 'badge-cliente'],
+  PARTIALLY_PAID: ['Parziale', 'badge-cliente'],
+  PAID: ['Pagata', 'badge-pagata'],
+  OVERPAID: ['Sovra-pagata', 'badge-scaduta']
+};
+
+async function contRenderFatture(el) {
+  const f = CONT_STATE.fatturaFiltri;
+  const qs = new URLSearchParams();
+  if (f.direzione) qs.set('direzione', f.direzione);
+  if (f.stato_pagamento) qs.set('stato_pagamento', f.stato_pagamento);
+  const r = await api('GET', `/contabilita/fatture?${qs.toString()}`);
+  const rows = r.fatture || [];
+  const editable = canEditSection('contabilita');
+  el.innerHTML = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
+      <select class="btn btn-outline btn-sm" onchange="CONT_STATE.fatturaFiltri.direzione=this.value;contRenderTab()">
+        <option value=""${!f.direzione?' selected':''}>Tutte le direzioni</option>
+        <option value="attiva"${f.direzione==='attiva'?' selected':''}>Attive (emesse)</option>
+        <option value="passiva"${f.direzione==='passiva'?' selected':''}>Passive (ricevute)</option>
+      </select>
+      <select class="btn btn-outline btn-sm" onchange="CONT_STATE.fatturaFiltri.stato_pagamento=this.value;contRenderTab()">
+        <option value=""${!f.stato_pagamento?' selected':''}>Ogni stato pagamento</option>
+        <option value="da_pagare"${f.stato_pagamento==='da_pagare'?' selected':''}>Da pagare</option>
+        <option value="parziale"${f.stato_pagamento==='parziale'?' selected':''}>Parziale</option>
+        <option value="pagata"${f.stato_pagamento==='pagata'?' selected':''}>Pagata</option>
+      </select>
+      <span style="font-size:12px;color:var(--text-muted)">${rows.length} fatture</span>
+    </div>
+    <div class="table-wrapper"><table class="data-table">
+      <thead><tr><th>Numero</th><th>Data</th><th>Dir.</th><th>Controparte</th><th style="text-align:right">Totale</th><th style="text-align:right">Pagato</th><th style="text-align:right">Residuo</th><th>Stato</th><th></th></tr></thead>
+      <tbody>${rows.map(x => contFatturaRow(x, editable)).join('') || '<tr><td colspan="9" style="color:var(--text-muted)">Nessuna fattura</td></tr>'}</tbody>
+    </table></div>`;
+}
+
+function contFatturaRow(x, editable) {
+  const [label, cls] = CONT_PAY_BADGE[x.payment_status] || [x.payment_status, 'badge-cliente'];
+  const dir = x.direzione === 'attiva' ? '➡' : '⬅';
+  const nota = x.tipo_documento === 'nota_credito' ? ' <span class="badge badge-cliente">NC</span>' : '';
+  const azioni = editable
+    ? `<button class="btn btn-outline btn-sm" onclick="contRegistraPagamento(${x.id}, '${x.direzione}', ${x.residuo})" title="Registra ${x.direzione==='attiva'?'incasso':'pagamento'}">${x.direzione==='attiva'?'Incassa':'Paga'}</button>
+       <button class="btn btn-outline btn-sm" onclick="contClassifica(${x.id})" title="Classifica su centri/commesse/categorie">Classifica${x.classificata?' ✓':''}</button>`
+    : '';
+  return `<tr>
+    <td>${escapeHtml(String(x.numero || x.numero_documento || x.id))}${nota}</td>
+    <td>${formatDateIt(x.data)}</td>
+    <td title="${x.direzione}">${dir}</td>
+    <td>${escapeHtml(x.controparte || '-')}</td>
+    <td style="text-align:right">${formatCurrencyIt(x.totale)}</td>
+    <td style="text-align:right">${formatCurrencyIt(x.pagato)}</td>
+    <td style="text-align:right">${formatCurrencyIt(x.residuo)}</td>
+    <td><span class="badge ${cls}">${escapeHtml(label)}</span></td>
+    <td style="white-space:nowrap">${azioni}</td>
+  </tr>`;
+}
+
+async function contRegistraPagamento(fatturaId, direzione, residuo) {
+  const verso = direzione === 'attiva' ? 'incasso' : 'pagamento';
+  const vals = await contDialog(`Registra ${verso}`, [
+    { key: 'importo', label: 'Importo', type: 'number', value: residuo > 0 ? residuo.toFixed(2) : '' },
+    { key: 'data', label: 'Data', type: 'date', value: new Date().toISOString().slice(0, 10) },
+    { key: 'metodo', label: 'Metodo', type: 'text', placeholder: 'bonifico, contanti, RiBa…' },
+    { key: 'note', label: 'Note', type: 'text' }
+  ]);
+  if (!vals) return;
+  try {
+    await api('POST', `/contabilita/fatture/${fatturaId}/pagamenti`, {
+      verso, importo: Number(vals.importo), data: vals.data || null, metodo: vals.metodo || null, note: vals.note || null
+    });
+    toast('Pagamento registrato', 'success');
+    contRenderTab();
+  } catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+async function contClassifica(fatturaId) {
+  let [dett, centriR, commesseR, categorieR] = await Promise.all([
+    api('GET', `/contabilita/fatture/${fatturaId}/dettaglio`),
+    api('GET', '/contabilita/centri-costo'),
+    api('GET', '/contabilita/commesse'),
+    api('GET', '/contabilita/categorie')
+  ]);
+  const centri = centriR.centri || [], commesse = commesseR.commesse || [], categorie = categorieR.categorie || [];
+  const esistenti = dett.classificazione || [];
+  const opts = (list, sel, blank) => `<option value="">${blank}</option>` +
+    list.map(o => `<option value="${o.id}"${Number(sel)===o.id?' selected':''}>${escapeHtml(o.nome)}</option>`).join('');
+  const rowHtml = (r = {}) => `<div class="cont-split-row" style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+      <select class="cont-split-cat btn btn-outline btn-sm" style="flex:1">${opts(categorie, r.categoria_id, '— categoria —')}</select>
+      <select class="cont-split-centro btn btn-outline btn-sm" style="flex:1">${opts(centri, r.centro_costo_id, '— centro —')}</select>
+      <select class="cont-split-commessa btn btn-outline btn-sm" style="flex:1">${opts(commesse, r.commessa_id, '— commessa —')}</select>
+      <input type="number" class="cont-split-perc" value="${r.percentuale != null ? r.percentuale : ''}" placeholder="%" style="width:70px" step="0.01">
+      <button class="btn btn-outline btn-sm" onclick="this.closest('.cont-split-row').remove()">✕</button>
+    </div>`;
+  const body = `
+    <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">Ogni riga: almeno una dimensione, le percentuali devono sommare 100.</p>
+    <div id="cont-split-rows">${(esistenti.length ? esistenti : [{ percentuale: 100 }]).map(rowHtml).join('')}</div>
+    <button class="btn btn-outline btn-sm" onclick="document.getElementById('cont-split-rows').insertAdjacentHTML('beforeend', CONT_SPLIT_TEMPLATE)">+ Aggiungi quota</button>`;
+  window.CONT_SPLIT_TEMPLATE = rowHtml();
+  const ok = await contDialog(`Classifica fattura`, null, body);
+  if (!ok) return;
+  const righe = [...document.querySelectorAll('#cont-split-rows .cont-split-row')].map(row => ({
+    categoria_id: row.querySelector('.cont-split-cat').value || null,
+    centro_costo_id: row.querySelector('.cont-split-centro').value || null,
+    commessa_id: row.querySelector('.cont-split-commessa').value || null,
+    percentuale: Number(row.querySelector('.cont-split-perc').value || 0)
+  }));
+  try {
+    await api('POST', '/contabilita/classifica', { entita_tipo: 'fattura', entita_id: fatturaId, righe });
+    toast('Classificazione salvata', 'success');
+    contRenderTab();
+  } catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+async function contRenderCentri(el) {
+  const r = await api('GET', '/contabilita/centri-costo');
+  const editable = canEditSection('contabilita');
+  el.innerHTML = contCrudList('Centri di costo', (r.centri || []).filter(c => c.attivo), c =>
+    `${escapeHtml(c.nome)}${c.codice ? ` <span style="color:var(--text-muted)">(${escapeHtml(c.codice)})</span>` : ''}`,
+    editable, 'contEditCentro', 'contDeleteCentro',
+    editable ? `<button class="btn btn-accent btn-sm" onclick="contEditCentro()">+ Centro di costo</button>` : '');
+}
+async function contEditCentro(id, nome, codice) {
+  const vals = await contDialog(id ? 'Modifica centro' : 'Nuovo centro di costo', [
+    { key: 'nome', label: 'Nome', type: 'text', value: nome || '' },
+    { key: 'codice', label: 'Codice', type: 'text', value: codice || '' }
+  ]);
+  if (!vals || !vals.nome) return;
+  try {
+    if (id) await api('PUT', `/contabilita/centri-costo/${id}`, vals);
+    else await api('POST', '/contabilita/centri-costo', vals);
+    toast('Salvato', 'success'); contRenderTab();
+  } catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+async function contDeleteCentro(id) {
+  if (!confirm('Disattivare questo centro di costo? Le classificazioni storiche restano.')) return;
+  try { await api('DELETE', `/contabilita/centri-costo/${id}`); contRenderTab(); } catch (e) { toast(e.message, 'error'); }
+}
+
+async function contRenderCommesse(el) {
+  const r = await api('GET', '/contabilita/commesse');
+  const editable = canEditSection('contabilita');
+  const items = (r.commesse || []).map(c => `<tr>
+      <td>${escapeHtml(c.nome)}${c.codice ? ` <span style="color:var(--text-muted)">(${escapeHtml(c.codice)})</span>` : ''}</td>
+      <td>${escapeHtml(c.cliente_nome || '-')}</td>
+      <td><span class="badge ${c.stato==='aperta'?'badge-cliente':(c.stato==='chiusa'?'badge-pagata':'badge-scaduta')}">${escapeHtml(c.stato)}</span></td>
+      <td style="text-align:right">${c.budget != null ? formatCurrencyIt(c.budget) : '-'}</td>
+      <td style="white-space:nowrap">${editable ? `<button class="btn btn-outline btn-sm" onclick='contEditCommessa(${JSON.stringify(c)})'>Modifica</button>` : ''}</td>
+    </tr>`).join('');
+  el.innerHTML = `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:10px">${editable ? `<button class="btn btn-accent btn-sm" onclick="contEditCommessa()">+ Commessa</button>` : ''}</div>
+    <div class="table-wrapper"><table class="data-table">
+      <thead><tr><th>Nome</th><th>Cliente</th><th>Stato</th><th style="text-align:right">Budget</th><th></th></tr></thead>
+      <tbody>${items || '<tr><td colspan="5" style="color:var(--text-muted)">Nessuna commessa</td></tr>'}</tbody>
+    </table></div>`;
+}
+async function contEditCommessa(c) {
+  c = c || {};
+  const vals = await contDialog(c.id ? 'Modifica commessa' : 'Nuova commessa', [
+    { key: 'nome', label: 'Nome', type: 'text', value: c.nome || '' },
+    { key: 'codice', label: 'Codice', type: 'text', value: c.codice || '' },
+    { key: 'budget', label: 'Budget', type: 'number', value: c.budget != null ? c.budget : '' },
+    { key: 'stato', label: 'Stato', type: 'select', value: c.stato || 'aperta', options: ['aperta', 'sospesa', 'chiusa'] }
+  ]);
+  if (!vals || !vals.nome) return;
+  try {
+    if (c.id) await api('PUT', `/contabilita/commesse/${c.id}`, vals);
+    else await api('POST', '/contabilita/commesse', vals);
+    toast('Salvato', 'success'); contRenderTab();
+  } catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+async function contRenderCategorie(el) {
+  const r = await api('GET', '/contabilita/categorie');
+  const editable = canEditSection('contabilita');
+  const tipoBadge = { COST: 'badge-scaduta', REVENUE: 'badge-pagata', NEUTRAL: 'badge-cliente' };
+  const items = (r.categorie || []).filter(c => c.attiva).map(c => `<tr>
+      <td>${escapeHtml(c.nome)}</td>
+      <td><span class="badge ${tipoBadge[c.tipo] || 'badge-cliente'}">${escapeHtml(c.tipo)}</span></td>
+      <td style="white-space:nowrap">${editable ? `<button class="btn btn-outline btn-sm" onclick="contEditCategoria(${c.id}, ${JSON.stringify(c.nome)}, '${c.tipo}')">Modifica</button>
+        <button class="btn btn-outline btn-sm" onclick="contDeleteCategoria(${c.id})">Disattiva</button>` : ''}</td>
+    </tr>`).join('');
+  el.innerHTML = `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:10px">${editable ? `<button class="btn btn-accent btn-sm" onclick="contEditCategoria()">+ Categoria</button>` : ''}</div>
+    <div class="table-wrapper"><table class="data-table">
+      <thead><tr><th>Nome</th><th>Tipo</th><th></th></tr></thead>
+      <tbody>${items || '<tr><td colspan="3" style="color:var(--text-muted)">Nessuna categoria</td></tr>'}</tbody>
+    </table></div>`;
+}
+async function contEditCategoria(id, nome, tipo) {
+  const vals = await contDialog(id ? 'Modifica categoria' : 'Nuova categoria', [
+    { key: 'nome', label: 'Nome', type: 'text', value: nome || '' },
+    { key: 'tipo', label: 'Tipo', type: 'select', value: tipo || 'COST', options: ['COST', 'REVENUE', 'NEUTRAL'] }
+  ]);
+  if (!vals || !vals.nome) return;
+  try {
+    if (id) await api('PUT', `/contabilita/categorie/${id}`, vals);
+    else await api('POST', '/contabilita/categorie', vals);
+    toast('Salvato', 'success'); contRenderTab();
+  } catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+async function contDeleteCategoria(id) {
+  if (!confirm('Disattivare questa categoria? Le classificazioni storiche restano.')) return;
+  try { await api('DELETE', `/contabilita/categorie/${id}`); contRenderTab(); } catch (e) { toast(e.message, 'error'); }
+}
+
+function contCrudList(titolo, items, labelFn, editable, editFn, delFn, headerBtn) {
+  const rows = items.map(x => `<tr>
+      <td>${labelFn(x)}</td>
+      <td style="white-space:nowrap;text-align:right">${editable ? `<button class="btn btn-outline btn-sm" onclick="${editFn}(${x.id}, ${JSON.stringify(x.nome)}, ${JSON.stringify(x.codice || '')})">Modifica</button>
+        <button class="btn btn-outline btn-sm" onclick="${delFn}(${x.id})">Disattiva</button>` : ''}</td>
+    </tr>`).join('');
+  return `<div style="display:flex;justify-content:flex-end;margin-bottom:10px">${headerBtn}</div>
+    <div class="table-wrapper"><table class="data-table"><tbody>${rows || `<tr><td style="color:var(--text-muted)">Nessun elemento</td></tr>`}</tbody></table></div>`;
+}
+
+// Dialog generico a promessa: `fields` (array) genera un form, oppure `bodyHtml`
+// per contenuto custom. Risolve con i valori (o true per bodyHtml) su Salva,
+// null su Annulla.
+function contDialog(titolo, fields, bodyHtml) {
+  return new Promise(resolve => {
+    const ov = document.createElement('div');
+    ov.className = 'cont-dialog-overlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+    const form = fields ? fields.map(f => {
+      if (f.type === 'select') return `<label style="display:block;margin-bottom:10px;font-size:13px">${escapeHtml(f.label)}
+        <select data-key="${f.key}" class="btn btn-outline" style="width:100%;display:block;margin-top:4px">${f.options.map(o => `<option value="${o}"${f.value===o?' selected':''}>${o}</option>`).join('')}</select></label>`;
+      return `<label style="display:block;margin-bottom:10px;font-size:13px">${escapeHtml(f.label)}
+        <input data-key="${f.key}" type="${f.type || 'text'}" value="${f.value != null ? escapeAttr(String(f.value)) : ''}" placeholder="${f.placeholder ? escapeAttr(f.placeholder) : ''}" style="width:100%;display:block;margin-top:4px;padding:8px;box-sizing:border-box"${f.type==='number'?' step="0.01"':''}></label>`;
+    }).join('') : (bodyHtml || '');
+    ov.innerHTML = `<div class="card" style="max-width:640px;width:100%;padding:18px;max-height:88vh;overflow:auto">
+      <h3 style="margin:0 0 14px">${escapeHtml(titolo)}</h3>
+      <div id="cont-dialog-body">${form}</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="btn btn-outline" data-act="cancel">Annulla</button>
+        <button class="btn btn-accent" data-act="ok">Salva</button>
+      </div></div>`;
+    const done = (val) => { ov.remove(); resolve(val); };
+    ov.querySelector('[data-act="cancel"]').onclick = () => done(null);
+    ov.querySelector('[data-act="ok"]').onclick = () => {
+      if (!fields) return done(true);
+      const out = {};
+      ov.querySelectorAll('#cont-dialog-body [data-key]').forEach(i => { out[i.dataset.key] = i.value; });
+      done(out);
+    };
+    ov.addEventListener('click', e => { if (e.target === ov) done(null); });
+    document.body.appendChild(ov);
+    const first = ov.querySelector('#cont-dialog-body input, #cont-dialog-body select');
+    if (first) first.focus();
+  });
 }
 
 async function loadFatture() {

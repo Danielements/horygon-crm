@@ -398,6 +398,28 @@
     </section>
 
     <!-- ═══════════════════════════════════════ -->
+    <!-- CONTABILITA (controllo di gestione)    -->
+    <!-- ═══════════════════════════════════════ -->
+    <section id="section-contabilita" class="section">
+      <div class="page-header">
+        <h1>Contabilita</h1>
+        <div class="header-actions">
+          <span style="font-size:12px;color:var(--text-muted)">Anno</span>
+          <select id="cont-anno" class="btn btn-outline btn-sm" onchange="loadContabilita()" style="min-width:90px"></select>
+          <button class="btn btn-outline btn-sm" onclick="loadContabilita()">Ricarica</button>
+        </div>
+      </div>
+      <div class="cont-tabs" id="cont-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">
+        <button class="btn btn-outline btn-sm cont-tab active" data-tab="dashboard" onclick="contShowTab('dashboard')">Dashboard</button>
+        <button class="btn btn-outline btn-sm cont-tab" data-tab="fatture" onclick="contShowTab('fatture')">Fatture</button>
+        <button class="btn btn-outline btn-sm cont-tab" data-tab="centri" onclick="contShowTab('centri')">Centri di costo</button>
+        <button class="btn btn-outline btn-sm cont-tab" data-tab="commesse" onclick="contShowTab('commesse')">Commesse</button>
+        <button class="btn btn-outline btn-sm cont-tab" data-tab="categorie" onclick="contShowTab('categorie')">Categorie</button>
+      </div>
+      <div id="cont-content"><div style="color:var(--text-muted)">Caricamento…</div></div>
+    </section>
+
+    <!-- ═══════════════════════════════════════ -->
     <!-- ABILITAZIONI CPV MEPA                  -->
     <!-- ═══════════════════════════════════════ -->
     <section id="section-mepa" class="section">
