@@ -37,8 +37,18 @@ approvare prima di partire con la Fase A.
   KPI dashboard; route `/spese` (+ download documento); tab Spese;
   `tests/spese.test.js`. **Estrazione AI (OCR) rinviata**: l'adapter e i campi
   con confidence restano da fare se e quando servira'.
-- Fasi E–F: da fare. E (anticipi/rimborsi/budget/report), F (commercialista:
-  checklist mese + export ZIP/XLSX).
+- **Fase E — Anticipi, rimborsi, budget: FATTA** (2026-08-21, commit `248639f`).
+  `cont_rimborsi`/`cont_budget` + campi anticipo su `cont_spese`;
+  `controllo-service.js` (nota spese DRAFT→TO_REVIEW→APPROVED→PAID che genera
+  l'uscita di cassa, budget, consuntivo vs budget); route `/rimborsi`,
+  `/budget`, `/report-gestionale`; tab Rimborsi e Budget; `tests/controllo.test.js`.
+- **Fase F — Commercialista: FATTA** (2026-08-21, commit `13bd8d1`). Checklist
+  stato-mese + export ZIP (riepiloghi CSV + XML/P7M originali). `zip-store.js`
+  (writer ZIP STORE+CRC32 senza dipendenze); `commercialista-service.js`; route
+  `/commercialista/{stato,export}`; tab Commercialista; `tests/commercialista.test.js`.
+
+**Roadmap A–F completata.** Unico pezzo rinviato per scelta: l'estrazione AI/OCR
+delle ricevute (Fase D), sostituita dall'inserimento manuale.
 
 Principi fissati dalla specifica, che vincolano tutto il resto:
 
