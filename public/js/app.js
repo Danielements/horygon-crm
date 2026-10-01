@@ -329,6 +329,7 @@ const NAV_PERMISSION_MAP = {
   'fatture-passive': 'fatture',
   'fatture-fuori-campo': 'fatture',
   contabilita: 'contabilita',
+  musa: 'musa',
   cig: 'cig',
   mepa: 'mepa',
   rdo: 'mepa',
@@ -555,6 +556,7 @@ function organizeNavigationLayout() {
     { label: 'Anagrafiche', sections: ['clienti', 'fornitori', 'contatti', 'mappa'] },
     { label: 'Logistica', sections: ['prodotti', 'kit', 'magazzino', 'preventivi', 'ordini', 'ddt', 'container', 'documenti'] },
     { label: 'Contabilita', sections: ['contabilita', 'fatture-attive', 'fatture-passive', 'fatture-fuori-campo', 'storico-sdi'] },
+    { label: 'MUSA (Stripe)', sections: ['musa'] },
     { label: 'Statistica', sections: ['mepa', 'rdo', 'analytics'] },
     { label: 'Amministrazione', sections: ['settings', 'utenti', 'audit-log', 'system-log', 'automazioni'] }
   ];
@@ -583,6 +585,7 @@ function organizeNavigationLayout() {
         : section === 'container' ? getItem('container', 'Container CN', '&#128674;')
         : section === 'documenti' ? getItem('documenti', 'Documenti', '&#128193;')
         : section === 'contabilita' ? getItem('contabilita', 'Contabilita', '&#128176;')
+        : section === 'musa' ? getItem('musa', 'MUSA', '&#128179;')
         : section === 'fatture-attive' ? getItem('fatture-attive', 'Fatture attive', '&#129534;')
         : section === 'fatture-passive' ? getItem('fatture-passive', 'Fatture passive', '&#129534;')
         : section === 'fatture-fuori-campo' ? getItem('fatture-fuori-campo', 'Fuori campo IVA', '&#129534;')
@@ -755,6 +758,7 @@ function navigateTo(section) {
       'fatture-fuori-campo': 'Fuori campo IVA',
       'storico-sdi': 'Storico SdI',
       contabilita: 'Contabilita',
+      musa: 'MUSA',
       mepa: 'CPV MEPA',
       analytics: 'Analisi',
       notifiche: 'Notifiche',
@@ -783,6 +787,7 @@ function navigateTo(section) {
     'fatture-fuori-campo': () => loadFattureBySection('fatture-fuori-campo'),
     'storico-sdi': loadStoricoSdi,
     contabilita: loadContabilita,
+    musa: loadMusa,
     attivita: loadAttivita, documenti: loadDocumenti,
     statistics: loadStatistics, settings: loadSettingsPage,
     'audit-log': loadAuditLog,
@@ -5311,6 +5316,201 @@ function contDialog(titolo, fields, bodyHtml) {
     const first = ov.querySelector('#cont-dialog-body input, #cont-dialog-body select');
     if (first) first.focus();
   });
+}
+
+// ===========================================================================
+// MUSA (societa' separata) — gestione via Stripe
+// ===========================================================================
+const MUSA_STATE = { tab: 'dashboard' };
+
+function musaShowTab(tab) {
+  MUSA_STATE.tab = tab;
+  document.querySelectorAll('#musa-tabs .musa-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  musaRender();
+}
+
+async function loadMusa() {
+  const el = document.getElementById('musa-content');
+  const badge = document.getElementById('musa-mode-badge');
+  let stato;
+  try { stato = await api('GET', '/musa/stato'); }
+  catch (e) { if (el) el.innerHTML = musaErr(e); return; }
+  if (badge) badge.innerHTML = stato.mode === 'live' ? '<span class="badge badge-scaduta" style="font-size:11px">LIVE</span>'
+    : (stato.mode === 'test' ? '<span class="badge badge-cliente" style="font-size:11px">TEST</span>' : '');
+  if (!stato.abilitato) {
+    el.innerHTML = `<div class="card" style="padding:16px;font-size:14px">Stripe non è configurato per MUSA.<br>Aggiungi <code>MUSA_STRIPE_SECRET_KEY</code> (sk_test_…) nel <code>.env</code> e riavvia il server.</div>`;
+    return;
+  }
+  musaRender();
+}
+
+async function musaRender() {
+  const el = document.getElementById('musa-content');
+  if (!el) return;
+  el.innerHTML = '<div style="color:var(--text-muted)">Caricamento…</div>';
+  try {
+    if (MUSA_STATE.tab === 'dashboard') return await musaRenderDashboard(el);
+    if (MUSA_STATE.tab === 'fatture') return await musaRenderFatture(el);
+    if (MUSA_STATE.tab === 'pagamenti') return await musaRenderPagamenti(el);
+    if (MUSA_STATE.tab === 'clienti') return await musaRenderClienti(el);
+  } catch (e) { el.innerHTML = musaErr(e); }
+}
+
+function musaErr(e) { return `<div class="card" style="padding:14px;color:var(--danger)">${escapeHtml((e && e.message) || 'Errore')}</div>`; }
+function musaCard(label, value, sub) {
+  return `<div class="card" style="padding:14px;min-width:150px;flex:1"><div style="font-size:12px;color:var(--text-muted)">${escapeHtml(label)}</div><div style="font-size:20px;font-weight:600;margin-top:4px">${value}</div>${sub ? `<div style="font-size:12px;color:var(--text-muted);margin-top:2px">${escapeHtml(String(sub))}</div>` : ''}</div>`;
+}
+
+async function musaRenderDashboard(el) {
+  const d = await api('GET', '/musa/dashboard');
+  const pag = (d.ultimi_pagamenti || []).map(p => `<tr>
+    <td>${formatDateIt(p.data)}</td><td>${escapeHtml(p.descrizione || '-')}</td>
+    <td style="text-align:right">${formatCurrencyIt(p.importo)}</td>
+    <td><span class="badge ${p.stato === 'succeeded' ? 'badge-pagata' : 'badge-cliente'}">${escapeHtml(p.stato)}</span></td></tr>`).join('')
+    || '<tr><td colspan="4" style="color:var(--text-muted)">Nessun pagamento</td></tr>';
+  el.innerHTML = `
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      ${musaCard('Saldo disponibile', formatCurrencyIt(d.saldo.disponibile), d.saldo.valuta)}
+      ${musaCard('In arrivo', formatCurrencyIt(d.saldo.in_arrivo))}
+      ${musaCard('Da incassare', formatCurrencyIt(d.fatture.da_incassare), `${d.fatture.totali} fatture`)}
+      ${musaCard('Clienti', d.clienti)}
+    </div>
+    <div class="card" style="padding:12px"><strong style="font-size:13px">Ultimi pagamenti</strong>
+      <div class="table-wrapper" style="margin-top:8px"><table class="data-table">
+        <thead><tr><th>Data</th><th>Descrizione</th><th style="text-align:right">Importo</th><th>Stato</th></tr></thead>
+        <tbody>${pag}</tbody></table></div></div>
+    <p style="font-size:12px;color:var(--text-muted);margin-top:14px">MUSA è gestita via Stripe (${escapeHtml(d.mode)}). Le fatture Stripe sono documenti commerciali, non fatture elettroniche SdI.</p>`;
+}
+
+async function musaRenderFatture(el) {
+  const editable = canEditSection('musa');
+  const r = await api('GET', '/musa/fatture');
+  const rows = (r.fatture || []).map(f => {
+    const cls = { paid: 'badge-pagata', open: 'badge-cliente', draft: 'badge-cliente', void: 'badge-scaduta', uncollectible: 'badge-scaduta' }[f.stato] || 'badge-cliente';
+    const az = editable ? [
+      f.stato === 'draft' ? `<button class="btn btn-outline btn-sm" onclick="musaAzioneFattura('${f.id}','invia')">Invia</button>` : '',
+      f.stato === 'open' ? `<button class="btn btn-outline btn-sm" onclick="musaAzioneFattura('${f.id}','paga')">Segna pagata</button>` : '',
+      (f.stato === 'open' || f.stato === 'draft') ? `<button class="btn btn-outline btn-sm" onclick="musaAzioneFattura('${f.id}','annulla')">Annulla</button>` : '',
+      f.hosted_url ? `<a class="btn btn-outline btn-sm" href="${escapeAttr(f.hosted_url)}" target="_blank" rel="noopener">Apri</a>` : '',
+      f.pdf_url ? `<a class="btn btn-outline btn-sm" href="${escapeAttr(f.pdf_url)}" target="_blank" rel="noopener">PDF</a>` : ''
+    ].filter(Boolean).join(' ') : '';
+    return `<tr><td>${escapeHtml(f.numero || f.id)}</td><td>${escapeHtml(f.cliente_nome || f.cliente_email || '-')}</td>
+      <td>${formatDateIt(f.data)}</td><td style="text-align:right">${formatCurrencyIt(f.totale)}</td>
+      <td style="text-align:right">${formatCurrencyIt(f.dovuto)}</td>
+      <td><span class="badge ${cls}">${escapeHtml(f.stato_label)}</span></td>
+      <td style="white-space:nowrap">${az}</td></tr>`;
+  }).join('') || '<tr><td colspan="7" style="color:var(--text-muted)">Nessuna fattura</td></tr>';
+  el.innerHTML = `
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-bottom:10px">
+      ${editable ? `<button class="btn btn-outline btn-sm" onclick="musaPaymentLink()">+ Payment link</button>
+      <button class="btn btn-accent btn-sm" onclick="musaNuovaFattura()">+ Nuova fattura</button>` : ''}
+    </div>
+    <div class="table-wrapper"><table class="data-table">
+      <thead><tr><th>Numero</th><th>Cliente</th><th>Data</th><th style="text-align:right">Totale</th><th style="text-align:right">Dovuto</th><th>Stato</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+}
+
+async function musaAzioneFattura(id, azione) {
+  const msg = { invia: 'Finalizzare e INVIARE la fattura al cliente via email?', paga: 'Segnare la fattura come pagata (incasso avvenuto fuori Stripe)?', annulla: 'Annullare (void) questa fattura? Operazione non reversibile su Stripe.' }[azione];
+  if (!confirm(msg)) return;
+  const stop = contLoadingOverlay('Operazione su Stripe…');
+  try { await api('POST', `/musa/fatture/${id}/${azione}`, {}); stop(); toast('Fatto', 'success'); musaRender(); }
+  catch (e) { stop(); toast(e.message || 'Errore', 'error'); }
+}
+
+async function musaNuovaFattura() {
+  const rowHtml = () => `<div class="musa-riga" style="display:flex;gap:6px;margin-bottom:6px">
+    <input class="m-desc" placeholder="Descrizione" style="flex:2;padding:6px">
+    <input class="m-imp" type="number" step="0.01" placeholder="Importo €" style="width:110px;padding:6px">
+    <input class="m-qty" type="number" value="1" title="Quantità" style="width:64px;padding:6px">
+    <button class="btn btn-outline btn-sm" onclick="this.closest('.musa-riga').remove()">✕</button></div>`;
+  window.MUSA_RIGA_TPL = rowHtml();
+  const body = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <input id="m-cli-nome" placeholder="Cliente — nome" style="padding:6px">
+      <input id="m-cli-email" placeholder="Email (per inviare la fattura)" style="padding:6px">
+      <input id="m-cli-piva" placeholder="P.IVA (opzionale)" style="padding:6px">
+      <input id="m-giorni" type="number" value="30" title="Giorni alla scadenza" style="padding:6px"></div>
+    <p style="font-size:12px;color:var(--text-muted);margin:10px 0 4px">Righe</p>
+    <div id="musa-righe">${rowHtml()}</div>
+    <button class="btn btn-outline btn-sm" onclick="document.getElementById('musa-righe').insertAdjacentHTML('beforeend', window.MUSA_RIGA_TPL)">+ Riga</button>
+    <label style="display:block;margin-top:12px;font-size:13px"><input type="checkbox" id="m-invia"> Finalizza e invia subito la fattura al cliente</label>`;
+  const ok = await contDialog('Nuova fattura MUSA', null, body);
+  if (!ok) return;
+  const righe = [...document.querySelectorAll('#musa-righe .musa-riga')].map(r => ({
+    descrizione: r.querySelector('.m-desc').value, importo: Number(r.querySelector('.m-imp').value || 0), quantita: Number(r.querySelector('.m-qty').value || 1)
+  })).filter(r => r.importo > 0);
+  if (!righe.length) return toast('Aggiungi almeno una riga con importo', 'error');
+  const payload = {
+    cliente: { nome: document.getElementById('m-cli-nome').value, email: document.getElementById('m-cli-email').value, piva: document.getElementById('m-cli-piva').value },
+    righe, giorni_scadenza: Number(document.getElementById('m-giorni').value || 30), invia: document.getElementById('m-invia').checked
+  };
+  if (payload.invia && !payload.cliente.email) return toast('Per inviare serve l\'email del cliente', 'error');
+  const stop = contLoadingOverlay('Creo la fattura su Stripe…');
+  try { await api('POST', '/musa/fatture', payload); stop(); toast(payload.invia ? 'Fattura creata e inviata' : 'Bozza fattura creata', 'success'); musaRender(); }
+  catch (e) { stop(); toast(e.message || 'Errore', 'error'); }
+}
+
+async function musaPaymentLink() {
+  const vals = await contDialog('Nuovo payment link', [
+    { key: 'descrizione', label: 'Descrizione', type: 'text' },
+    { key: 'importo', label: 'Importo €', type: 'number' }
+  ]);
+  if (!vals || !(Number(vals.importo) > 0)) return;
+  const stop = contLoadingOverlay('Creo il link su Stripe…');
+  try {
+    const link = await api('POST', '/musa/payment-link', { descrizione: vals.descrizione, importo: Number(vals.importo) });
+    stop();
+    await contDialog('Payment link creato', null, `<p style="font-size:13px;margin:0 0 8px">Condividi questo link per incassare ${formatCurrencyIt(link.importo)}:</p>
+      <input readonly value="${escapeAttr(link.url)}" style="width:100%;padding:8px" onclick="this.select()">`);
+  } catch (e) { stop(); toast(e.message || 'Errore', 'error'); }
+}
+
+async function musaRenderPagamenti(el) {
+  const editable = canEditSection('musa');
+  const r = await api('GET', '/musa/pagamenti');
+  const rows = (r.pagamenti || []).map(p => `<tr>
+    <td>${formatDateIt(p.data)}</td><td>${escapeHtml(p.descrizione || '-')}</td>
+    <td style="text-align:right">${formatCurrencyIt(p.importo)}</td>
+    <td><span class="badge ${p.stato === 'succeeded' ? 'badge-pagata' : 'badge-cliente'}">${escapeHtml(p.stato)}</span>${p.rimborsato ? ' <span class="badge badge-scaduta">rimborsato</span>' : ''}</td>
+    <td style="white-space:nowrap">${editable && p.stato === 'succeeded' && !p.rimborsato ? `<button class="btn btn-outline btn-sm" onclick="musaRimborsa('${p.id}', ${p.importo})">Rimborsa</button>` : ''}</td></tr>`).join('')
+    || '<tr><td colspan="5" style="color:var(--text-muted)">Nessun pagamento</td></tr>';
+  el.innerHTML = `<div class="table-wrapper"><table class="data-table">
+    <thead><tr><th>Data</th><th>Descrizione</th><th style="text-align:right">Importo</th><th>Stato</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
+async function musaRimborsa(paymentIntentId, importoMax) {
+  const vals = await contDialog('Rimborso', [
+    { key: 'importo', label: `Importo da rimborsare (vuoto = totale ${formatCurrencyIt(importoMax)})`, type: 'number', value: '' }
+  ]);
+  if (!vals) return;
+  if (!confirm('Confermi il rimborso? L\'operazione muove denaro reale su Stripe.')) return;
+  const stop = contLoadingOverlay('Eseguo il rimborso su Stripe…');
+  try {
+    await api('POST', '/musa/rimborsi', { payment_intent: paymentIntentId, importo: vals.importo || undefined });
+    stop(); toast('Rimborso eseguito', 'success'); musaRender();
+  } catch (e) { stop(); toast(e.message || 'Errore', 'error'); }
+}
+
+async function musaRenderClienti(el) {
+  const editable = canEditSection('musa');
+  const r = await api('GET', '/musa/clienti');
+  const rows = (r.clienti || []).map(c => `<tr><td>${escapeHtml(c.nome || '-')}</td><td>${escapeHtml(c.email || '-')}</td><td>${escapeHtml(c.piva || '-')}</td><td>${formatDateIt(c.creato)}</td></tr>`).join('')
+    || '<tr><td colspan="4" style="color:var(--text-muted)">Nessun cliente</td></tr>';
+  el.innerHTML = `<div style="display:flex;justify-content:flex-end;margin-bottom:10px">${editable ? `<button class="btn btn-accent btn-sm" onclick="musaNuovoCliente()">+ Cliente</button>` : ''}</div>
+    <div class="table-wrapper"><table class="data-table"><thead><tr><th>Nome</th><th>Email</th><th>P.IVA</th><th>Creato</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+async function musaNuovoCliente() {
+  const vals = await contDialog('Nuovo cliente MUSA', [
+    { key: 'nome', label: 'Nome', type: 'text' },
+    { key: 'email', label: 'Email', type: 'text' },
+    { key: 'piva', label: 'P.IVA (opzionale)', type: 'text' }
+  ]);
+  if (!vals || (!vals.nome && !vals.email)) return;
+  try { await api('POST', '/musa/clienti', vals); toast('Cliente creato', 'success'); musaRender(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
 }
 
 async function loadFatture() {

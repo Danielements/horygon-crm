@@ -32,6 +32,10 @@ app.use('/api/auth/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 10, messag
 app.use('/api/auth/setup', rateLimit({ windowMs: 60 * 60 * 1000, max: 3 }));
 app.use('/api', rateLimit({ windowMs: 60 * 1000, max: 300 }));
 
+// Webhook Stripe MUSA: deve ricevere il body RAW per verificare la firma, quindi
+// va montato PRIMA del parser JSON globale.
+app.use('/api/musa/stripe/webhook', express.raw({ type: '*/*' }), require('./routes/musa-webhook'));
+
 // Body parser must run before API routes that read req.body
 app.use(express.json({ limit: '20mb' }));
 
@@ -61,6 +65,7 @@ app.use('/api/documenti',   require('./routes/documenti'));
 app.use('/api/sdi/storico', require('./routes/sdi-storico'));
 app.use('/api/sdi',         require('./routes/sdi'));
 app.use('/api/contabilita', require('./routes/contabilita'));
+app.use('/api/musa',        require('./routes/musa'));
 app.use('/api/ai',          require('./routes/ai'));
 app.use('/api/google',      require('./routes/google'));
 app.use('/api/contatti',    require('./routes/contatti'));

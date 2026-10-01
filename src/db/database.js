@@ -1399,6 +1399,21 @@ db.exec(`
   "origine_automatica INTEGER DEFAULT 0"
 ].forEach(col => ensureColumn('cont_spese', col));
 
+// --- Modulo MUSA (separato da Horygon): integrazione Stripe ----------------
+// MUSA e' un'altra societa': questo modulo e' isolato (sezione/permesso propri,
+// chiavi Stripe proprie in ENV). Stripe e' la fonte di verita' per pagamenti,
+// fatture e clienti: qui si logga solo l'audit dei webhook, per idempotenza.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS musa_stripe_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stripe_event_id TEXT UNIQUE,
+    type TEXT,
+    livemode INTEGER DEFAULT 0,
+    payload TEXT,
+    ricevuto_il TEXT DEFAULT (datetime('now'))
+  );
+`);
+
 [
   "tenant_id INTEGER DEFAULT 1",
   "unita_misura TEXT",
@@ -1467,7 +1482,7 @@ const APP_SECTIONS = [
   'clienti', 'fornitori', 'contatti', 'prodotti', 'magazzino', 'preventivi',
   'ordini', 'ddt', 'container', 'fatture', 'proforme', 'spedizioni',
   'attivita', 'documenti', 'mepa', 'cig', 'analytics', 'statistics',
-  'contabilita', 'settings', 'mappa', 'utenti', 'ai', 'system_log'
+  'contabilita', 'musa', 'settings', 'mappa', 'utenti', 'ai', 'system_log'
 ];
 
 const upsertRole = db.prepare(`
@@ -1493,7 +1508,8 @@ APP_SECTIONS.forEach(section => {
   // La contabilita e' sensibile: readonly e commerciale non la vedono (come
   // utenti/settings). L'accesso e' per amministrazione, admin, superadmin e
   // commercialista (sola lettura).
-  const readonlyRead = ['utenti', 'settings', 'contabilita'].includes(section) ? 0 : 1;
+  // 'musa' e' una societa' separata: visibile solo ad admin e superadmin.
+  const readonlyRead = ['utenti', 'settings', 'contabilita', 'musa'].includes(section) ? 0 : 1;
   upsertPerm.run(1, section, readonlyRead, 0, 0, 0);
 
   const commercialeEditable = ['clienti', 'fornitori', 'contatti', 'preventivi', 'ordini', 'attivita', 'documenti', 'mappa'].includes(section);
