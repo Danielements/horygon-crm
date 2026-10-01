@@ -1412,6 +1412,51 @@ db.exec(`
     payload TEXT,
     ricevuto_il TEXT DEFAULT (datetime('now'))
   );
+
+  -- Editori MUSA: tariffe a scaglioni (modificabili), anagrafica editori e
+  -- conteggi mensili (libri caricati + approvati) dal portale MUSA. Il prezzo
+  -- si calcola sugli APPROVATI e viene "fotografato" nel conteggio, cosi' lo
+  -- storico resta corretto anche se poi cambi le tariffe.
+  CREATE TABLE IF NOT EXISTS musa_tariffe (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    min_libri INTEGER NOT NULL,
+    max_libri INTEGER,                 -- NULL = nessun limite superiore
+    prezzo REAL NOT NULL,
+    valuta TEXT DEFAULT 'EUR',
+    attiva INTEGER DEFAULT 1,
+    note TEXT,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS musa_editori (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nome TEXT NOT NULL,
+    email TEXT,
+    piva TEXT,
+    stripe_customer_id TEXT,           -- collegamento a Stripe (per fatturare)
+    external_id TEXT,                  -- id dell'editore sul portale MUSA
+    attivo INTEGER DEFAULT 1,
+    note TEXT,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS musa_editori_conteggi (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    editore_id INTEGER NOT NULL,
+    periodo TEXT NOT NULL,             -- 'YYYY-MM'
+    caricati INTEGER DEFAULT 0,
+    approvati INTEGER DEFAULT 0,
+    prezzo_calcolato REAL DEFAULT 0,   -- fotografato dallo scaglione al salvataggio
+    tariffa_id INTEGER,                -- scaglione applicato
+    valuta TEXT DEFAULT 'EUR',
+    fonte TEXT DEFAULT 'manuale',      -- manuale | portale
+    fatturato INTEGER DEFAULT 0,
+    stripe_invoice_id TEXT,
+    aggiornato_il TEXT DEFAULT (datetime('now')),
+    UNIQUE (editore_id, periodo),
+    FOREIGN KEY (editore_id) REFERENCES musa_editori(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_musa_conteggi_periodo ON musa_editori_conteggi(periodo);
 `);
 
 [

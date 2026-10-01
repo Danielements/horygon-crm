@@ -8,6 +8,7 @@ const { authMiddleware, requirePermesso } = require('../middleware/auth');
 const { writeAudit } = require('../services/audit');
 const stripe = require('../services/stripe-client');
 const musa = require('../services/musa-service');
+const editori = require('../services/musa-editori-service');
 
 router.use(authMiddleware);
 
@@ -94,6 +95,74 @@ router.post('/rimborsi', canDelete, async (req, res) => {
     const r = await musa.refund(req.body || {});
     writeAudit({ utente_id: req.user.id, azione: 'musa.rimborso', entita_tipo: 'stripe_refund', entita_id: null, dettagli: r });
     res.json(r);
+  } catch (e) { fail(res, e); }
+});
+
+// ===========================================================================
+// EDITORI MUSA — tariffe a scaglioni, conteggi mensili, storico
+// ===========================================================================
+
+// --- Tariffe (modificabili) ------------------------------------------------
+router.get('/tariffe', canRead, (req, res) => {
+  try { res.json({ tariffe: editori.listTariffe() }); } catch (e) { fail(res, e); }
+});
+router.post('/tariffe', canEdit, (req, res) => {
+  try {
+    const r = editori.createTariffa(req.body || {});
+    writeAudit({ utente_id: req.user.id, azione: 'musa.tariffa.crea', entita_tipo: 'musa_tariffa', entita_id: r.id, dettagli: {} });
+    res.json(r);
+  } catch (e) { fail(res, e); }
+});
+router.put('/tariffe/:id', canEdit, (req, res) => {
+  try { res.json(editori.updateTariffa(Number(req.params.id), req.body || {})); } catch (e) { fail(res, e); }
+});
+router.delete('/tariffe/:id', canDelete, (req, res) => {
+  try { res.json(editori.deleteTariffa(Number(req.params.id))); } catch (e) { fail(res, e); }
+});
+
+// --- Editori ---------------------------------------------------------------
+router.get('/editori', canRead, (req, res) => {
+  try { res.json({ editori: editori.listEditori() }); } catch (e) { fail(res, e); }
+});
+router.post('/editori', canEdit, (req, res) => {
+  try {
+    const r = editori.createEditore(req.body || {});
+    writeAudit({ utente_id: req.user.id, azione: 'musa.editore.crea', entita_tipo: 'musa_editore', entita_id: r.id, dettagli: {} });
+    res.json(r);
+  } catch (e) { fail(res, e); }
+});
+router.put('/editori/:id', canEdit, (req, res) => {
+  try { res.json(editori.updateEditore(Number(req.params.id), req.body || {})); } catch (e) { fail(res, e); }
+});
+router.get('/editori/:id/storico', canRead, (req, res) => {
+  try { res.json({ storico: editori.storicoEditore(Number(req.params.id)) }); } catch (e) { fail(res, e); }
+});
+
+// --- Conteggi mensili ------------------------------------------------------
+// Vista di un mese con tutti gli editori attivi (anche a zero).
+router.get('/editori-conteggi', canRead, (req, res) => {
+  try {
+    const periodo = req.query.periodo || new Date().toISOString().slice(0, 7);
+    res.json({ periodo, righe: editori.vistaMensile(periodo) });
+  } catch (e) { fail(res, e); }
+});
+
+// Upsert conteggio (UI manuale o push dal portale MUSA).
+router.post('/editori-conteggi', canEdit, (req, res) => {
+  const b = req.body || {};
+  try {
+    const r = editori.upsertConteggio({ editore_id: b.editore_id, periodo: b.periodo, caricati: b.caricati, approvati: b.approvati, fonte: b.fonte });
+    writeAudit({ utente_id: req.user.id, azione: 'musa.conteggio.upsert', entita_tipo: 'musa_editore', entita_id: Number(b.editore_id), dettagli: { periodo: b.periodo, approvati: b.approvati } });
+    res.json(r);
+  } catch (e) { fail(res, e); }
+});
+
+// Hook fatturazione: crea la fattura Stripe per un conteggio (editore+mese).
+router.post('/editori-conteggi/:id/fattura', canEdit, async (req, res) => {
+  try {
+    const inv = await editori.fatturaConteggio(Number(req.params.id), { invia: !!(req.body || {}).invia });
+    writeAudit({ utente_id: req.user.id, azione: 'musa.conteggio.fattura', entita_tipo: 'musa_conteggio', entita_id: Number(req.params.id), dettagli: { invoice: inv.id } });
+    res.json(inv);
   } catch (e) { fail(res, e); }
 });
 

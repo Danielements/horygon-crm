@@ -5330,29 +5330,35 @@ function musaShowTab(tab) {
 }
 
 async function loadMusa() {
-  const el = document.getElementById('musa-content');
   const badge = document.getElementById('musa-mode-badge');
-  let stato;
-  try { stato = await api('GET', '/musa/stato'); }
-  catch (e) { if (el) el.innerHTML = musaErr(e); return; }
-  if (badge) badge.innerHTML = stato.mode === 'live' ? '<span class="badge badge-scaduta" style="font-size:11px">LIVE</span>'
-    : (stato.mode === 'test' ? '<span class="badge badge-cliente" style="font-size:11px">TEST</span>' : '');
-  if (!stato.abilitato) {
-    el.innerHTML = `<div class="card" style="padding:16px;font-size:14px">Stripe non è configurato per MUSA.<br>Aggiungi <code>MUSA_STRIPE_SECRET_KEY</code> (sk_test_…) nel <code>.env</code> e riavvia il server.</div>`;
-    return;
-  }
+  try { MUSA_STATE.stato = await api('GET', '/musa/stato'); }
+  catch (e) { const el = document.getElementById('musa-content'); if (el) el.innerHTML = musaErr(e); return; }
+  const s = MUSA_STATE.stato || {};
+  if (badge) badge.innerHTML = s.mode === 'live' ? '<span class="badge badge-scaduta" style="font-size:11px">LIVE</span>'
+    : (s.mode === 'test' ? '<span class="badge badge-cliente" style="font-size:11px">TEST</span>' : '');
   musaRender();
+}
+
+function musaStripeNotice() {
+  return `<div class="card" style="padding:16px;font-size:14px">Stripe non è ancora configurato per MUSA.<br>Aggiungi <code>MUSA_STRIPE_SECRET_KEY</code> (sk_test_…) nel <code>.env</code> e riavvia.<br><span style="color:var(--text-muted);font-size:13px">Il tab <strong>Editori</strong> (tariffe e conteggi) funziona comunque anche senza Stripe.</span></div>`;
 }
 
 async function musaRender() {
   const el = document.getElementById('musa-content');
   if (!el) return;
   el.innerHTML = '<div style="color:var(--text-muted)">Caricamento…</div>';
+  // I tab legati a Stripe richiedono la chiave; Editori no (dati locali).
+  const stripeTabs = ['dashboard', 'fatture', 'pagamenti', 'clienti'];
+  if (stripeTabs.includes(MUSA_STATE.tab) && MUSA_STATE.stato && !MUSA_STATE.stato.abilitato) {
+    el.innerHTML = musaStripeNotice();
+    return;
+  }
   try {
     if (MUSA_STATE.tab === 'dashboard') return await musaRenderDashboard(el);
     if (MUSA_STATE.tab === 'fatture') return await musaRenderFatture(el);
     if (MUSA_STATE.tab === 'pagamenti') return await musaRenderPagamenti(el);
     if (MUSA_STATE.tab === 'clienti') return await musaRenderClienti(el);
+    if (MUSA_STATE.tab === 'editori') return await musaRenderEditori(el);
   } catch (e) { el.innerHTML = musaErr(e); }
 }
 
@@ -5510,6 +5516,118 @@ async function musaNuovoCliente() {
   ]);
   if (!vals || (!vals.nome && !vals.email)) return;
   try { await api('POST', '/musa/clienti', vals); toast('Cliente creato', 'success'); musaRender(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+// --- MUSA Editori: tariffe a scaglioni + conteggi mensili ------------------
+if (typeof MUSA_STATE !== 'undefined') MUSA_STATE.editoriPeriodo = new Date().toISOString().slice(0, 7);
+
+async function musaRenderEditori(el) {
+  const editable = canEditSection('musa');
+  const periodo = MUSA_STATE.editoriPeriodo || new Date().toISOString().slice(0, 7);
+  const r = await api('GET', `/musa/editori-conteggi?periodo=${encodeURIComponent(periodo)}`);
+  const righe = r.righe || [];
+  const totale = righe.reduce((s, x) => s + (Number(x.prezzo) || 0), 0);
+  const rows = righe.map(x => `<tr>
+      <td>${escapeHtml(x.editore_nome)}${x.registrato ? '' : ' <span style="color:var(--text-muted);font-size:11px">(nessun dato)</span>'}</td>
+      <td style="text-align:right">${x.caricati}</td>
+      <td style="text-align:right"><strong>${x.approvati}</strong></td>
+      <td style="text-align:right">${formatCurrencyIt(x.prezzo)}</td>
+      <td>${x.fatturato ? '<span class="badge badge-pagata">fatturato</span>' : (x.registrato ? '<span class="badge badge-cliente">da fatturare</span>' : '')}</td>
+      <td style="white-space:nowrap">${editable ? `
+        <button class="btn btn-outline btn-sm" onclick="musaEditConteggio(${x.editore_id}, ${JSON.stringify(x.editore_nome)}, '${periodo}', ${x.caricati}, ${x.approvati})">Conteggi</button>
+        ${x.registrato && x.prezzo > 0 && !x.fatturato && MUSA_STATE.stato && MUSA_STATE.stato.abilitato ? `<button class="btn btn-outline btn-sm" onclick="musaFatturaConteggio(${x.conteggio_id})">Fattura su Stripe</button>` : ''}
+        <button class="btn btn-outline btn-sm" onclick="musaStoricoEditore(${x.editore_id}, ${JSON.stringify(x.editore_nome)})">Storico</button>` : ''}</td>
+    </tr>`).join('') || '<tr><td colspan="6" style="color:var(--text-muted)">Nessun editore. Aggiungine uno.</td></tr>';
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="font-size:13px">Mese</span>
+        <input type="month" value="${escapeAttr(periodo)}" onchange="MUSA_STATE.editoriPeriodo=this.value;musaRender()" class="btn btn-outline btn-sm">
+        <span style="font-size:13px;color:var(--text-muted)">Totale mese: <strong>${formatCurrencyIt(totale)}</strong></span>
+      </div>
+      <div style="display:flex;gap:6px">
+        ${editable ? `<button class="btn btn-outline btn-sm" onclick="musaTariffe()">Tariffe</button>
+        <button class="btn btn-accent btn-sm" onclick="musaNuovoEditore()">+ Editore</button>` : ''}
+      </div>
+    </div>
+    <div class="table-wrapper"><table class="data-table">
+      <thead><tr><th>Editore</th><th style="text-align:right">Caricati</th><th style="text-align:right">Approvati</th><th style="text-align:right">Dovuto</th><th>Stato</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <p style="font-size:12px;color:var(--text-muted);margin-top:10px">Il dovuto si calcola sugli <strong>approvati</strong> secondo gli scaglioni in Tariffe. I conteggi possono arrivare dal portale MUSA o essere inseriti qui.</p>`;
+}
+
+async function musaEditConteggio(editoreId, nome, periodo, caricati, approvati) {
+  const vals = await contDialog(`Conteggi ${nome} · ${periodo}`, [
+    { key: 'caricati', label: 'Libri caricati', type: 'number', value: caricati || 0 },
+    { key: 'approvati', label: 'Libri approvati da MUSA', type: 'number', value: approvati || 0 }
+  ]);
+  if (!vals) return;
+  try {
+    const c = await api('POST', '/musa/editori-conteggi', { editore_id: editoreId, periodo, caricati: Number(vals.caricati || 0), approvati: Number(vals.approvati || 0), fonte: 'manuale' });
+    toast(`Salvato — dovuto ${formatCurrencyIt(c.prezzo_calcolato)}`, 'success');
+    musaRender();
+  } catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+async function musaFatturaConteggio(conteggioId) {
+  const invia = confirm('Creare la fattura Stripe per questo editore/mese?\n\nOK = crea e invia al cliente · Annulla = esci.\n(Se vuoi solo la bozza senza invio, usa la sezione Fatture.)');
+  if (!invia) return;
+  const stop = contLoadingOverlay('Creo la fattura su Stripe…');
+  try { await api('POST', `/musa/editori-conteggi/${conteggioId}/fattura`, { invia: true }); stop(); toast('Fattura creata e inviata', 'success'); musaRender(); }
+  catch (e) { stop(); toast(e.message || 'Errore', 'error'); }
+}
+
+async function musaStoricoEditore(editoreId, nome) {
+  const r = await api('GET', `/musa/editori/${editoreId}/storico`);
+  const rows = (r.storico || []).map(s => `<tr><td>${escapeHtml(s.periodo)}</td><td style="text-align:right">${s.caricati}</td><td style="text-align:right">${s.approvati}</td><td style="text-align:right">${formatCurrencyIt(s.prezzo_calcolato)}</td><td>${s.fatturato ? 'fatturato' : '-'}</td></tr>`).join('') || '<tr><td colspan="5" style="color:var(--text-muted)">Nessuno storico</td></tr>';
+  await contDialog(`Storico — ${nome}`, null, `<div class="table-wrapper"><table class="data-table"><thead><tr><th>Mese</th><th style="text-align:right">Caricati</th><th style="text-align:right">Approvati</th><th style="text-align:right">Dovuto</th><th>Stato</th></tr></thead><tbody>${rows}</tbody></table></div>`);
+}
+
+async function musaNuovoEditore() {
+  const vals = await contDialog('Nuovo editore', [
+    { key: 'nome', label: 'Nome', type: 'text' },
+    { key: 'email', label: 'Email', type: 'text' },
+    { key: 'piva', label: 'P.IVA (opzionale)', type: 'text' },
+    { key: 'external_id', label: 'ID portale MUSA (opzionale)', type: 'text' }
+  ]);
+  if (!vals || !vals.nome) return;
+  try { await api('POST', '/musa/editori', vals); toast('Editore creato', 'success'); musaRender(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+async function musaTariffe() {
+  document.querySelectorAll('.cont-dialog-overlay').forEach(o => o.remove());
+  const r = await api('GET', '/musa/tariffe');
+  const rows = (r.tariffe || []).map(t => `<tr>
+      <td>${t.min_libri}${t.max_libri != null ? `–${t.max_libri}` : '+'}</td>
+      <td style="text-align:right">${formatCurrencyIt(t.prezzo)}</td>
+      <td>${t.attiva ? '' : '<span class="badge badge-cliente">disattiva</span>'}</td>
+      <td><button class="btn btn-outline btn-sm" onclick="musaDeleteTariffa(${t.id})">✕</button></td>
+    </tr>`).join('') || '<tr><td colspan="4" style="color:var(--text-muted)">Nessuno scaglione</td></tr>';
+  const body = `
+    <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">Scaglioni per numero di libri <strong>approvati</strong> nel mese → prezzo forfait. Lascia vuoto "a" per "e oltre".</p>
+    <div class="table-wrapper" style="margin-bottom:12px"><table class="data-table"><thead><tr><th>Libri</th><th style="text-align:right">Prezzo</th><th></th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="card" style="padding:10px"><strong style="font-size:13px">Nuovo scaglione</strong>
+      <div style="display:flex;gap:6px;margin-top:8px;align-items:center">
+        <input id="tf-min" type="number" placeholder="da" style="width:70px;padding:6px">
+        <input id="tf-max" type="number" placeholder="a (vuoto=∞)" style="width:110px;padding:6px">
+        <input id="tf-prezzo" type="number" step="0.01" placeholder="prezzo €" style="width:110px;padding:6px">
+        <button class="btn btn-accent btn-sm" onclick="musaSalvaTariffa()">Aggiungi</button>
+      </div></div>`;
+  await contDialog('Tariffe editori MUSA', null, body);
+}
+async function musaSalvaTariffa() {
+  const min = document.getElementById('tf-min').value;
+  const max = document.getElementById('tf-max').value;
+  const prezzo = document.getElementById('tf-prezzo').value;
+  if (min === '' || prezzo === '') return toast('Indica almeno "da" e il prezzo', 'error');
+  try { await api('POST', '/musa/tariffe', { min_libri: Number(min), max_libri: max === '' ? null : Number(max), prezzo: Number(prezzo) }); toast('Scaglione aggiunto', 'success'); musaTariffe(); }
+  catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+async function musaDeleteTariffa(id) {
+  if (!confirm('Eliminare questo scaglione?')) return;
+  try { await api('DELETE', `/musa/tariffe/${id}`); musaTariffe(); }
   catch (e) { toast(e.message || 'Errore', 'error'); }
 }
 
