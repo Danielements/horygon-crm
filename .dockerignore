@@ -7,9 +7,22 @@ npm-debug.log
 .agents
 
 horygon.db
+horygon.db-wal
+horygon.db-shm
+*.db
+*.sqlite
+*.sqlite3
+*-bak-*
+*.bak
 uploads
 data
 *.log
+
+# Roba locale/di sviluppo che non serve nell'immagine runtime
+.claude
+DemoFatturazione
+tests
+*.local-bak-*
 
 .env
 .env.*
