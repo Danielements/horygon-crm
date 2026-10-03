@@ -5348,7 +5348,7 @@ async function musaRender() {
   if (!el) return;
   el.innerHTML = '<div style="color:var(--text-muted)">Caricamento…</div>';
   // I tab legati a Stripe richiedono la chiave; Editori no (dati locali).
-  const stripeTabs = ['dashboard', 'fatture', 'pagamenti', 'clienti'];
+  const stripeTabs = ['dashboard', 'fatture', 'pagamenti', 'clienti', 'articoli'];
   if (stripeTabs.includes(MUSA_STATE.tab) && MUSA_STATE.stato && !MUSA_STATE.stato.abilitato) {
     el.innerHTML = musaStripeNotice();
     return;
@@ -5357,6 +5357,7 @@ async function musaRender() {
     if (MUSA_STATE.tab === 'dashboard') return await musaRenderDashboard(el);
     if (MUSA_STATE.tab === 'fatture') return await musaRenderFatture(el);
     if (MUSA_STATE.tab === 'pagamenti') return await musaRenderPagamenti(el);
+    if (MUSA_STATE.tab === 'articoli') return await musaRenderArticoli(el);
     if (MUSA_STATE.tab === 'clienti') return await musaRenderClienti(el);
     if (MUSA_STATE.tab === 'editori') return await musaRenderEditori(el);
   } catch (e) { el.innerHTML = musaErr(e); }
@@ -5497,6 +5498,33 @@ async function musaRimborsa(paymentIntentId, importoMax) {
     await api('POST', '/musa/rimborsi', { payment_intent: paymentIntentId, importo: vals.importo || undefined });
     stop(); toast('Rimborso eseguito', 'success'); musaRender();
   } catch (e) { stop(); toast(e.message || 'Errore', 'error'); }
+}
+
+async function musaRenderArticoli(el) {
+  const editable = canEditSection('musa');
+  const r = await api('GET', '/musa/prodotti');
+  const rows = (r.prodotti || []).map(p => `<tr>
+    <td>${escapeHtml(p.nome || '-')}${p.descrizione ? `<br><span style="font-size:12px;color:var(--text-muted)">${escapeHtml(p.descrizione)}</span>` : ''}</td>
+    <td style="text-align:right">${p.prezzo != null ? formatCurrencyIt(p.prezzo) : '-'}${p.ricorrente ? ' <span class="badge badge-cliente">ricorrente</span>' : ''}</td>
+    <td>${p.attivo ? '<span class="badge badge-pagata">attivo</span>' : '<span class="badge badge-scaduta">disattivo</span>'}</td>
+  </tr>`).join('') || '<tr><td colspan="3" style="color:var(--text-muted)">Nessun articolo</td></tr>';
+  el.innerHTML = `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:10px">${editable ? `<button class="btn btn-accent btn-sm" onclick="musaNuovoArticolo()">+ Articolo</button>` : ''}</div>
+    <div class="table-wrapper"><table class="data-table">
+      <thead><tr><th>Articolo</th><th style="text-align:right">Prezzo</th><th>Stato</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+}
+
+async function musaNuovoArticolo() {
+  const vals = await contDialog('Nuovo articolo', [
+    { key: 'nome', label: 'Nome', type: 'text' },
+    { key: 'descrizione', label: 'Descrizione (opzionale)', type: 'text' },
+    { key: 'importo', label: 'Prezzo €', type: 'number' }
+  ]);
+  if (!vals || !vals.nome || !(Number(vals.importo) > 0)) { if (vals) toast('Nome e prezzo obbligatori', 'error'); return; }
+  const stop = contLoadingOverlay('Creo l\'articolo su Stripe…');
+  try { await api('POST', '/musa/prodotti', { nome: vals.nome, descrizione: vals.descrizione, importo: Number(vals.importo) }); stop(); toast('Articolo creato', 'success'); musaRender(); }
+  catch (e) { stop(); toast(e.message || 'Errore', 'error'); }
 }
 
 async function musaRenderClienti(el) {

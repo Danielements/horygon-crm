@@ -42,6 +42,21 @@ function mapInvoice(inv) {
   };
 }
 
+// Articolo = Prodotto Stripe con il suo prezzo (default o il primo attivo).
+function mapProduct(p, price) {
+  const pr = price || (p.default_price && typeof p.default_price === 'object' ? p.default_price : null);
+  return {
+    id: p.id,
+    nome: p.name || null,
+    descrizione: p.description || null,
+    attivo: !!p.active,
+    prezzo: pr ? toEuro(pr.unit_amount) : null,
+    valuta: pr ? (pr.currency || 'eur').toUpperCase() : 'EUR',
+    ricorrente: !!(pr && pr.recurring),
+    price_id: pr ? pr.id : null
+  };
+}
+
 function mapCustomer(c) {
   return { id: c.id, nome: c.name || null, email: c.email || null, piva: (c.metadata && c.metadata.piva) || null, creato: c.created ? new Date(c.created * 1000).toISOString().slice(0, 10) : null };
 }
@@ -69,6 +84,33 @@ async function dashboard() {
     clienti: (customers.data || []).length,
     ultimi_pagamenti: (payments.data || []).map(mapPayment)
   };
+}
+
+// Articoli (prodotti): unisce prodotti e prezzi; se il prodotto non ha un
+// default_price espanso, aggancia il primo prezzo attivo trovato.
+async function listProdotti() {
+  const [prods, prices] = await Promise.all([
+    stripe.listProducts(100),
+    stripe.listPrices(100).catch(() => ({ data: [] }))
+  ]);
+  const perProdotto = {};
+  (prices.data || []).forEach((pr) => {
+    const pid = typeof pr.product === 'string' ? pr.product : (pr.product && pr.product.id);
+    if (pid && !perProdotto[pid]) perProdotto[pid] = pr;
+  });
+  return (prods.data || []).map((p) => mapProduct(p, perProdotto[p.id]));
+}
+
+// Crea un articolo: prodotto + prezzo, e imposta il prezzo come default.
+async function createProdotto({ nome, descrizione, importo, valuta = 'eur', ricorrente, intervallo }) {
+  if (!nome) throw new Error('Nome obbligatorio');
+  if (!(Number(importo) > 0)) throw new Error('Prezzo non valido');
+  const prod = await stripe.createProduct({ name: nome, description: descrizione || undefined });
+  const priceData = { product: prod.id, unit_amount: toCents(importo), currency: String(valuta).toLowerCase() };
+  if (ricorrente) priceData.recurring = { interval: intervallo || 'month' };
+  const price = await stripe.createPrice(priceData);
+  try { await stripe.updateProduct(prod.id, { default_price: price.id }); } catch { /* non blocca */ }
+  return mapProduct(prod, price);
 }
 
 async function listInvoices() { return (await stripe.listInvoices(100)).data.map(mapInvoice); }
@@ -158,7 +200,7 @@ async function refund({ payment_intent, charge, importo }) {
 }
 
 module.exports = {
-  toCents, toEuro, mapPayment, mapInvoice, mapCustomer,
-  dashboard, listInvoices, listPayments, listCustomers,
+  toCents, toEuro, mapPayment, mapInvoice, mapCustomer, mapProduct,
+  dashboard, listInvoices, listPayments, listCustomers, listProdotti, createProdotto,
   createCustomer, createInvoice, finalizeAndSend, payInvoice, voidInvoice, createPaymentLink, refund
 };

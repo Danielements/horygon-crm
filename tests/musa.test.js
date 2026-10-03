@@ -72,6 +72,21 @@ test('mapInvoice: mappa stato e importi in euro', () => {
   assert.equal(inv.valuta, 'EUR');
 });
 
+test('mapProduct: articolo con prezzo default o agganciato', () => {
+  const conDefault = musa.mapProduct({ id: 'prod_1', name: 'Pacchetto Base', active: true, default_price: { id: 'price_1', unit_amount: 2500, currency: 'eur' } });
+  assert.equal(conDefault.nome, 'Pacchetto Base');
+  assert.equal(conDefault.prezzo, 25);
+  assert.equal(conDefault.price_id, 'price_1');
+
+  const conPrezzoEsterno = musa.mapProduct({ id: 'prod_2', name: 'Extra', active: true, default_price: null }, { id: 'price_2', unit_amount: 900, currency: 'eur', recurring: { interval: 'month' } });
+  assert.equal(conPrezzoEsterno.prezzo, 9);
+  assert.equal(conPrezzoEsterno.ricorrente, true);
+
+  const senzaPrezzo = musa.mapProduct({ id: 'prod_3', name: 'Senza', active: false });
+  assert.equal(senzaPrezzo.prezzo, null);
+  assert.equal(senzaPrezzo.attivo, false);
+});
+
 test('mode: dedotto dal prefisso della chiave', () => {
   const prev = process.env.MUSA_STRIPE_SECRET_KEY;
   process.env.MUSA_STRIPE_SECRET_KEY = 'sk_test_abc';

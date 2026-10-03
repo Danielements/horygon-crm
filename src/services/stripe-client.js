@@ -73,6 +73,12 @@ const listCharges = (limit = 20) => request('GET', '/charges', { limit });
 const listInvoices = (limit = 20, params = {}) => request('GET', '/invoices', { limit, ...params });
 const getInvoice = (id) => request('GET', `/invoices/${id}`);
 const listCustomers = (limit = 50) => request('GET', '/customers', { limit });
+// Articoli = Prodotti Stripe (+ Prezzi).
+const listProducts = (limit = 100) => request('GET', '/products', { limit, active: true, expand: ['data.default_price'] });
+const listPrices = (limit = 100) => request('GET', '/prices', { limit, active: true });
+const createProduct = (data) => request('POST', '/products', data);
+const updateProduct = (id, data) => request('POST', `/products/${id}`, data);
+const createPrice = (data) => request('POST', '/prices', data);
 
 // --- scritture ------------------------------------------------------------
 const createCustomer = (data) => request('POST', '/customers', data);
@@ -116,6 +122,7 @@ function verifyWebhook(rawBody, header, secret, toleranceSec = 300) {
 module.exports = {
   isConfigured, isEnabled, mode, secretKey, webhookSecret, encodeForm, request, verifyWebhook,
   getBalance, listPaymentIntents, listCharges, listInvoices, getInvoice, listCustomers,
+  listProducts, listPrices, createProduct, updateProduct, createPrice,
   createCustomer, createInvoiceItem, createInvoice, finalizeInvoice, sendInvoice, payInvoice, voidInvoice,
   createPaymentLink, createRefund
 };

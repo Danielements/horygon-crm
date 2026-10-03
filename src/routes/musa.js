@@ -39,6 +39,17 @@ router.get('/clienti', canRead, async (req, res) => {
   try { res.json({ clienti: await musa.listCustomers() }); } catch (e) { fail(res, e); }
 });
 
+router.get('/prodotti', canRead, async (req, res) => {
+  try { res.json({ prodotti: await musa.listProdotti() }); } catch (e) { fail(res, e); }
+});
+router.post('/prodotti', canEdit, async (req, res) => {
+  try {
+    const p = await musa.createProdotto(req.body || {});
+    writeAudit({ utente_id: req.user.id, azione: 'musa.prodotto.crea', entita_tipo: 'stripe_product', entita_id: null, dettagli: { id: p.id } });
+    res.json(p);
+  } catch (e) { fail(res, e); }
+});
+
 router.post('/clienti', canEdit, async (req, res) => {
   try {
     const c = await musa.createCustomer(req.body || {});
