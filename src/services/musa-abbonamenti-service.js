@@ -170,8 +170,80 @@ function calcolaTrimestre(editoreId, anno, trimestre) {
   };
 }
 
+// --- ingestione dal portale MUSA (sync completo) ---------------------------
+
+// L'email dal portale a volte e' una stringa, a volte un oggetto {email,...}.
+function normalizeEmail(email) {
+  if (!email) return null;
+  if (typeof email === 'object') return (email.email || '').toString().trim() || null;
+  return String(email).trim() || null;
+}
+
+// ISBN valido = 13 cifre (978/979...). Solo per segnalazione, non blocca.
+function isbnValido(isbn) {
+  return /^[0-9]{13}$/.test(String(isbn || '').replace(/[^0-9]/g, ''));
+}
+
+function upsertEditoreByExternal(ed) {
+  const email = normalizeEmail(ed.email);
+  const ex = db.prepare('SELECT id FROM musa_editori WHERE external_id = ?').get(ed.external_id);
+  if (ex) {
+    db.prepare('UPDATE musa_editori SET nome = COALESCE(?, nome), piva = COALESCE(?, piva), email = COALESCE(?, email) WHERE id = ?')
+      .run(ed.ragione_sociale || null, ed.partita_iva || null, email, ex.id);
+    return ex.id;
+  }
+  const info = db.prepare('INSERT INTO musa_editori (nome, email, piva, external_id) VALUES (?, ?, ?, ?)')
+    .run(ed.ragione_sociale || '(senza nome)', email, ed.partita_iva || null, ed.external_id || null);
+  return Number(info.lastInsertRowid);
+}
+
+// Ingoia il payload { generato_il, editori:[...] }: crea/aggiorna editori per
+// external_id, upserta gli ISBN e fa la controprova col riepilogo del portale.
+function syncPortale(payload, oggiISO) {
+  const oggi = oggiISO || new Date().toISOString().slice(0, 10);
+  const fasce = listFasce();
+  const editoriIn = (payload && payload.editori) || [];
+  const dettaglio = [];
+  const warnings = [];
+  const d10 = (v) => (v ? String(v).slice(0, 10) : null);
+
+  for (const ed of editoriIn) {
+    if (!ed.external_id) { warnings.push(`Editore "${ed.ragione_sociale || '?'}" senza external_id: saltato`); continue; }
+    const editoreId = upsertEditoreByExternal(ed);
+    const seen = new Set();
+    let salvati = 0, duplicati = 0, invalidi = 0;
+    for (const r of (ed.isbn || [])) {
+      if (!r.isbn) continue;
+      if (seen.has(r.isbn)) duplicati++;
+      seen.add(r.isbn);
+      if (!isbnValido(r.isbn)) invalidi++;
+      upsertIsbn(editoreId, { isbn: r.isbn, inserito_il: d10(r.inserito_il), rimosso_il: d10(r.rimosso_il), approvato: !!r.approvato, approvato_il: d10(r.approvato_il) });
+      salvati++;
+    }
+    const recs = loadIsbn(editoreId);
+    const { present, approved } = countsOnDay(recs, oggi);
+    const perc = present > 0 ? (approved / present) * 100 : 0;
+    const fascia = pickFascia(present, perc, fasce);
+    const rip = ed.riepilogo || {};
+    const match = rip.isbn_presenti == null ? null : (present === Number(rip.isbn_presenti));
+    if (match === false) warnings.push(`${ed.ragione_sociale}: presenti ${present} ≠ portale ${rip.isbn_presenti}${duplicati ? ' (ISBN duplicati)' : ''}`);
+    if (duplicati) warnings.push(`${ed.ragione_sociale}: ${duplicati} ISBN duplicati nel payload`);
+    if (invalidi) warnings.push(`${ed.ragione_sociale}: ${invalidi} ISBN non validi (≠ 13 cifre)`);
+    if (!ed.partita_iva) warnings.push(`${ed.ragione_sociale}: partita IVA assente (serve per fatturare)`);
+    dettaglio.push({
+      editore_id: editoreId, ragione_sociale: ed.ragione_sociale, isbn_ricevuti: salvati,
+      presenti: present, approvati: approved,
+      portale_presenti: rip.isbn_presenti != null ? Number(rip.isbn_presenti) : null,
+      portale_approvati: rip.isbn_approvati != null ? Number(rip.isbn_approvati) : null,
+      match, fascia_oggi: fascia ? fascia.nome : 'nessuna', prezzo_mese: fascia ? fascia.prezzo_mese : 0
+    });
+  }
+  return { generato_il: payload && payload.generato_il, editori: dettaglio.length, dettaglio, warnings };
+}
+
 module.exports = {
   round2, daysInMonth, eachDay, countsOnDay, pickFascia, dailyRate, computePeriodo, quarterRange,
   listFasce, createFascia, updateFascia, deleteFascia,
-  loadIsbn, upsertIsbn, creditoDisponibile, calcolaTrimestre
+  loadIsbn, upsertIsbn, creditoDisponibile, calcolaTrimestre,
+  normalizeEmail, isbnValido, upsertEditoreByExternal, syncPortale
 };

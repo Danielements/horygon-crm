@@ -5587,6 +5587,7 @@ async function musaRenderEditori(el) {
       </div>
       <div style="display:flex;gap:6px">
         ${editable ? `<button class="btn btn-outline btn-sm" onclick="musaFasce()">Fasce</button>
+        <button class="btn btn-outline btn-sm" onclick="musaSyncPortale()">Sync portale</button>
         <button class="btn btn-accent btn-sm" onclick="musaNuovoEditore()">+ Editore</button>` : ''}
       </div>
     </div>
@@ -5646,6 +5647,34 @@ async function musaNuovoEditore() {
   if (!vals || !vals.nome) return;
   try { await api('POST', '/musa/editori', vals); toast('Editore creato', 'success'); musaRender(); }
   catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+// Incolla il JSON del portale MUSA ed esegue il sync, mostrando il report.
+async function musaSyncPortale() {
+  const body = `
+    <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">Incolla il JSON del portale MUSA (<code>{ "generato_il":…, "editori":[…] }</code>). Crea/aggiorna editori e ISBN e confronta coi vostri riepiloghi.</p>
+    <textarea id="musa-sync-json" rows="8" placeholder='{ "editori": [ ... ] }' style="width:100%;padding:8px;box-sizing:border-box;font-family:monospace;font-size:12px"></textarea>`;
+  const ok = await contDialog('Sync dal portale MUSA', null, body);
+  if (!ok) return;
+  let payload;
+  try { payload = JSON.parse(document.getElementById('musa-sync-json').value); }
+  catch { return toast('JSON non valido', 'error'); }
+  const stop = contLoadingOverlay('Importo dal portale…');
+  try {
+    const r = await api('POST', '/musa/portale/sync', payload);
+    stop();
+    const rows = (r.dettaglio || []).map(d => `<tr>
+      <td>${escapeHtml(d.ragione_sociale || '-')}</td>
+      <td style="text-align:right">${d.presenti}${d.portale_presenti != null && d.match === false ? ` <span style="color:var(--danger,#dc2626)">(portale ${d.portale_presenti})</span>` : ''}</td>
+      <td style="text-align:right">${d.approvati}</td>
+      <td>${escapeHtml(d.fascia_oggi)}</td>
+      <td style="text-align:right">${formatCurrencyIt(d.prezzo_mese)}/mese</td></tr>`).join('');
+    const warn = (r.warnings || []).map(w => `<li>${escapeHtml(w)}</li>`).join('');
+    await contDialog(`Sync completato — ${r.editori} editori`, null, `
+      <div class="table-wrapper" style="margin-bottom:10px;max-height:40vh;overflow:auto"><table class="data-table"><thead><tr><th>Editore</th><th style="text-align:right">Presenti</th><th style="text-align:right">Appr.</th><th>Fascia oggi</th><th style="text-align:right">Prezzo</th></tr></thead><tbody>${rows}</tbody></table></div>
+      ${warn ? `<div style="font-size:13px"><strong>Avvisi (${r.warnings.length}):</strong><ul style="margin:6px 0 0;padding-left:18px;color:var(--text-muted)">${warn}</ul></div>` : '<div style="color:var(--success,#16a34a);font-size:13px">Nessun avviso.</div>'}`);
+    musaRender();
+  } catch (e) { stop(); toast(e.message || 'Errore', 'error'); }
 }
 
 // Editor delle fasce di abbonamento (modificabili).

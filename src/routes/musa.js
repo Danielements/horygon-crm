@@ -231,6 +231,17 @@ router.post('/editori/:id/isbn', canEdit, (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
+// Sync completo dal portale MUSA: ingoia { generato_il, editori:[...] }, crea/
+// aggiorna editori + ISBN, e fa la controprova coi riepiloghi. (Per il push
+// automatico del portale si aggiungera' un token di servizio.)
+router.post('/portale/sync', canEdit, (req, res) => {
+  try {
+    const r = abb.syncPortale(req.body || {});
+    writeAudit({ utente_id: req.user.id, azione: 'musa.portale.sync', entita_tipo: 'musa', entita_id: null, dettagli: { editori: r.editori, warnings: r.warnings.length } });
+    res.json(r);
+  } catch (e) { fail(res, e); }
+});
+
 // Calcolo (senza fatturare) del trimestre per un editore.
 router.get('/editori/:id/trimestre', canRead, (req, res) => {
   try {

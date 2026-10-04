@@ -93,6 +93,38 @@ test('ESEMPIO discesa: 9o rimosso a meta marzo torna a BASIC per i giorni restan
 
 // --- integrazione (fasce auto-seedate su DB fresco) ------------------------
 
+test('syncPortale: normalizza email-oggetto, segnala duplicati/invalidi/mismatch', () => {
+  const payload = {
+    generato_il: '2026-10-04T15:00:00+02:00',
+    editori: [{
+      external_id: 'SYNC-1',
+      ragione_sociale: 'PAV edizioni',
+      partita_iva: null,
+      email: { email: 'direzione@pavedizioni.it', autore_dice: '' },   // email come oggetto
+      isbn: [
+        { isbn: '9791281497344', titolo: 'A', inserito_il: '2026-01-10T10:00:00+01:00', rimosso_il: null, approvato: true, approvato_il: null },
+        { isbn: '9791281497344', titolo: 'A dup', inserito_il: '2026-01-10T10:00:00+01:00', approvato: true },   // duplicato
+        { isbn: '123', titolo: 'rotto', inserito_il: '2026-02-01T10:00:00+01:00', approvato: false }               // ISBN non valido
+      ],
+      riepilogo: { isbn_presenti: 3, isbn_approvati: 2 }
+    }]
+  };
+  const r = abb.syncPortale(payload, '2026-10-04');
+  assert.equal(r.editori, 1);
+  const d = r.dettaglio[0];
+  assert.equal(d.presenti, 2);                 // duplicato contato una volta
+  assert.equal(d.portale_presenti, 3);
+  assert.equal(d.match, false);                // 2 != 3
+  // email normalizzata da oggetto a stringa
+  const ed = db.prepare("SELECT email FROM musa_editori WHERE external_id='SYNC-1'").get();
+  assert.equal(ed.email, 'direzione@pavedizioni.it');
+  // avvisi presenti
+  const testo = r.warnings.join(' | ');
+  assert.match(testo, /duplicati/);
+  assert.match(testo, /non validi/);
+  assert.match(testo, /partita IVA assente/);
+});
+
 test('fasce seedate all\'avvio e calcolaTrimestre legge dal DB', () => {
   const fasce = abb.listFasce();
   assert.equal(fasce.length, 5);
