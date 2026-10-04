@@ -8,6 +8,14 @@ const stripe = require('./stripe-client');
 function toCents(euro) { return Math.round((Number(euro) || 0) * 100); }
 function toEuro(cents) { return Math.round((Number(cents) || 0)) / 100; }
 
+// Tax rate IVA (22% esclusivo) configurato in ENV. Se presente, le fatture
+// nascono con questa aliquota applicata a tutte le righe. I prezzi delle fasce
+// sono NETTI: Stripe aggiunge l'IVA sopra e mostra imponibile+IVA+totale.
+function taxRates() {
+  const id = process.env.MUSA_STRIPE_TAX_RATE_ID;
+  return id ? [id] : undefined;
+}
+
 // --- mapper (Stripe -> UI) -------------------------------------------------
 function mapPayment(pi) {
   return {
@@ -155,13 +163,16 @@ async function createInvoice(input) {
       description: r.descrizione || 'Voce'
     });
   }
-  const inv = await stripe.createInvoice({
+  const invoiceData = {
     customer: customerId,
     collection_method: 'send_invoice',
     days_until_due: Number(input.giorni_scadenza) > 0 ? Number(input.giorni_scadenza) : 30,
     pending_invoice_items_behavior: 'include',
     auto_advance: false
-  });
+  };
+  const iva = taxRates();
+  if (iva) invoiceData.default_tax_rates = iva;   // IVA 22% su tutte le righe
+  const inv = await stripe.createInvoice(invoiceData);
 
   let finale = inv;
   if (input.invia) {

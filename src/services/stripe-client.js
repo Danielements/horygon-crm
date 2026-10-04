@@ -89,6 +89,8 @@ const sendInvoice = (id) => request('POST', `/invoices/${id}/send`);
 const payInvoice = (id, data = {}) => request('POST', `/invoices/${id}/pay`, data);
 const voidInvoice = (id) => request('POST', `/invoices/${id}/void`);
 const createPaymentLink = (data) => request('POST', '/payment_links', data);
+const createTaxRate = (data) => request('POST', '/tax_rates', data);
+const listTaxRates = (limit = 20) => request('GET', '/tax_rates', { limit, active: true });
 const createRefund = (data, idemKey) => request('POST', '/refunds', data, { idempotencyKey: idemKey });
 
 // --- webhook --------------------------------------------------------------
@@ -124,5 +126,5 @@ module.exports = {
   getBalance, listPaymentIntents, listCharges, listInvoices, getInvoice, listCustomers,
   listProducts, listPrices, createProduct, updateProduct, createPrice,
   createCustomer, createInvoiceItem, createInvoice, finalizeInvoice, sendInvoice, payInvoice, voidInvoice,
-  createPaymentLink, createRefund
+  createPaymentLink, createRefund, createTaxRate, listTaxRates
 };

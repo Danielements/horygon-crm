@@ -24,7 +24,18 @@ function fail(res, e) {
 
 // Stato configurazione (il frontend mostra il modulo solo se abilitato).
 router.get('/stato', canRead, (req, res) => {
-  res.json({ configurato: stripe.isConfigured(), abilitato: stripe.isEnabled(), mode: stripe.mode() });
+  res.json({ configurato: stripe.isConfigured(), abilitato: stripe.isEnabled(), mode: stripe.mode(), iva_configurata: !!process.env.MUSA_STRIPE_TAX_RATE_ID });
+});
+
+// Crea una volta l'aliquota IVA 22% (esclusiva) su Stripe e restituisce l'id da
+// mettere in MUSA_STRIPE_TAX_RATE_ID nel .env. Niente di distruttivo.
+router.post('/iva/setup', canEdit, async (req, res) => {
+  try {
+    const perc = (req.body && req.body.percentuale) || 22;
+    const rate = await stripe.createTaxRate({ display_name: `IVA ${perc}%`, description: `IVA ${perc}%`, percentage: perc, inclusive: false, country: 'IT' });
+    writeAudit({ utente_id: req.user.id, azione: 'musa.iva.setup', entita_tipo: 'stripe_tax_rate', entita_id: null, dettagli: { id: rate.id, perc } });
+    res.json({ id: rate.id, percentuale: perc, istruzioni: `Metti nel .env: MUSA_STRIPE_TAX_RATE_ID=${rate.id} e riavvia.` });
+  } catch (e) { fail(res, e); }
 });
 
 router.get('/dashboard', canRead, async (req, res) => {
