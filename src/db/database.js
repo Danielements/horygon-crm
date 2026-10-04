@@ -1457,7 +1457,84 @@ db.exec(`
     FOREIGN KEY (editore_id) REFERENCES musa_editori(id) ON DELETE CASCADE
   );
   CREATE INDEX IF NOT EXISTS idx_musa_conteggi_periodo ON musa_editori_conteggi(periodo);
+
+  -- Abbonamenti MUSA: fasce a consumo giornaliero (modificabili) sul numero di
+  -- ISBN PRESENTI in piattaforma; fatturazione trimestrale pro-rata a giorni.
+  -- La fascia gratis richiede una percentuale minima di approvati; se non e'
+  -- raggiunta sopra il limite, si paga la fascia a pagamento piu' alta.
+  CREATE TABLE IF NOT EXISTS musa_abbonamenti_fasce (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nome TEXT NOT NULL,
+    min_isbn INTEGER NOT NULL,
+    max_isbn INTEGER,                      -- NULL = nessun limite superiore
+    prezzo_mese REAL NOT NULL DEFAULT 0,
+    gratis INTEGER DEFAULT 0,
+    min_approvati_perc REAL,               -- condizione per il gratis (es. 20)
+    valuta TEXT DEFAULT 'EUR',
+    ordine INTEGER DEFAULT 0,
+    attiva INTEGER DEFAULT 1,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+
+  -- Timeline ISBN per editore (dal portale MUSA): presenza e approvazione con
+  -- date, per ricostruire il conteggio esatto di ogni giorno.
+  CREATE TABLE IF NOT EXISTS musa_editori_isbn (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    editore_id INTEGER NOT NULL,
+    isbn TEXT NOT NULL,
+    inserito_il TEXT,                      -- YYYY-MM-DD
+    rimosso_il TEXT,                       -- YYYY-MM-DD o NULL (ancora presente)
+    approvato INTEGER DEFAULT 0,
+    approvato_il TEXT,
+    external_id TEXT,
+    aggiornato_il TEXT DEFAULT (datetime('now')),
+    UNIQUE (editore_id, isbn),
+    FOREIGN KEY (editore_id) REFERENCES musa_editori(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_musa_isbn_editore ON musa_editori_isbn(editore_id);
+
+  -- Trimestri fatturati + credito per editore.
+  CREATE TABLE IF NOT EXISTS musa_abbonamenti_trimestri (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    editore_id INTEGER NOT NULL,
+    anno INTEGER NOT NULL,
+    trimestre INTEGER NOT NULL,            -- 1..4
+    dovuto REAL DEFAULT 0,                 -- pro-rata a giorni calcolato
+    credito_usato REAL DEFAULT 0,
+    importo_fatturato REAL DEFAULT 0,      -- dovuto - credito usato
+    dettaglio TEXT,                        -- JSON: giorni per fascia
+    stato TEXT DEFAULT 'calcolato',        -- calcolato | fatturato
+    stripe_invoice_id TEXT,
+    calcolato_il TEXT DEFAULT (datetime('now')),
+    UNIQUE (editore_id, anno, trimestre),
+    FOREIGN KEY (editore_id) REFERENCES musa_editori(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS musa_editori_credito (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    editore_id INTEGER NOT NULL,
+    data TEXT DEFAULT (datetime('now')),
+    importo REAL NOT NULL,                 -- + accredito, - utilizzo
+    motivo TEXT,
+    riferimento TEXT,                      -- es. trimestre collegato
+    FOREIGN KEY (editore_id) REFERENCES musa_editori(id) ON DELETE CASCADE
+  );
 `);
+
+// Seed idempotente delle 5 fasce MUSA (modificabili da UI). Girano solo se la
+// tabella e' vuota: non sovrascrivono prezzi gia' ritoccati.
+try {
+  const n = db.prepare('SELECT COUNT(*) AS n FROM musa_abbonamenti_fasce').get().n;
+  if (!n) {
+    const ins = db.prepare(`INSERT INTO musa_abbonamenti_fasce (nome, min_isbn, max_isbn, prezzo_mese, gratis, min_approvati_perc, ordine)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`);
+    ins.run('MUSA BASIC', 1, 8, 4.90, 0, null, 1);
+    ins.run('MUSA PRO', 9, 24, 12.90, 0, null, 2);
+    ins.run('MUSA PREMIUM', 25, 100, 24.90, 0, null, 3);
+    ins.run('MUSA ENTERPRISE', 101, 400, 42.90, 0, null, 4);
+    ins.run('MUSA UNLIMITED', 401, null, 0, 1, 20, 5);
+  }
+} catch {}
 
 [
   "tenant_id INTEGER DEFAULT 1",

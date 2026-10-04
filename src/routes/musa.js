@@ -9,6 +9,7 @@ const { writeAudit } = require('../services/audit');
 const stripe = require('../services/stripe-client');
 const musa = require('../services/musa-service');
 const editori = require('../services/musa-editori-service');
+const abb = require('../services/musa-abbonamenti-service');
 
 router.use(authMiddleware);
 
@@ -174,6 +175,57 @@ router.post('/editori-conteggi/:id/fattura', canEdit, async (req, res) => {
     const inv = await editori.fatturaConteggio(Number(req.params.id), { invia: !!(req.body || {}).invia });
     writeAudit({ utente_id: req.user.id, azione: 'musa.conteggio.fattura', entita_tipo: 'musa_conteggio', entita_id: Number(req.params.id), dettagli: { invoice: inv.id } });
     res.json(inv);
+  } catch (e) { fail(res, e); }
+});
+
+// ===========================================================================
+// ABBONAMENTI MUSA — fasce a consumo, ISBN dal portale, calcolo trimestrale
+// ===========================================================================
+
+// --- Fasce (modificabili) --------------------------------------------------
+router.get('/abbonamenti/fasce', canRead, (req, res) => {
+  try { res.json({ fasce: abb.listFasce() }); } catch (e) { fail(res, e); }
+});
+router.post('/abbonamenti/fasce', canEdit, (req, res) => {
+  try {
+    const r = abb.createFascia(req.body || {});
+    writeAudit({ utente_id: req.user.id, azione: 'musa.fascia.crea', entita_tipo: 'musa_fascia', entita_id: r.id, dettagli: {} });
+    res.json(r);
+  } catch (e) { fail(res, e); }
+});
+router.put('/abbonamenti/fasce/:id', canEdit, (req, res) => {
+  try { res.json(abb.updateFascia(Number(req.params.id), req.body || {})); } catch (e) { fail(res, e); }
+});
+router.delete('/abbonamenti/fasce/:id', canDelete, (req, res) => {
+  try { res.json(abb.deleteFascia(Number(req.params.id))); } catch (e) { fail(res, e); }
+});
+
+// --- ISBN dell'editore (ingestione dal portale MUSA o manuale) -------------
+router.get('/editori/:id/isbn', canRead, (req, res) => {
+  try { res.json({ isbn: abb.loadIsbn(Number(req.params.id)) }); } catch (e) { fail(res, e); }
+});
+
+// Upsert ISBN: accetta un singolo record o un array (push del portale).
+// Body: { isbn:"...", inserito_il, rimosso_il, approvato, approvato_il } oppure
+// { records: [ {...}, ... ] }.
+router.post('/editori/:id/isbn', canEdit, (req, res) => {
+  const b = req.body || {};
+  try {
+    const records = Array.isArray(b.records) ? b.records : (b.isbn ? [b] : []);
+    if (!records.length) throw new Error('Nessun ISBN da salvare');
+    let n = 0;
+    for (const rec of records) { abb.upsertIsbn(Number(req.params.id), rec); n++; }
+    writeAudit({ utente_id: req.user.id, azione: 'musa.isbn.upsert', entita_tipo: 'musa_editore', entita_id: Number(req.params.id), dettagli: { conteggio: n, fonte: b.fonte || 'manuale' } });
+    res.json({ salvati: n });
+  } catch (e) { fail(res, e); }
+});
+
+// Calcolo (senza fatturare) del trimestre per un editore.
+router.get('/editori/:id/trimestre', canRead, (req, res) => {
+  try {
+    const anno = Number(req.query.anno) || new Date().getFullYear();
+    const trimestre = Number(req.query.trimestre) || (Math.floor(new Date().getMonth() / 3) + 1);
+    res.json(abb.calcolaTrimestre(Number(req.params.id), anno, trimestre));
   } catch (e) { fail(res, e); }
 });
 

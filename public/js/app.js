@@ -5552,64 +5552,88 @@ if (typeof MUSA_STATE !== 'undefined') MUSA_STATE.editoriPeriodo = new Date().to
 
 async function musaRenderEditori(el) {
   const editable = canEditSection('musa');
-  const periodo = MUSA_STATE.editoriPeriodo || new Date().toISOString().slice(0, 7);
-  const r = await api('GET', `/musa/editori-conteggi?periodo=${encodeURIComponent(periodo)}`);
-  const righe = r.righe || [];
-  const totale = righe.reduce((s, x) => s + (Number(x.prezzo) || 0), 0);
-  const rows = righe.map(x => `<tr>
-      <td>${escapeHtml(x.editore_nome)}${x.registrato ? '' : ' <span style="color:var(--text-muted);font-size:11px">(nessun dato)</span>'}</td>
-      <td style="text-align:right">${x.caricati}</td>
-      <td style="text-align:right"><strong>${x.approvati}</strong></td>
-      <td style="text-align:right">${formatCurrencyIt(x.prezzo)}</td>
-      <td>${x.fatturato ? '<span class="badge badge-pagata">fatturato</span>' : (x.registrato ? '<span class="badge badge-cliente">da fatturare</span>' : '')}</td>
+  const now = new Date();
+  if (!MUSA_STATE.editoriAnno) MUSA_STATE.editoriAnno = now.getFullYear();
+  if (!MUSA_STATE.editoriTrim) MUSA_STATE.editoriTrim = Math.floor(now.getMonth() / 3) + 1;
+  const anno = MUSA_STATE.editoriAnno, trim = MUSA_STATE.editoriTrim;
+  const r = await api('GET', '/musa/editori');
+  const editori = r.editori || [];
+  // Calcolo trimestre per ogni editore (a giorni, dalle date ISBN).
+  const calcoli = await Promise.all(editori.map(e => api('GET', `/musa/editori/${e.id}/trimestre?anno=${anno}&trimestre=${trim}`).catch(() => null)));
+  const totale = calcoli.reduce((s, c) => s + (c ? c.dovuto : 0), 0);
+  const rows = editori.map((e, i) => {
+    const c = calcoli[i];
+    const fasce = c ? Object.keys(c.giorni_per_fascia || {}).filter(k => k !== 'Nessun abbonamento') : [];
+    return `<tr>
+      <td>${escapeHtml(e.nome)}${e.external_id ? `<br><span style="font-size:11px;color:var(--text-muted)">portale: ${escapeHtml(e.external_id)}</span>` : ''}</td>
+      <td style="font-size:12px">${fasce.map(f => `${escapeHtml(f)} (${c.giorni_per_fascia[f].giorni}gg)`).join('<br>') || '-'}</td>
+      <td style="text-align:right"><strong>${c ? formatCurrencyIt(c.dovuto) : '-'}</strong></td>
+      <td style="text-align:right">${c && c.credito_disponibile ? '-' + formatCurrencyIt(c.credito_usato) : '-'}</td>
+      <td style="text-align:right">${c ? formatCurrencyIt(c.importo_netto) : '-'}</td>
       <td style="white-space:nowrap">${editable ? `
-        <button class="btn btn-outline btn-sm" onclick="musaEditConteggio(${x.editore_id}, ${JSON.stringify(x.editore_nome)}, '${periodo}', ${x.caricati}, ${x.approvati})">Conteggi</button>
-        ${x.registrato && x.prezzo > 0 && !x.fatturato && MUSA_STATE.stato && MUSA_STATE.stato.abilitato ? `<button class="btn btn-outline btn-sm" onclick="musaFatturaConteggio(${x.conteggio_id})">Fattura su Stripe</button>` : ''}
-        <button class="btn btn-outline btn-sm" onclick="musaStoricoEditore(${x.editore_id}, ${JSON.stringify(x.editore_nome)})">Storico</button>` : ''}</td>
-    </tr>`).join('') || '<tr><td colspan="6" style="color:var(--text-muted)">Nessun editore. Aggiungine uno.</td></tr>';
+        <button class="btn btn-outline btn-sm" onclick="musaTrimestreDettaglio(${e.id}, ${JSON.stringify(e.nome)})">Dettaglio</button>
+        <button class="btn btn-outline btn-sm" onclick="musaEditoreIsbn(${e.id}, ${JSON.stringify(e.nome)})">ISBN</button>` : ''}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="6" style="color:var(--text-muted)">Nessun editore. Aggiungine uno.</td></tr>';
+  const trimOpts = [1, 2, 3, 4].map(q => `<option value="${q}"${q === trim ? ' selected' : ''}>T${q}</option>`).join('');
+  const annoOpts = [now.getFullYear(), now.getFullYear() - 1, now.getFullYear() - 2].map(y => `<option value="${y}"${y === anno ? ' selected' : ''}>${y}</option>`).join('');
   el.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
       <div style="display:flex;gap:8px;align-items:center">
-        <span style="font-size:13px">Mese</span>
-        <input type="month" value="${escapeAttr(periodo)}" onchange="MUSA_STATE.editoriPeriodo=this.value;musaRender()" class="btn btn-outline btn-sm">
-        <span style="font-size:13px;color:var(--text-muted)">Totale mese: <strong>${formatCurrencyIt(totale)}</strong></span>
+        <span style="font-size:13px">Trimestre</span>
+        <select class="btn btn-outline btn-sm" onchange="MUSA_STATE.editoriTrim=Number(this.value);musaRender()">${trimOpts}</select>
+        <select class="btn btn-outline btn-sm" onchange="MUSA_STATE.editoriAnno=Number(this.value);musaRender()">${annoOpts}</select>
+        <span style="font-size:13px;color:var(--text-muted)">Totale trimestre: <strong>${formatCurrencyIt(totale)}</strong></span>
       </div>
       <div style="display:flex;gap:6px">
-        ${editable ? `<button class="btn btn-outline btn-sm" onclick="musaTariffe()">Tariffe</button>
+        ${editable ? `<button class="btn btn-outline btn-sm" onclick="musaFasce()">Fasce</button>
         <button class="btn btn-accent btn-sm" onclick="musaNuovoEditore()">+ Editore</button>` : ''}
       </div>
     </div>
     <div class="table-wrapper"><table class="data-table">
-      <thead><tr><th>Editore</th><th style="text-align:right">Caricati</th><th style="text-align:right">Approvati</th><th style="text-align:right">Dovuto</th><th>Stato</th><th></th></tr></thead>
+      <thead><tr><th>Editore</th><th>Fasce nel trimestre</th><th style="text-align:right">Dovuto</th><th style="text-align:right">Credito</th><th style="text-align:right">Netto</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div>
-    <p style="font-size:12px;color:var(--text-muted);margin-top:10px">Il dovuto si calcola sugli <strong>approvati</strong> secondo gli scaglioni in Tariffe. I conteggi possono arrivare dal portale MUSA o essere inseriti qui.</p>`;
+    <p style="font-size:12px;color:var(--text-muted);margin-top:10px">Il dovuto è calcolato <strong>a giorni</strong> sugli ISBN presenti in piattaforma, con le fasce in "Fasce". Gli ISBN e le loro date arrivano dal portale MUSA (o inseriti qui). Fatturazione trimestrale.</p>`;
 }
 
-async function musaEditConteggio(editoreId, nome, periodo, caricati, approvati) {
-  const vals = await contDialog(`Conteggi ${nome} · ${periodo}`, [
-    { key: 'caricati', label: 'Libri caricati', type: 'number', value: caricati || 0 },
-    { key: 'approvati', label: 'Libri approvati da MUSA', type: 'number', value: approvati || 0 }
-  ]);
-  if (!vals) return;
+async function musaTrimestreDettaglio(editoreId, nome) {
+  const c = await api('GET', `/musa/editori/${editoreId}/trimestre?anno=${MUSA_STATE.editoriAnno}&trimestre=${MUSA_STATE.editoriTrim}`);
+  const rows = Object.keys(c.giorni_per_fascia || {}).map(f => `<tr><td>${escapeHtml(f)}</td><td style="text-align:right">${c.giorni_per_fascia[f].giorni}</td><td style="text-align:right">${formatCurrencyIt(c.giorni_per_fascia[f].importo)}</td></tr>`).join('') || '<tr><td colspan="3" style="color:var(--text-muted)">Nessun giorno</td></tr>';
+  await contDialog(`Trimestre ${c.trimestre}/${c.anno} — ${nome}`, null, `
+    <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">Periodo ${formatDateIt(c.periodo.from)} – ${formatDateIt(c.periodo.to)}, calcolo a giorni.</p>
+    <div class="table-wrapper" style="margin-bottom:10px"><table class="data-table"><thead><tr><th>Fascia</th><th style="text-align:right">Giorni</th><th style="text-align:right">Importo</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div style="font-size:14px">Dovuto: <strong>${formatCurrencyIt(c.dovuto)}</strong>${c.credito_usato ? ` · credito usato: -${formatCurrencyIt(c.credito_usato)}` : ''} · <strong>Netto: ${formatCurrencyIt(c.importo_netto)}</strong></div>
+    ${c.credito_disponibile ? `<div style="font-size:12px;color:var(--text-muted);margin-top:4px">Credito disponibile: ${formatCurrencyIt(c.credito_disponibile)}</div>` : ''}`);
+}
+
+async function musaEditoreIsbn(editoreId, nome) {
+  document.querySelectorAll('.cont-dialog-overlay').forEach(o => o.remove());
+  const r = await api('GET', `/musa/editori/${editoreId}/isbn`);
+  const list = (r.isbn || []).slice(0, 200).map(x => `<tr>
+      <td>${escapeHtml(x.isbn)}</td><td>${formatDateIt(x.inserito_il)}</td>
+      <td>${x.rimosso_il ? formatDateIt(x.rimosso_il) : '-'}</td>
+      <td>${x.approvato ? '✓' : '-'}</td></tr>`).join('') || '<tr><td colspan="4" style="color:var(--text-muted)">Nessun ISBN</td></tr>';
+  const body = `
+    <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">${(r.isbn || []).length} ISBN. Normalmente arrivano dal portale MUSA; qui puoi aggiungerne a mano.</p>
+    <div class="table-wrapper" style="margin-bottom:12px;max-height:40vh;overflow:auto"><table class="data-table"><thead><tr><th>ISBN</th><th>Inserito</th><th>Rimosso</th><th>Appr.</th></tr></thead><tbody>${list}</tbody></table></div>
+    <div class="card" style="padding:10px"><strong style="font-size:13px">Aggiungi / aggiorna ISBN</strong>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px">
+        <input id="is-code" placeholder="ISBN" style="padding:6px">
+        <input id="is-ins" type="date" title="Inserito il" style="padding:6px">
+        <input id="is-rem" type="date" title="Rimosso il (opz.)" style="padding:6px">
+        <label style="font-size:13px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="is-appr"> approvato</label>
+      </div>
+      <button class="btn btn-accent btn-sm" style="margin-top:8px" onclick="musaSalvaIsbn(${editoreId})">Salva ISBN</button></div>`;
+  await contDialog(`ISBN — ${nome}`, null, body);
+}
+async function musaSalvaIsbn(editoreId) {
+  const isbn = document.getElementById('is-code').value.trim();
+  const inserito_il = document.getElementById('is-ins').value;
+  if (!isbn || !inserito_il) return toast('ISBN e data di inserimento obbligatori', 'error');
   try {
-    const c = await api('POST', '/musa/editori-conteggi', { editore_id: editoreId, periodo, caricati: Number(vals.caricati || 0), approvati: Number(vals.approvati || 0), fonte: 'manuale' });
-    toast(`Salvato — dovuto ${formatCurrencyIt(c.prezzo_calcolato)}`, 'success');
-    musaRender();
+    await api('POST', `/musa/editori/${editoreId}/isbn`, { isbn, inserito_il, rimosso_il: document.getElementById('is-rem').value || null, approvato: document.getElementById('is-appr').checked, approvato_il: document.getElementById('is-appr').checked ? inserito_il : null });
+    toast('ISBN salvato', 'success'); musaEditoreIsbn(editoreId, '');
   } catch (e) { toast(e.message || 'Errore', 'error'); }
-}
-
-async function musaFatturaConteggio(conteggioId) {
-  const invia = confirm('Creare la fattura Stripe per questo editore/mese?\n\nOK = crea e invia al cliente · Annulla = esci.\n(Se vuoi solo la bozza senza invio, usa la sezione Fatture.)');
-  if (!invia) return;
-  const stop = contLoadingOverlay('Creo la fattura su Stripe…');
-  try { await api('POST', `/musa/editori-conteggi/${conteggioId}/fattura`, { invia: true }); stop(); toast('Fattura creata e inviata', 'success'); musaRender(); }
-  catch (e) { stop(); toast(e.message || 'Errore', 'error'); }
-}
-
-async function musaStoricoEditore(editoreId, nome) {
-  const r = await api('GET', `/musa/editori/${editoreId}/storico`);
-  const rows = (r.storico || []).map(s => `<tr><td>${escapeHtml(s.periodo)}</td><td style="text-align:right">${s.caricati}</td><td style="text-align:right">${s.approvati}</td><td style="text-align:right">${formatCurrencyIt(s.prezzo_calcolato)}</td><td>${s.fatturato ? 'fatturato' : '-'}</td></tr>`).join('') || '<tr><td colspan="5" style="color:var(--text-muted)">Nessuno storico</td></tr>';
-  await contDialog(`Storico — ${nome}`, null, `<div class="table-wrapper"><table class="data-table"><thead><tr><th>Mese</th><th style="text-align:right">Caricati</th><th style="text-align:right">Approvati</th><th style="text-align:right">Dovuto</th><th>Stato</th></tr></thead><tbody>${rows}</tbody></table></div>`);
 }
 
 async function musaNuovoEditore() {
@@ -5624,38 +5648,43 @@ async function musaNuovoEditore() {
   catch (e) { toast(e.message || 'Errore', 'error'); }
 }
 
-async function musaTariffe() {
+// Editor delle fasce di abbonamento (modificabili).
+async function musaFasce() {
   document.querySelectorAll('.cont-dialog-overlay').forEach(o => o.remove());
-  const r = await api('GET', '/musa/tariffe');
-  const rows = (r.tariffe || []).map(t => `<tr>
-      <td>${t.min_libri}${t.max_libri != null ? `–${t.max_libri}` : '+'}</td>
-      <td style="text-align:right">${formatCurrencyIt(t.prezzo)}</td>
-      <td>${t.attiva ? '' : '<span class="badge badge-cliente">disattiva</span>'}</td>
-      <td><button class="btn btn-outline btn-sm" onclick="musaDeleteTariffa(${t.id})">✕</button></td>
-    </tr>`).join('') || '<tr><td colspan="4" style="color:var(--text-muted)">Nessuno scaglione</td></tr>';
+  const r = await api('GET', '/musa/abbonamenti/fasce');
+  const rows = (r.fasce || []).map(f => `<tr>
+      <td>${escapeHtml(f.nome)}</td>
+      <td>${f.min_isbn}${f.max_isbn != null ? `–${f.max_isbn}` : '+'}</td>
+      <td style="text-align:right">${f.gratis ? `gratis${f.min_approvati_perc != null ? ` (≥${f.min_approvati_perc}% appr.)` : ''}` : formatCurrencyIt(f.prezzo_mese) + '/mese'}</td>
+      <td><button class="btn btn-outline btn-sm" onclick="musaEditFascia(${f.id}, ${escapeAttr(JSON.stringify(f))})">Modifica</button> <button class="btn btn-outline btn-sm" onclick="musaDeleteFascia(${f.id})">✕</button></td>
+    </tr>`).join('') || '<tr><td colspan="4" style="color:var(--text-muted)">Nessuna fascia</td></tr>';
   const body = `
-    <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">Scaglioni per numero di libri <strong>approvati</strong> nel mese → prezzo forfait. Lascia vuoto "a" per "e oltre".</p>
-    <div class="table-wrapper" style="margin-bottom:12px"><table class="data-table"><thead><tr><th>Libri</th><th style="text-align:right">Prezzo</th><th></th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
-    <div class="card" style="padding:10px"><strong style="font-size:13px">Nuovo scaglione</strong>
-      <div style="display:flex;gap:6px;margin-top:8px;align-items:center">
-        <input id="tf-min" type="number" placeholder="da" style="width:70px;padding:6px">
-        <input id="tf-max" type="number" placeholder="a (vuoto=∞)" style="width:110px;padding:6px">
-        <input id="tf-prezzo" type="number" step="0.01" placeholder="prezzo €" style="width:110px;padding:6px">
-        <button class="btn btn-accent btn-sm" onclick="musaSalvaTariffa()">Aggiungi</button>
-      </div></div>`;
-  await contDialog('Tariffe editori MUSA', null, body);
+    <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">Fasce sul numero di ISBN presenti. Prezzo mensile; la fatturazione è a giorni. Per la fascia gratis imposta "gratis" e la % minima di approvati.</p>
+    <div class="table-wrapper" style="margin-bottom:12px"><table class="data-table"><thead><tr><th>Nome</th><th>ISBN</th><th style="text-align:right">Prezzo</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <button class="btn btn-accent btn-sm" onclick="musaEditFascia()">+ Nuova fascia</button>`;
+  await contDialog('Fasce abbonamento MUSA', null, body);
 }
-async function musaSalvaTariffa() {
-  const min = document.getElementById('tf-min').value;
-  const max = document.getElementById('tf-max').value;
-  const prezzo = document.getElementById('tf-prezzo').value;
-  if (min === '' || prezzo === '') return toast('Indica almeno "da" e il prezzo', 'error');
-  try { await api('POST', '/musa/tariffe', { min_libri: Number(min), max_libri: max === '' ? null : Number(max), prezzo: Number(prezzo) }); toast('Scaglione aggiunto', 'success'); musaTariffe(); }
-  catch (e) { toast(e.message || 'Errore', 'error'); }
+async function musaEditFascia(id, f) {
+  f = f || {};
+  const vals = await contDialog(id ? 'Modifica fascia' : 'Nuova fascia', [
+    { key: 'nome', label: 'Nome', type: 'text', value: f.nome || '' },
+    { key: 'min_isbn', label: 'ISBN da', type: 'number', value: f.min_isbn != null ? f.min_isbn : '' },
+    { key: 'max_isbn', label: 'ISBN a (vuoto = ∞)', type: 'number', value: f.max_isbn != null ? f.max_isbn : '' },
+    { key: 'prezzo_mese', label: 'Prezzo mensile €', type: 'number', value: f.prezzo_mese != null ? f.prezzo_mese : '' },
+    { key: 'gratis', label: 'Gratis?', type: 'select', value: f.gratis ? 'si' : 'no', options: ['no', 'si'] },
+    { key: 'min_approvati_perc', label: '% min. approvati per gratis', type: 'number', value: f.min_approvati_perc != null ? f.min_approvati_perc : '' }
+  ]);
+  if (!vals || !vals.nome || vals.min_isbn === '') return;
+  const payload = { nome: vals.nome, min_isbn: Number(vals.min_isbn), max_isbn: vals.max_isbn === '' ? null : Number(vals.max_isbn), prezzo_mese: Number(vals.prezzo_mese || 0), gratis: vals.gratis === 'si', min_approvati_perc: vals.min_approvati_perc === '' ? null : Number(vals.min_approvati_perc) };
+  try {
+    if (id) await api('PUT', `/musa/abbonamenti/fasce/${id}`, payload);
+    else await api('POST', '/musa/abbonamenti/fasce', payload);
+    toast('Fascia salvata', 'success'); musaFasce();
+  } catch (e) { toast(e.message || 'Errore', 'error'); }
 }
-async function musaDeleteTariffa(id) {
-  if (!confirm('Eliminare questo scaglione?')) return;
-  try { await api('DELETE', `/musa/tariffe/${id}`); musaTariffe(); }
+async function musaDeleteFascia(id) {
+  if (!confirm('Eliminare questa fascia?')) return;
+  try { await api('DELETE', `/musa/abbonamenti/fasce/${id}`); musaFasce(); }
   catch (e) { toast(e.message || 'Errore', 'error'); }
 }
 
