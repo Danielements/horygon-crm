@@ -148,6 +148,24 @@ test('pullDalPortale: scarica (fetchFn iniettato) + mappa indirizzo/cod.dest/iba
   assert.equal(ed.codice_destinatario, 'BA6ET11');
 });
 
+test('governance: il sync rileva eventi (nuovo editore, cambio fascia, P.IVA)', () => {
+  const mk = (n, extra = {}) => { const isbn = []; for (let i = 0; i < n; i++) isbn.push({ isbn: String(9790000000000 + i), inserito_il: '2026-01-01', approvato: true }); return { external_id: 'EV1', ragione_sociale: 'Governance Ed', isbn, riepilogo: { isbn_presenti: n, isbn_approvati: n }, ...extra }; };
+  // Sync 1: nuovo editore con 2 ISBN -> BASIC
+  const r1 = abb.syncPortale({ editori: [mk(2)] }, '2026-10-05');
+  const t1 = r1.eventi.map(e => e.tipo);
+  assert.ok(t1.includes('editore_nuovo'));
+  assert.ok(t1.includes('isbn_aggiunto'));
+  // Sync 2: sale a 10 ISBN (PRO) e arriva la P.IVA
+  const r2 = abb.syncPortale({ editori: [mk(10, { partita_iva: '01234567890' })] }, '2026-10-05');
+  const t2 = r2.eventi.map(e => e.tipo);
+  assert.ok(t2.includes('fascia_su'), 'atteso fascia_su BASIC->PRO');
+  assert.ok(t2.includes('piva_arrivata'));
+  const salita = r2.eventi.find(e => e.tipo === 'fascia_su');
+  assert.equal(salita.fascia_a, 'MUSA PRO');
+  // il registro contiene gli eventi
+  assert.ok(abb.listEventi(50).length >= 4);
+});
+
 test('fetchPortale: errore chiaro senza URL', async () => {
   const prev = process.env.MUSA_PORTALE_URL; delete process.env.MUSA_PORTALE_URL;
   await assert.rejects(() => abb.fetchPortale(), /MUSA_PORTALE_URL non configurato/);

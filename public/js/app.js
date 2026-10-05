@@ -5587,6 +5587,7 @@ async function musaRenderEditori(el) {
       </div>
       <div style="display:flex;gap:6px">
         ${editable ? `<button class="btn btn-outline btn-sm" onclick="musaFasce()">Fasce</button>
+        <button class="btn btn-outline btn-sm" onclick="musaRegistroEventi()">Registro</button>
         ${MUSA_STATE.stato && MUSA_STATE.stato.portale_configurato ? `<button class="btn btn-accent btn-sm" onclick="musaPullPortale()">⟳ Sincronizza dal portale</button>` : ''}
         <button class="btn btn-outline btn-sm" onclick="musaSyncPortale()" title="Incolla manualmente il JSON del portale">Sync (incolla)</button>
         <button class="btn btn-accent btn-sm" onclick="musaNuovoEditore()">+ Editore</button>` : ''}
@@ -5648,6 +5649,17 @@ async function musaNuovoEditore() {
   if (!vals || !vals.nome) return;
   try { await api('POST', '/musa/editori', vals); toast('Editore creato', 'success'); musaRender(); }
   catch (e) { toast(e.message || 'Errore', 'error'); }
+}
+
+const MUSA_EV_LABEL = { editore_nuovo: 'Nuovo editore', fascia_su: 'Fascia ↑', fascia_giu: 'Fascia ↓', isbn_aggiunto: 'ISBN aggiunti', isbn_rimosso: 'ISBN rimossi', richiesta_cancellazione: 'Richiesta cancellazione', piva_arrivata: 'P.IVA arrivata' };
+async function musaRegistroEventi() {
+  const r = await api('GET', '/musa/abbonamenti/eventi?limit=150');
+  const rows = (r.eventi || []).map(e => `<tr>
+    <td style="white-space:nowrap">${formatDateIt(e.creato_il)}</td>
+    <td>${escapeHtml(e.editore_nome || '-')}</td>
+    <td><span class="badge ${e.tipo === 'fascia_giu' ? 'badge-scaduta' : (e.tipo === 'editore_nuovo' || e.tipo === 'fascia_su' ? 'badge-pagata' : 'badge-cliente')}">${MUSA_EV_LABEL[e.tipo] || e.tipo}</span></td>
+    <td style="color:var(--text-muted)">${escapeHtml(e.dettaglio || '')}</td></tr>`).join('') || '<tr><td colspan="4" style="color:var(--text-muted)">Nessun evento registrato</td></tr>';
+  await contDialog('Registro abbonamenti MUSA', null, `<div class="table-wrapper" style="max-height:60vh;overflow:auto"><table class="data-table"><thead><tr><th>Data</th><th>Editore</th><th>Evento</th><th>Dettaglio</th></tr></thead><tbody>${rows}</tbody></table></div>`);
 }
 
 // Pull in un clic: scarica dal portale (server-side) e mostra il report.

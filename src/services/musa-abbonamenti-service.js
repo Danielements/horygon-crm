@@ -136,14 +136,18 @@ function loadIsbn(editoreId) {
 // Upsert di un ISBN (dal portale o manuale). Chiave: editore+isbn.
 function upsertIsbn(editoreId, rec) {
   if (!rec || !rec.isbn) throw new Error('ISBN obbligatorio');
-  db.prepare(`INSERT INTO musa_editori_isbn (editore_id, isbn, inserito_il, rimosso_il, approvato, approvato_il, external_id, aggiornato_il)
-    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  db.prepare(`INSERT INTO musa_editori_isbn (editore_id, isbn, inserito_il, rimosso_il, approvato, approvato_il, external_id, richiesta_cancellazione, richiesta_cancellazione_il, visibile_editore, aggiornato_il)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     ON CONFLICT(editore_id, isbn) DO UPDATE SET
       inserito_il = excluded.inserito_il, rimosso_il = excluded.rimosso_il,
       approvato = excluded.approvato, approvato_il = excluded.approvato_il,
-      external_id = excluded.external_id, aggiornato_il = datetime('now')`)
+      external_id = excluded.external_id, richiesta_cancellazione = excluded.richiesta_cancellazione,
+      richiesta_cancellazione_il = excluded.richiesta_cancellazione_il, visibile_editore = excluded.visibile_editore,
+      aggiornato_il = datetime('now')`)
     .run(Number(editoreId), String(rec.isbn), rec.inserito_il || null, rec.rimosso_il || null,
-      rec.approvato ? 1 : 0, rec.approvato_il || null, rec.external_id || null);
+      rec.approvato ? 1 : 0, rec.approvato_il || null, rec.external_id || null,
+      rec.richiesta_cancellazione ? 1 : 0, rec.richiesta_cancellazione_il || null,
+      rec.visibile_editore === false ? 0 : 1);
   return { ok: true };
 }
 
@@ -232,19 +236,48 @@ function syncPortale(payload, oggiISO) {
   const warnings = [];
   const d10 = (v) => (v ? String(v).slice(0, 10) : null);
 
+  const eventi = [];
+  const fasciaNome = (recs) => { const { present, approved } = countsOnDay(recs, oggi); const p = present > 0 ? (approved / present) * 100 : 0; const f = pickFascia(present, p, fasce); return { nome: f ? f.nome : null, prezzo: f ? f.prezzo_mese : 0 }; };
+
   for (const ed of editoriIn) {
     if (!ed.external_id) { warnings.push(`Editore "${ed.ragione_sociale || '?'}" senza external_id: saltato`); continue; }
+    // Stato PRIMA del sync (per il diff/governance).
+    const pre = db.prepare('SELECT id, piva FROM musa_editori WHERE external_id = ?').get(ed.external_id);
+    const isNew = !pre;
+    const preMap = {};
+    if (pre) loadIsbn(pre.id).forEach((r) => { preMap[r.isbn] = r; });
+    const preFascia = pre ? fasciaNome(loadIsbn(pre.id)) : { nome: null };
+
     const editoreId = upsertEditoreByExternal(ed);
+    const nomeEd = ed.ragione_sociale || '(senza nome)';
+    const pushEv = (tipo, dettaglio, extra) => eventi.push({ editore_id: editoreId, editore_nome: nomeEd, tipo, dettaglio: dettaglio || null, ...(extra || {}) });
+
     const seen = new Set();
-    let salvati = 0, duplicati = 0, invalidi = 0;
+    let salvati = 0, duplicati = 0, invalidi = 0, aggiunti = 0, rimossi = 0, nuoveCanc = 0;
     for (const r of (ed.isbn || [])) {
       if (!r.isbn) continue;
       if (seen.has(r.isbn)) duplicati++;
       seen.add(r.isbn);
       if (!isbnValido(r.isbn)) invalidi++;
-      upsertIsbn(editoreId, { isbn: r.isbn, inserito_il: d10(r.inserito_il), rimosso_il: d10(r.rimosso_il), approvato: !!r.approvato, approvato_il: d10(r.approvato_il) });
+      const old = preMap[r.isbn];
+      if (!old) aggiunti++;
+      if (old && !old.rimosso_il && d10(r.rimosso_il)) rimossi++;
+      if (r.richiesta_cancellazione && !(old && old.richiesta_cancellazione)) { nuoveCanc++; pushEv('richiesta_cancellazione', `${r.isbn} — ${r.titolo || ''}`.trim()); }
+      upsertIsbn(editoreId, { isbn: r.isbn, inserito_il: d10(r.inserito_il), rimosso_il: d10(r.rimosso_il), approvato: !!r.approvato, approvato_il: d10(r.approvato_il), richiesta_cancellazione: !!r.richiesta_cancellazione, richiesta_cancellazione_il: d10(r.richiesta_cancellazione_il), visibile_editore: r.visibile_editore });
       salvati++;
     }
+
+    // Eventi di governance.
+    if (isNew) pushEv('editore_nuovo', nomeEd);
+    if (aggiunti) pushEv('isbn_aggiunto', `${aggiunti} ISBN aggiunti`);
+    if (rimossi) pushEv('isbn_rimosso', `${rimossi} ISBN rimossi`);
+    if (!isNew && pre && !pre.piva && ed.partita_iva) pushEv('piva_arrivata', ed.partita_iva);
+    const postFascia = fasciaNome(loadIsbn(editoreId));
+    if (!isNew && preFascia.nome !== postFascia.nome) {
+      const su = (postFascia.prezzo || 0) >= (preFascia.prezzo || 0);
+      pushEv(su ? 'fascia_su' : 'fascia_giu', `${preFascia.nome || 'nessuna'} → ${postFascia.nome || 'nessuna'}`, { fascia_da: preFascia.nome, fascia_a: postFascia.nome });
+    }
+
     const recs = loadIsbn(editoreId);
     const { present, approved } = countsOnDay(recs, oggi);
     const perc = present > 0 ? (approved / present) * 100 : 0;
@@ -263,13 +296,20 @@ function syncPortale(payload, oggiISO) {
       match, fascia_oggi: fascia ? fascia.nome : 'nessuna', prezzo_mese: fascia ? fascia.prezzo_mese : 0
     });
   }
-  return { generato_il: payload && payload.generato_il, editori: dettaglio.length, dettaglio, warnings };
+  // Persisto gli eventi di governance.
+  const insEv = db.prepare(`INSERT INTO musa_abbonamenti_eventi (editore_id, editore_nome, tipo, dettaglio, fascia_da, fascia_a) VALUES (?, ?, ?, ?, ?, ?)`);
+  for (const e of eventi) insEv.run(e.editore_id, e.editore_nome, e.tipo, e.dettaglio, e.fascia_da || null, e.fascia_a || null);
+  return { generato_il: payload && payload.generato_il, editori: dettaglio.length, dettaglio, warnings, eventi };
+}
+
+function listEventi(limit = 100) {
+  return db.prepare('SELECT * FROM musa_abbonamenti_eventi ORDER BY creato_il DESC, id DESC LIMIT ?').all(Number(limit) || 100);
 }
 
 module.exports = {
   round2, daysInMonth, eachDay, countsOnDay, pickFascia, dailyRate, computePeriodo, quarterRange,
   listFasce, createFascia, updateFascia, deleteFascia,
   loadIsbn, upsertIsbn, creditoDisponibile, calcolaTrimestre,
-  normalizeEmail, isbnValido, upsertEditoreByExternal, syncPortale,
+  normalizeEmail, isbnValido, upsertEditoreByExternal, syncPortale, listEventi,
   fetchPortale, pullDalPortale, portaleConfigurato
 };

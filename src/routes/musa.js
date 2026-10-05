@@ -4,6 +4,8 @@
 
 const express = require('express');
 const router = express.Router();
+const db = require('../db/database');
+const google = require('../services/google');
 const { authMiddleware, requirePermesso } = require('../middleware/auth');
 const { writeAudit } = require('../services/audit');
 const stripe = require('../services/stripe-client');
@@ -20,6 +22,28 @@ const canDelete = requirePermesso('musa', 'delete');
 function fail(res, e) {
   try { require('../services/system-log').writeSystemLog('error', 'musa-stripe', e.message, {}); } catch {}
   res.status(400).json({ error: e.message });
+}
+
+// Destinatario delle notifiche: MUSA_NOTIFY_EMAIL o, in mancanza, l'email
+// dell'utente che ha lanciato il sync.
+function recipientEmail(req) {
+  if (process.env.MUSA_NOTIFY_EMAIL) return process.env.MUSA_NOTIFY_EMAIL;
+  try { const u = db.prepare('SELECT email FROM utenti WHERE id = ?').get(req.user.id); return u && u.email ? u.email : null; } catch { return null; }
+}
+
+// Email di riepilogo dei cambiamenti rilevati nel sync (via Gmail del mittente).
+async function notificaEventi(req, r) {
+  try {
+    if (!r || !r.eventi || !r.eventi.length) return;
+    const to = recipientEmail(req);
+    if (!to) return;
+    const righe = r.eventi.map(e => `• [${e.tipo}] ${e.editore_nome}${e.dettaglio ? ': ' + e.dettaglio : ''}`).join('\n');
+    const subject = `MUSA — ${r.eventi.length} novità sugli abbonamenti editori`;
+    const text = `Sincronizzazione editori MUSA (${new Date().toLocaleString('it-IT')}).\n\nCambiamenti rilevati:\n${righe}\n\nAvvisi: ${(r.warnings || []).length}${(r.warnings || []).length ? '\n- ' + r.warnings.join('\n- ') : ''}`;
+    await google.sendMailToRecipients(req.user.id, [to], subject, text);
+  } catch (e) {
+    try { require('../services/system-log').writeSystemLog('warn', 'musa-notifica', e.message, {}); } catch {}
+  }
 }
 
 // Stato configurazione (il frontend mostra il modulo solo se abilitato).
@@ -232,10 +256,11 @@ router.post('/editori/:id/isbn', canEdit, (req, res) => {
 });
 
 // Sync da payload incollato: ingoia { generato_il, editori:[...] }.
-router.post('/portale/sync', canEdit, (req, res) => {
+router.post('/portale/sync', canEdit, async (req, res) => {
   try {
     const r = abb.syncPortale(req.body || {});
-    writeAudit({ utente_id: req.user.id, azione: 'musa.portale.sync', entita_tipo: 'musa', entita_id: null, dettagli: { editori: r.editori, warnings: r.warnings.length } });
+    writeAudit({ utente_id: req.user.id, azione: 'musa.portale.sync', entita_tipo: 'musa', entita_id: null, dettagli: { editori: r.editori, warnings: r.warnings.length, eventi: r.eventi.length } });
+    await notificaEventi(req, r);
     res.json(r);
   } catch (e) { fail(res, e); }
 });
@@ -244,9 +269,15 @@ router.post('/portale/sync', canEdit, (req, res) => {
 router.post('/portale/pull', canEdit, async (req, res) => {
   try {
     const r = await abb.pullDalPortale();
-    writeAudit({ utente_id: req.user.id, azione: 'musa.portale.pull', entita_tipo: 'musa', entita_id: null, dettagli: { editori: r.editori, warnings: r.warnings.length } });
+    writeAudit({ utente_id: req.user.id, azione: 'musa.portale.pull', entita_tipo: 'musa', entita_id: null, dettagli: { editori: r.editori, warnings: r.warnings.length, eventi: r.eventi.length } });
+    await notificaEventi(req, r);
     res.json(r);
   } catch (e) { fail(res, e); }
+});
+
+// Registro eventi di governance (cosa e' cambiato, piu' recenti prima).
+router.get('/abbonamenti/eventi', canRead, (req, res) => {
+  try { res.json({ eventi: abb.listEventi(Number(req.query.limit) || 100) }); } catch (e) { fail(res, e); }
 });
 
 // Calcolo (senza fatturare) del trimestre per un editore.

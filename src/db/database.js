@@ -1543,6 +1543,28 @@ try {
   "iban TEXT"
 ].forEach(col => ensureColumn('musa_editori', col));
 
+// Campi ISBN aggiuntivi dal portale (richiesta cancellazione, visibilita).
+[
+  "richiesta_cancellazione INTEGER DEFAULT 0",
+  "richiesta_cancellazione_il TEXT",
+  "visibile_editore INTEGER DEFAULT 1"
+].forEach(col => ensureColumn('musa_editori_isbn', col));
+
+// Governance: registro eventi sugli abbonamenti (diff ad ogni sync dal portale).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS musa_abbonamenti_eventi (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    editore_id INTEGER,
+    editore_nome TEXT,
+    tipo TEXT NOT NULL,            -- editore_nuovo | fascia_su | fascia_giu | isbn_aggiunto | isbn_rimosso | richiesta_cancellazione | piva_arrivata
+    dettaglio TEXT,
+    fascia_da TEXT,
+    fascia_a TEXT,
+    creato_il TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_musa_eventi_data ON musa_abbonamenti_eventi(creato_il);
+`);
+
 [
   "tenant_id INTEGER DEFAULT 1",
   "unita_misura TEXT",
