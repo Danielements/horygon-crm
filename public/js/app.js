@@ -5572,6 +5572,7 @@ async function musaRenderEditori(el) {
       <td style="text-align:right">${c ? formatCurrencyIt(c.importo_netto) : '-'}</td>
       <td style="white-space:nowrap">${editable ? `
         <button class="btn btn-outline btn-sm" onclick="musaTrimestreDettaglio(${e.id}, ${JSON.stringify(e.nome)})">Dettaglio</button>
+        <button class="btn btn-outline btn-sm" onclick="musaEditoreAnagrafica(${escapeAttr(JSON.stringify(e))})">Anagrafica</button>
         <button class="btn btn-outline btn-sm" onclick="musaEditoreIsbn(${e.id}, ${JSON.stringify(e.nome)})">ISBN</button>` : ''}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="6" style="color:var(--text-muted)">Nessun editore. Aggiungine uno.</td></tr>';
@@ -5589,14 +5590,13 @@ async function musaRenderEditori(el) {
         ${editable ? `<button class="btn btn-outline btn-sm" onclick="musaFasce()">Fasce</button>
         <button class="btn btn-outline btn-sm" onclick="musaRegistroEventi()">Registro</button>
         ${MUSA_STATE.stato && MUSA_STATE.stato.portale_configurato ? `<button class="btn btn-accent btn-sm" onclick="musaPullPortale()">⟳ Sincronizza dal portale</button>` : ''}
-        <button class="btn btn-outline btn-sm" onclick="musaSyncPortale()" title="Incolla manualmente il JSON del portale">Sync (incolla)</button>
-        <button class="btn btn-accent btn-sm" onclick="musaNuovoEditore()">+ Editore</button>` : ''}
+        <button class="btn btn-outline btn-sm" onclick="musaSyncPortale()" title="Incolla manualmente il JSON del portale">Sync (incolla)</button>` : ''}
       </div>
     </div>
     <div class="table-wrapper"><table class="data-table">
       <thead><tr><th>Editore</th><th>Fasce nel trimestre</th><th style="text-align:right">Dovuto</th><th style="text-align:right">Credito</th><th style="text-align:right">Netto</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div>
-    <p style="font-size:12px;color:var(--text-muted);margin-top:10px">Il dovuto è calcolato <strong>a giorni</strong> sugli ISBN presenti in piattaforma, con le fasce in "Fasce". Gli ISBN e le loro date arrivano dal portale MUSA (o inseriti qui). Fatturazione trimestrale.</p>`;
+    <p style="font-size:12px;color:var(--text-muted);margin-top:10px">In MUSA l'<strong>editore è il cliente</strong>: anagrafica fiscale e ISBN sono popolati <strong>automaticamente dal portale</strong> (pulsante "Sincronizza"). Il dovuto è calcolato <strong>a giorni</strong> sugli ISBN presenti, con le fasce in "Fasce". Fatturazione trimestrale.</p>`;
 }
 
 async function musaTrimestreDettaglio(editoreId, nome) {
@@ -5609,46 +5609,37 @@ async function musaTrimestreDettaglio(editoreId, nome) {
     ${c.credito_disponibile ? `<div style="font-size:12px;color:var(--text-muted);margin-top:4px">Credito disponibile: ${formatCurrencyIt(c.credito_disponibile)}</div>` : ''}`);
 }
 
+// Anagrafica fiscale dell'editore (= cliente MUSA), popolata dal portale.
+async function musaEditoreAnagrafica(e) {
+  const riga = (label, val) => `<div style="display:flex;justify-content:space-between;gap:12px;padding:4px 0;border-bottom:1px solid var(--border)"><span style="color:var(--text-muted)">${label}</span><span style="text-align:right">${val ? escapeHtml(String(val)) : '—'}</span></div>`;
+  await contDialog(`Anagrafica — ${e.nome || ''}`, null, `
+    <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">Dati dal portale MUSA (sola lettura). L'editore è anche il cliente per la fatturazione.</p>
+    ${riga('Ragione sociale', e.nome)}
+    ${riga('Partita IVA', e.piva)}
+    ${riga('Codice fiscale', e.codice_fiscale)}
+    ${riga('Indirizzo', e.indirizzo)}
+    ${riga('Codice destinatario', e.codice_destinatario)}
+    ${riga('IBAN', e.iban)}
+    ${riga('Email', e.email)}
+    ${riga('PEC', e.pec)}
+    ${riga('ID portale', e.external_id)}
+    ${riga('Cliente Stripe', e.stripe_customer_id)}
+    ${!e.piva ? '<div style="color:var(--danger,#dc2626);font-size:12px;margin-top:8px">⚠ Senza P.IVA non è possibile emettere fattura fiscale.</div>' : ''}`);
+}
+
+// Elenco ISBN dell'editore (sola lettura: arrivano dal portale).
 async function musaEditoreIsbn(editoreId, nome) {
   document.querySelectorAll('.cont-dialog-overlay').forEach(o => o.remove());
   const r = await api('GET', `/musa/editori/${editoreId}/isbn`);
-  const list = (r.isbn || []).slice(0, 200).map(x => `<tr>
+  const list = (r.isbn || []).slice(0, 500).map(x => `<tr>
       <td>${escapeHtml(x.isbn)}</td><td>${formatDateIt(x.inserito_il)}</td>
       <td>${x.rimosso_il ? formatDateIt(x.rimosso_il) : '-'}</td>
-      <td>${x.approvato ? '✓' : '-'}</td></tr>`).join('') || '<tr><td colspan="4" style="color:var(--text-muted)">Nessun ISBN</td></tr>';
+      <td>${x.approvato ? '✓' : '-'}</td>
+      <td>${x.richiesta_cancellazione ? '🗑' : ''}</td></tr>`).join('') || '<tr><td colspan="5" style="color:var(--text-muted)">Nessun ISBN</td></tr>';
   const body = `
-    <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">${(r.isbn || []).length} ISBN. Normalmente arrivano dal portale MUSA; qui puoi aggiungerne a mano.</p>
-    <div class="table-wrapper" style="margin-bottom:12px;max-height:40vh;overflow:auto"><table class="data-table"><thead><tr><th>ISBN</th><th>Inserito</th><th>Rimosso</th><th>Appr.</th></tr></thead><tbody>${list}</tbody></table></div>
-    <div class="card" style="padding:10px"><strong style="font-size:13px">Aggiungi / aggiorna ISBN</strong>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px">
-        <input id="is-code" placeholder="ISBN" style="padding:6px">
-        <input id="is-ins" type="date" title="Inserito il" style="padding:6px">
-        <input id="is-rem" type="date" title="Rimosso il (opz.)" style="padding:6px">
-        <label style="font-size:13px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="is-appr"> approvato</label>
-      </div>
-      <button class="btn btn-accent btn-sm" style="margin-top:8px" onclick="musaSalvaIsbn(${editoreId})">Salva ISBN</button></div>`;
+    <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">${(r.isbn || []).length} ISBN, popolati dal portale MUSA (sola lettura).</p>
+    <div class="table-wrapper" style="max-height:55vh;overflow:auto"><table class="data-table"><thead><tr><th>ISBN</th><th>Inserito</th><th>Rimosso</th><th>Appr.</th><th>Canc.</th></tr></thead><tbody>${list}</tbody></table></div>`;
   await contDialog(`ISBN — ${nome}`, null, body);
-}
-async function musaSalvaIsbn(editoreId) {
-  const isbn = document.getElementById('is-code').value.trim();
-  const inserito_il = document.getElementById('is-ins').value;
-  if (!isbn || !inserito_il) return toast('ISBN e data di inserimento obbligatori', 'error');
-  try {
-    await api('POST', `/musa/editori/${editoreId}/isbn`, { isbn, inserito_il, rimosso_il: document.getElementById('is-rem').value || null, approvato: document.getElementById('is-appr').checked, approvato_il: document.getElementById('is-appr').checked ? inserito_il : null });
-    toast('ISBN salvato', 'success'); musaEditoreIsbn(editoreId, '');
-  } catch (e) { toast(e.message || 'Errore', 'error'); }
-}
-
-async function musaNuovoEditore() {
-  const vals = await contDialog('Nuovo editore', [
-    { key: 'nome', label: 'Nome', type: 'text' },
-    { key: 'email', label: 'Email', type: 'text' },
-    { key: 'piva', label: 'P.IVA (opzionale)', type: 'text' },
-    { key: 'external_id', label: 'ID portale MUSA (opzionale)', type: 'text' }
-  ]);
-  if (!vals || !vals.nome) return;
-  try { await api('POST', '/musa/editori', vals); toast('Editore creato', 'success'); musaRender(); }
-  catch (e) { toast(e.message || 'Errore', 'error'); }
 }
 
 const MUSA_EV_LABEL = { editore_nuovo: 'Nuovo editore', fascia_su: 'Fascia ↑', fascia_giu: 'Fascia ↓', isbn_aggiunto: 'ISBN aggiunti', isbn_rimosso: 'ISBN rimossi', richiesta_cancellazione: 'Richiesta cancellazione', piva_arrivata: 'P.IVA arrivata' };

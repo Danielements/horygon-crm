@@ -192,13 +192,14 @@ function upsertEditoreByExternal(ed) {
   const email = normalizeEmail(ed.email);
   const ex = db.prepare('SELECT id FROM musa_editori WHERE external_id = ?').get(ed.external_id);
   if (ex) {
-    db.prepare(`UPDATE musa_editori SET nome = COALESCE(?, nome), piva = COALESCE(?, piva), email = COALESCE(?, email),
-      indirizzo = COALESCE(?, indirizzo), codice_destinatario = COALESCE(?, codice_destinatario), iban = COALESCE(?, iban) WHERE id = ?`)
-      .run(ed.ragione_sociale || null, ed.partita_iva || null, email, ed.indirizzo || null, ed.codice_destinatario || null, ed.iban || null, ex.id);
+    db.prepare(`UPDATE musa_editori SET nome = COALESCE(?, nome), piva = COALESCE(?, piva), codice_fiscale = COALESCE(?, codice_fiscale),
+      email = COALESCE(?, email), pec = COALESCE(?, pec), indirizzo = COALESCE(?, indirizzo),
+      codice_destinatario = COALESCE(?, codice_destinatario), iban = COALESCE(?, iban) WHERE id = ?`)
+      .run(ed.ragione_sociale || null, ed.partita_iva || null, ed.codice_fiscale || null, email, normalizeEmail(ed.pec), ed.indirizzo || null, ed.codice_destinatario || null, ed.iban || null, ex.id);
     return ex.id;
   }
-  const info = db.prepare('INSERT INTO musa_editori (nome, email, piva, external_id, indirizzo, codice_destinatario, iban) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(ed.ragione_sociale || '(senza nome)', email, ed.partita_iva || null, ed.external_id || null, ed.indirizzo || null, ed.codice_destinatario || null, ed.iban || null);
+  const info = db.prepare('INSERT INTO musa_editori (nome, email, piva, codice_fiscale, pec, external_id, indirizzo, codice_destinatario, iban) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(ed.ragione_sociale || '(senza nome)', email, ed.partita_iva || null, ed.codice_fiscale || null, normalizeEmail(ed.pec), ed.external_id || null, ed.indirizzo || null, ed.codice_destinatario || null, ed.iban || null);
   return Number(info.lastInsertRowid);
 }
 

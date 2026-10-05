@@ -1537,7 +1537,10 @@ try {
 } catch {}
 
 // Dati anagrafici editore arricchiti dal portale MUSA (per fatturazione futura).
+// L'editore MUSA E' il cliente: questi campi arrivano tutti dal portale.
 [
+  "codice_fiscale TEXT",
+  "pec TEXT",
   "indirizzo TEXT",
   "codice_destinatario TEXT",
   "iban TEXT"
