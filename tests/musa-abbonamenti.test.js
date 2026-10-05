@@ -125,6 +125,35 @@ test('syncPortale: normalizza email-oggetto, segnala duplicati/invalidi/mismatch
   assert.match(testo, /partita IVA assente/);
 });
 
+test('pullDalPortale: scarica (fetchFn iniettato) + mappa indirizzo/cod.dest/iban', async () => {
+  const payload = {
+    generato_il: '2026-10-05T14:00:00+02:00',
+    editori: [{
+      external_id: 'PULL-1', ragione_sociale: 'Arbor Libri', partita_iva: '07938880726',
+      indirizzo: 'Via dei Libri 1, Bari', codice_destinatario: 'BA6ET11', iban: null, email: null,
+      isbn: [
+        { isbn: '9791281497344', inserito_il: '2026-05-14T17:52:47+02:00', approvato: true, approvato_il: null },
+        { isbn: '9791281497085', inserito_il: '2026-01-27T17:30:59+01:00', approvato: true }
+      ],
+      riepilogo: { isbn_presenti: 2, isbn_approvati: 2 }
+    }]
+  };
+  const fakeFetch = async () => ({ ok: true, status: 200, json: async () => payload });
+  const r = await abb.pullDalPortale({ url: 'https://esempio/export?key=x', fetchFn: fakeFetch, oggi: '2026-10-05' });
+  assert.equal(r.editori, 1);
+  assert.equal(r.dettaglio[0].presenti, 2);
+  const ed = db.prepare("SELECT piva, indirizzo, codice_destinatario FROM musa_editori WHERE external_id='PULL-1'").get();
+  assert.equal(ed.piva, '07938880726');
+  assert.equal(ed.indirizzo, 'Via dei Libri 1, Bari');
+  assert.equal(ed.codice_destinatario, 'BA6ET11');
+});
+
+test('fetchPortale: errore chiaro senza URL', async () => {
+  const prev = process.env.MUSA_PORTALE_URL; delete process.env.MUSA_PORTALE_URL;
+  await assert.rejects(() => abb.fetchPortale(), /MUSA_PORTALE_URL non configurato/);
+  if (prev) process.env.MUSA_PORTALE_URL = prev;
+});
+
 test('fasce seedate all\'avvio e calcolaTrimestre legge dal DB', () => {
   const fasce = abb.listFasce();
   assert.equal(fasce.length, 5);

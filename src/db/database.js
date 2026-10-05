@@ -1536,6 +1536,13 @@ try {
   }
 } catch {}
 
+// Dati anagrafici editore arricchiti dal portale MUSA (per fatturazione futura).
+[
+  "indirizzo TEXT",
+  "codice_destinatario TEXT",
+  "iban TEXT"
+].forEach(col => ensureColumn('musa_editori', col));
+
 [
   "tenant_id INTEGER DEFAULT 1",
   "unita_misura TEXT",

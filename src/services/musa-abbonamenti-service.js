@@ -188,14 +188,39 @@ function upsertEditoreByExternal(ed) {
   const email = normalizeEmail(ed.email);
   const ex = db.prepare('SELECT id FROM musa_editori WHERE external_id = ?').get(ed.external_id);
   if (ex) {
-    db.prepare('UPDATE musa_editori SET nome = COALESCE(?, nome), piva = COALESCE(?, piva), email = COALESCE(?, email) WHERE id = ?')
-      .run(ed.ragione_sociale || null, ed.partita_iva || null, email, ex.id);
+    db.prepare(`UPDATE musa_editori SET nome = COALESCE(?, nome), piva = COALESCE(?, piva), email = COALESCE(?, email),
+      indirizzo = COALESCE(?, indirizzo), codice_destinatario = COALESCE(?, codice_destinatario), iban = COALESCE(?, iban) WHERE id = ?`)
+      .run(ed.ragione_sociale || null, ed.partita_iva || null, email, ed.indirizzo || null, ed.codice_destinatario || null, ed.iban || null, ex.id);
     return ex.id;
   }
-  const info = db.prepare('INSERT INTO musa_editori (nome, email, piva, external_id) VALUES (?, ?, ?, ?)')
-    .run(ed.ragione_sociale || '(senza nome)', email, ed.partita_iva || null, ed.external_id || null);
+  const info = db.prepare('INSERT INTO musa_editori (nome, email, piva, external_id, indirizzo, codice_destinatario, iban) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(ed.ragione_sociale || '(senza nome)', email, ed.partita_iva || null, ed.external_id || null, ed.indirizzo || null, ed.codice_destinatario || null, ed.iban || null);
   return Number(info.lastInsertRowid);
 }
+
+// Scarica il payload dal portale MUSA (URL + chiave in ENV MUSA_PORTALE_URL).
+// fetchFn iniettabile per i test. La chiave sta SOLO in ENV, mai nel codice.
+async function fetchPortale(options = {}) {
+  const url = options.url || process.env.MUSA_PORTALE_URL;
+  if (!url) throw new Error('MUSA_PORTALE_URL non configurato');
+  const fn = options.fetchFn || fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs || 60000);
+  let res;
+  try { res = await fn(url, { signal: controller.signal }); } finally { clearTimeout(timer); }
+  if (!res.ok) throw new Error(`Portale MUSA HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data || !Array.isArray(data.editori)) throw new Error('Risposta portale senza "editori"');
+  return data;
+}
+
+// Scarica dal portale e sincronizza in un colpo solo.
+async function pullDalPortale(options = {}) {
+  const payload = await fetchPortale(options);
+  return syncPortale(payload, options.oggi);
+}
+
+function portaleConfigurato() { return !!process.env.MUSA_PORTALE_URL; }
 
 // Ingoia il payload { generato_il, editori:[...] }: crea/aggiorna editori per
 // external_id, upserta gli ISBN e fa la controprova col riepilogo del portale.
@@ -245,5 +270,6 @@ module.exports = {
   round2, daysInMonth, eachDay, countsOnDay, pickFascia, dailyRate, computePeriodo, quarterRange,
   listFasce, createFascia, updateFascia, deleteFascia,
   loadIsbn, upsertIsbn, creditoDisponibile, calcolaTrimestre,
-  normalizeEmail, isbnValido, upsertEditoreByExternal, syncPortale
+  normalizeEmail, isbnValido, upsertEditoreByExternal, syncPortale,
+  fetchPortale, pullDalPortale, portaleConfigurato
 };

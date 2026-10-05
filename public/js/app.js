@@ -5587,7 +5587,8 @@ async function musaRenderEditori(el) {
       </div>
       <div style="display:flex;gap:6px">
         ${editable ? `<button class="btn btn-outline btn-sm" onclick="musaFasce()">Fasce</button>
-        <button class="btn btn-outline btn-sm" onclick="musaSyncPortale()">Sync portale</button>
+        ${MUSA_STATE.stato && MUSA_STATE.stato.portale_configurato ? `<button class="btn btn-accent btn-sm" onclick="musaPullPortale()">⟳ Sincronizza dal portale</button>` : ''}
+        <button class="btn btn-outline btn-sm" onclick="musaSyncPortale()" title="Incolla manualmente il JSON del portale">Sync (incolla)</button>
         <button class="btn btn-accent btn-sm" onclick="musaNuovoEditore()">+ Editore</button>` : ''}
       </div>
     </div>
@@ -5649,6 +5650,31 @@ async function musaNuovoEditore() {
   catch (e) { toast(e.message || 'Errore', 'error'); }
 }
 
+// Pull in un clic: scarica dal portale (server-side) e mostra il report.
+async function musaPullPortale() {
+  const stop = contLoadingOverlay('Scarico dal portale MUSA e sincronizzo…');
+  try {
+    const r = await api('POST', '/musa/portale/pull', {});
+    stop();
+    await musaMostraReportSync(r);
+    musaRender();
+  } catch (e) { stop(); toast(e.message || 'Errore', 'error'); }
+}
+
+// Report condiviso tra pull e sync-incolla.
+async function musaMostraReportSync(r) {
+  const rows = (r.dettaglio || []).map(d => `<tr>
+    <td>${escapeHtml(d.ragione_sociale || '-')}</td>
+    <td style="text-align:right">${d.presenti}${d.portale_presenti != null && d.match === false ? ` <span style="color:var(--danger,#dc2626)">(portale ${d.portale_presenti})</span>` : ''}</td>
+    <td style="text-align:right">${d.approvati}</td>
+    <td>${escapeHtml(d.fascia_oggi)}</td>
+    <td style="text-align:right">${formatCurrencyIt(d.prezzo_mese)}/mese</td></tr>`).join('');
+  const warn = (r.warnings || []).map(w => `<li>${escapeHtml(w)}</li>`).join('');
+  await contDialog(`Sync completato — ${r.editori} editori`, null, `
+    <div class="table-wrapper" style="margin-bottom:10px;max-height:40vh;overflow:auto"><table class="data-table"><thead><tr><th>Editore</th><th style="text-align:right">Presenti</th><th style="text-align:right">Appr.</th><th>Fascia oggi</th><th style="text-align:right">Prezzo</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${warn ? `<div style="font-size:13px"><strong>Avvisi (${r.warnings.length}):</strong><ul style="margin:6px 0 0;padding-left:18px;color:var(--text-muted)">${warn}</ul></div>` : '<div style="color:var(--success,#16a34a);font-size:13px">Nessun avviso.</div>'}`);
+}
+
 // Incolla il JSON del portale MUSA ed esegue il sync, mostrando il report.
 async function musaSyncPortale() {
   const body = `
@@ -5663,16 +5689,7 @@ async function musaSyncPortale() {
   try {
     const r = await api('POST', '/musa/portale/sync', payload);
     stop();
-    const rows = (r.dettaglio || []).map(d => `<tr>
-      <td>${escapeHtml(d.ragione_sociale || '-')}</td>
-      <td style="text-align:right">${d.presenti}${d.portale_presenti != null && d.match === false ? ` <span style="color:var(--danger,#dc2626)">(portale ${d.portale_presenti})</span>` : ''}</td>
-      <td style="text-align:right">${d.approvati}</td>
-      <td>${escapeHtml(d.fascia_oggi)}</td>
-      <td style="text-align:right">${formatCurrencyIt(d.prezzo_mese)}/mese</td></tr>`).join('');
-    const warn = (r.warnings || []).map(w => `<li>${escapeHtml(w)}</li>`).join('');
-    await contDialog(`Sync completato — ${r.editori} editori`, null, `
-      <div class="table-wrapper" style="margin-bottom:10px;max-height:40vh;overflow:auto"><table class="data-table"><thead><tr><th>Editore</th><th style="text-align:right">Presenti</th><th style="text-align:right">Appr.</th><th>Fascia oggi</th><th style="text-align:right">Prezzo</th></tr></thead><tbody>${rows}</tbody></table></div>
-      ${warn ? `<div style="font-size:13px"><strong>Avvisi (${r.warnings.length}):</strong><ul style="margin:6px 0 0;padding-left:18px;color:var(--text-muted)">${warn}</ul></div>` : '<div style="color:var(--success,#16a34a);font-size:13px">Nessun avviso.</div>'}`);
+    await musaMostraReportSync(r);
     musaRender();
   } catch (e) { stop(); toast(e.message || 'Errore', 'error'); }
 }

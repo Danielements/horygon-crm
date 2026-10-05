@@ -24,7 +24,7 @@ function fail(res, e) {
 
 // Stato configurazione (il frontend mostra il modulo solo se abilitato).
 router.get('/stato', canRead, (req, res) => {
-  res.json({ configurato: stripe.isConfigured(), abilitato: stripe.isEnabled(), mode: stripe.mode(), iva_configurata: !!process.env.MUSA_STRIPE_TAX_RATE_ID });
+  res.json({ configurato: stripe.isConfigured(), abilitato: stripe.isEnabled(), mode: stripe.mode(), iva_configurata: !!process.env.MUSA_STRIPE_TAX_RATE_ID, portale_configurato: abb.portaleConfigurato() });
 });
 
 // Crea una volta l'aliquota IVA 22% (esclusiva) su Stripe e restituisce l'id da
@@ -231,13 +231,20 @@ router.post('/editori/:id/isbn', canEdit, (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
-// Sync completo dal portale MUSA: ingoia { generato_il, editori:[...] }, crea/
-// aggiorna editori + ISBN, e fa la controprova coi riepiloghi. (Per il push
-// automatico del portale si aggiungera' un token di servizio.)
+// Sync da payload incollato: ingoia { generato_il, editori:[...] }.
 router.post('/portale/sync', canEdit, (req, res) => {
   try {
     const r = abb.syncPortale(req.body || {});
     writeAudit({ utente_id: req.user.id, azione: 'musa.portale.sync', entita_tipo: 'musa', entita_id: null, dettagli: { editori: r.editori, warnings: r.warnings.length } });
+    res.json(r);
+  } catch (e) { fail(res, e); }
+});
+
+// Pull server-side: scarica dal portale MUSA (URL+chiave in ENV) e sincronizza.
+router.post('/portale/pull', canEdit, async (req, res) => {
+  try {
+    const r = await abb.pullDalPortale();
+    writeAudit({ utente_id: req.user.id, azione: 'musa.portale.pull', entita_tipo: 'musa', entita_id: null, dettagli: { editori: r.editori, warnings: r.warnings.length } });
     res.json(r);
   } catch (e) { fail(res, e); }
 });
