@@ -5211,7 +5211,7 @@ async function contRenderCategorie(el) {
   const items = (r.categorie || []).filter(c => c.attiva).map(c => `<tr>
       <td>${escapeHtml(c.nome)}</td>
       <td><span class="badge ${tipoBadge[c.tipo] || 'badge-cliente'}">${escapeHtml(c.tipo)}</span></td>
-      <td style="white-space:nowrap">${editable ? `<button class="btn btn-outline btn-sm" onclick="contEditCategoria(${c.id}, ${JSON.stringify(c.nome)}, '${c.tipo}')">Modifica</button>
+      <td style="white-space:nowrap">${editable ? `<button class="btn btn-outline btn-sm" onclick="contEditCategoria(${c.id}, ${escapeAttr(JSON.stringify(c.nome))}, '${c.tipo}')">Modifica</button>
         <button class="btn btn-outline btn-sm" onclick="contDeleteCategoria(${c.id})">Disattiva</button>` : ''}</td>
     </tr>`).join('');
   el.innerHTML = `
@@ -5571,9 +5571,9 @@ async function musaRenderEditori(el) {
       <td style="text-align:right">${c && c.credito_disponibile ? '-' + formatCurrencyIt(c.credito_usato) : '-'}</td>
       <td style="text-align:right">${c ? formatCurrencyIt(c.importo_netto) : '-'}</td>
       <td style="white-space:nowrap">${editable ? `
-        <button class="btn btn-outline btn-sm" onclick="musaTrimestreDettaglio(${e.id}, ${JSON.stringify(e.nome)})">Dettaglio</button>
+        <button class="btn btn-outline btn-sm" onclick="musaTrimestreDettaglio(${e.id}, ${escapeAttr(JSON.stringify(e.nome))})">Dettaglio</button>
         <button class="btn btn-outline btn-sm" onclick="musaEditoreAnagrafica(${escapeAttr(JSON.stringify(e))})">Anagrafica</button>
-        <button class="btn btn-outline btn-sm" onclick="musaEditoreIsbn(${e.id}, ${JSON.stringify(e.nome)})">ISBN</button>` : ''}</td>
+        <button class="btn btn-outline btn-sm" onclick="musaEditoreIsbn(${e.id}, ${escapeAttr(JSON.stringify(e.nome))})">ISBN</button>` : ''}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="6" style="color:var(--text-muted)">Nessun editore. Aggiungine uno.</td></tr>';
   const trimOpts = [1, 2, 3, 4].map(q => `<option value="${q}"${q === trim ? ' selected' : ''}>T${q}</option>`).join('');
@@ -5589,6 +5589,7 @@ async function musaRenderEditori(el) {
       <div style="display:flex;gap:6px">
         ${editable ? `<button class="btn btn-outline btn-sm" onclick="musaFasce()">Fasce</button>
         <button class="btn btn-outline btn-sm" onclick="musaRegistroEventi()">Registro</button>
+        ${MUSA_STATE.stato && MUSA_STATE.stato.abilitato ? `<button class="btn btn-outline btn-sm" onclick="musaCreaClientiStripe()" title="Crea su Stripe i clienti mancanti (editori con P.IVA)">Clienti Stripe</button>` : ''}
         ${MUSA_STATE.stato && MUSA_STATE.stato.portale_configurato ? `<button class="btn btn-accent btn-sm" onclick="musaPullPortale()">⟳ Sincronizza dal portale</button>` : ''}
         <button class="btn btn-outline btn-sm" onclick="musaSyncPortale()" title="Incolla manualmente il JSON del portale">Sync (incolla)</button>` : ''}
       </div>
@@ -5624,7 +5625,25 @@ async function musaEditoreAnagrafica(e) {
     ${riga('PEC', e.pec)}
     ${riga('ID portale', e.external_id)}
     ${riga('Cliente Stripe', e.stripe_customer_id)}
-    ${!e.piva ? '<div style="color:var(--danger,#dc2626);font-size:12px;margin-top:8px">⚠ Senza P.IVA non è possibile emettere fattura fiscale.</div>' : ''}`);
+    ${!e.piva ? '<div style="color:var(--danger,#dc2626);font-size:12px;margin-top:8px">⚠ Senza P.IVA non è possibile emettere fattura fiscale.</div>' : ''}
+    ${MUSA_STATE.stato && MUSA_STATE.stato.abilitato && !e.stripe_customer_id ? `<button class="btn btn-accent btn-sm" style="margin-top:10px" onclick="musaCreaClienteStripe(${e.id})">Crea cliente su Stripe</button>` : ''}`);
+}
+
+async function musaCreaClienteStripe(editoreId) {
+  const stop = contLoadingOverlay('Creo il cliente su Stripe…');
+  try { const r = await api('POST', `/musa/editori/${editoreId}/cliente-stripe`, {}); stop(); toast(r.gia_presente ? 'Cliente già presente' : 'Cliente Stripe creato', 'success'); document.querySelectorAll('.cont-dialog-overlay').forEach(o => o.remove()); musaRender(); }
+  catch (e) { stop(); toast(e.message || 'Errore', 'error'); }
+}
+
+async function musaCreaClientiStripe() {
+  if (!confirm('Creare su Stripe i clienti mancanti per tutti gli editori con P.IVA?')) return;
+  const stop = contLoadingOverlay('Creo i clienti su Stripe…');
+  try {
+    const r = await api('POST', '/musa/editori/clienti-stripe', {});
+    stop();
+    toast(`Creati ${r.creati}/${r.candidati} clienti${r.saltati_senza_piva ? ` · ${r.saltati_senza_piva} senza P.IVA saltati` : ''}${r.errori.length ? ` · ${r.errori.length} errori` : ''}`, r.errori.length ? 'error' : 'success');
+    musaRender();
+  } catch (e) { stop(); toast(e.message || 'Errore', 'error'); }
 }
 
 // Elenco ISBN dell'editore (sola lettura: arrivano dal portale).

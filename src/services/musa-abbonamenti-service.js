@@ -227,6 +227,38 @@ async function pullDalPortale(options = {}) {
 
 function portaleConfigurato() { return !!process.env.MUSA_PORTALE_URL; }
 
+// Crea (o collega) il cliente Stripe di un editore dai suoi dati anagrafici.
+// L'editore MUSA e' il cliente: usa ragione sociale, email, P.IVA, CF, portale.
+async function creaClienteStripe(editoreId) {
+  const stripe = require('./stripe-client');
+  if (!stripe.isEnabled()) throw new Error('Stripe non configurato per MUSA');
+  const e = db.prepare('SELECT * FROM musa_editori WHERE id = ?').get(Number(editoreId));
+  if (!e) throw new Error('Editore inesistente');
+  if (e.stripe_customer_id) return { id: e.stripe_customer_id, gia_presente: true };
+  const metadata = {};
+  if (e.piva) metadata.piva = e.piva;
+  if (e.codice_fiscale) metadata.codice_fiscale = e.codice_fiscale;
+  if (e.external_id) metadata.portale_id = e.external_id;
+  if (e.codice_destinatario) metadata.codice_destinatario = e.codice_destinatario;
+  if (e.indirizzo) metadata.indirizzo = e.indirizzo;
+  const cust = await stripe.createCustomer({ name: e.nome || undefined, email: e.email || undefined, metadata });
+  db.prepare('UPDATE musa_editori SET stripe_customer_id = ? WHERE id = ?').run(cust.id, e.id);
+  return { id: cust.id, gia_presente: false };
+}
+
+// Crea in blocco i clienti Stripe mancanti, SOLO per gli editori con P.IVA
+// (anagrafica fiscale completa).
+async function creaClientiStripeMancanti() {
+  const eds = db.prepare("SELECT id, nome FROM musa_editori WHERE (stripe_customer_id IS NULL OR stripe_customer_id = '') AND piva IS NOT NULL AND TRIM(piva) <> ''").all();
+  let creati = 0; const errori = [];
+  for (const e of eds) {
+    try { await creaClienteStripe(e.id); creati++; }
+    catch (err) { errori.push(`${e.nome}: ${err.message}`); }
+  }
+  const senzaPiva = db.prepare("SELECT COUNT(*) AS n FROM musa_editori WHERE (stripe_customer_id IS NULL OR stripe_customer_id = '') AND (piva IS NULL OR TRIM(piva) = '')").get().n;
+  return { candidati: eds.length, creati, errori, saltati_senza_piva: senzaPiva };
+}
+
 // Ingoia il payload { generato_il, editori:[...] }: crea/aggiorna editori per
 // external_id, upserta gli ISBN e fa la controprova col riepilogo del portale.
 function syncPortale(payload, oggiISO) {
@@ -312,5 +344,6 @@ module.exports = {
   listFasce, createFascia, updateFascia, deleteFascia,
   loadIsbn, upsertIsbn, creditoDisponibile, calcolaTrimestre,
   normalizeEmail, isbnValido, upsertEditoreByExternal, syncPortale, listEventi,
-  fetchPortale, pullDalPortale, portaleConfigurato
+  fetchPortale, pullDalPortale, portaleConfigurato,
+  creaClienteStripe, creaClientiStripeMancanti
 };

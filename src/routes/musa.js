@@ -275,6 +275,24 @@ router.post('/portale/pull', canEdit, async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
+// Crea/collega il cliente Stripe di un editore (dai dati anagrafici).
+router.post('/editori/:id/cliente-stripe', canEdit, async (req, res) => {
+  try {
+    const r = await abb.creaClienteStripe(Number(req.params.id));
+    writeAudit({ utente_id: req.user.id, azione: 'musa.editore.cliente-stripe', entita_tipo: 'musa_editore', entita_id: Number(req.params.id), dettagli: r });
+    res.json(r);
+  } catch (e) { fail(res, e); }
+});
+
+// Crea in blocco i clienti Stripe mancanti (solo editori con P.IVA).
+router.post('/editori/clienti-stripe', canEdit, async (req, res) => {
+  try {
+    const r = await abb.creaClientiStripeMancanti();
+    writeAudit({ utente_id: req.user.id, azione: 'musa.editori.clienti-stripe', entita_tipo: 'musa', entita_id: null, dettagli: r });
+    res.json(r);
+  } catch (e) { fail(res, e); }
+});
+
 // Registro eventi di governance (cosa e' cambiato, piu' recenti prima).
 router.get('/abbonamenti/eventi', canRead, (req, res) => {
   try { res.json({ eventi: abb.listEventi(Number(req.query.limit) || 100) }); } catch (e) { fail(res, e); }
