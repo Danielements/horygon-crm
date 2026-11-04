@@ -1,4 +1,5 @@
 function buildOrdinaryInvoiceXml(payload) {
+  const supplier = payload.supplier || payload.company;
   const customerHasVat = Boolean(payload.customer.vat?.code);
   const customerHasFiscalCode = Boolean(payload.customer.fiscalCode);
   const transmissionContacts = renderOptionalBlock('ContattiTrasmittente', [
@@ -6,9 +7,9 @@ function buildOrdinaryInvoiceXml(payload) {
     renderOptionalTag('Email', payload.transmitter?.email)
   ]);
   const cedenteContatti = renderOptionalBlock('Contatti', [
-    renderOptionalTag('Telefono', payload.company.phone),
-    renderOptionalTag('Fax', payload.company.fax),
-    renderOptionalTag('Email', payload.company.pec || payload.company.email)
+    renderOptionalTag('Telefono', supplier.phone),
+    renderOptionalTag('Fax', supplier.fax),
+    renderOptionalTag('Email', supplier.pec || supplier.email)
   ]);
   const pagamenti = renderPaymentBlocks(payload.payment);
   const bodyLines = payload.lines.map((line) => `
@@ -50,33 +51,33 @@ function buildOrdinaryInvoiceXml(payload) {
     <CedentePrestatore>
       <DatiAnagrafici>
         <IdFiscaleIVA>
-          <IdPaese>${xmlEscape(payload.company.country)}</IdPaese>
-          <IdCodice>${xmlEscape(payload.company.vat)}</IdCodice>
+          <IdPaese>${xmlEscape(supplier.country)}</IdPaese>
+          <IdCodice>${xmlEscape(supplier.vat)}</IdCodice>
         </IdFiscaleIVA>
-        <CodiceFiscale>${xmlEscape(payload.company.fiscalCode)}</CodiceFiscale>
+        ${renderOptionalTag('CodiceFiscale', supplier.fiscalCode)}
         <Anagrafica>
-          <Denominazione>${xmlEscape(payload.company.denomination)}</Denominazione>
+          <Denominazione>${xmlEscape(supplier.denomination)}</Denominazione>
         </Anagrafica>
-        <RegimeFiscale>${xmlEscape(payload.company.regimeFiscale)}</RegimeFiscale>
+        <RegimeFiscale>${xmlEscape(supplier.regimeFiscale)}</RegimeFiscale>
       </DatiAnagrafici>
       <Sede>
-        <Indirizzo>${xmlEscape(payload.company.address)}</Indirizzo>
-        ${renderOptionalTag('NumeroCivico', payload.company.streetNumber)}
-        <CAP>${xmlEscape(payload.company.cap)}</CAP>
-        <Comune>${xmlEscape(payload.company.city)}</Comune>
-        <Provincia>${xmlEscape(payload.company.province)}</Provincia>
-        <Nazione>${xmlEscape(payload.company.country)}</Nazione>
+        <Indirizzo>${xmlEscape(supplier.address)}</Indirizzo>
+        ${renderOptionalTag('NumeroCivico', supplier.streetNumber)}
+        <CAP>${xmlEscape(supplier.cap)}</CAP>
+        <Comune>${xmlEscape(supplier.city)}</Comune>
+        ${renderOptionalTag('Provincia', supplier.province)}
+        <Nazione>${xmlEscape(supplier.country)}</Nazione>
       </Sede>
-      ${payload.company.reaOffice && payload.company.reaNumber ? `
+      ${supplier.reaOffice && supplier.reaNumber ? `
       <IscrizioneREA>
-        <Ufficio>${xmlEscape(payload.company.reaOffice)}</Ufficio>
-        <NumeroREA>${xmlEscape(payload.company.reaNumber)}</NumeroREA>
-        ${payload.company.shareCapital != null && payload.company.shareCapital > 0 ? `<CapitaleSociale>${formatDecimal(payload.company.shareCapital, 2)}</CapitaleSociale>` : ''}
-        ${payload.company.soleShareholder ? `<SocioUnico>${xmlEscape(payload.company.soleShareholder)}</SocioUnico>` : ''}
-        <StatoLiquidazione>${xmlEscape(payload.company.liquidationState || 'LN')}</StatoLiquidazione>
+        <Ufficio>${xmlEscape(supplier.reaOffice)}</Ufficio>
+        <NumeroREA>${xmlEscape(supplier.reaNumber)}</NumeroREA>
+        ${supplier.shareCapital != null && supplier.shareCapital > 0 ? `<CapitaleSociale>${formatDecimal(supplier.shareCapital, 2)}</CapitaleSociale>` : ''}
+        ${supplier.soleShareholder ? `<SocioUnico>${xmlEscape(supplier.soleShareholder)}</SocioUnico>` : ''}
+        <StatoLiquidazione>${xmlEscape(supplier.liquidationState || 'LN')}</StatoLiquidazione>
       </IscrizioneREA>` : ''}
       ${cedenteContatti}
-      ${payload.company.referenceAdministration ? `<RiferimentoAmministrazione>${xmlEscape(payload.company.referenceAdministration)}</RiferimentoAmministrazione>` : ''}
+      ${supplier.referenceAdministration ? `<RiferimentoAmministrazione>${xmlEscape(supplier.referenceAdministration)}</RiferimentoAmministrazione>` : ''}
     </CedentePrestatore>
     <CessionarioCommittente>
       <DatiAnagrafici>
@@ -99,6 +100,7 @@ function buildOrdinaryInvoiceXml(payload) {
         <Nazione>${xmlEscape(payload.customer.country || 'IT')}</Nazione>
       </Sede>
     </CessionarioCommittente>
+    ${payload.supplier ? '<SoggettoEmittente>CC</SoggettoEmittente>' : ''}
   </FatturaElettronicaHeader>
   <FatturaElettronicaBody>
     <DatiGenerali>

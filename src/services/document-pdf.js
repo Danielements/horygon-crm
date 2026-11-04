@@ -663,7 +663,7 @@ async function renderFatturaPdf({ row, righe = [], riepilogo = [] }) {
   // Su una fattura emessa il cedente siamo noi; su una ricevuta e' la
   // controparte. Invertire le due intestazioni farebbe leggere il documento
   // al contrario.
-  const emessa = row.tipo !== 'ricevuta';
+  const emessa = row.tipo !== 'ricevuta' && !['TD17', 'TD18', 'integrazione_estero'].includes(row.tipo_documento);
   const nostro = formatAddress(COMPANY_INFO.name, COMPANY_INFO.addressLine1, '04100', 'Latina', 'LT');
   const loro = formatAddress(
     row.ragione_sociale || row.cliente_fornitore_label,

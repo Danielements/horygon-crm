@@ -1,5 +1,7 @@
 FROM node:24-alpine
-RUN apk add --no-cache python3 make g++
+RUN apk add --no-cache python3 py3-pip make g++
+RUN python3 -m venv /opt/pdf && /opt/pdf/bin/pip install --no-cache-dir pypdf==6.10.0
+ENV PDF_PYTHON=/opt/pdf/bin/python
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev

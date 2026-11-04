@@ -71,7 +71,7 @@ router.get('/', requirePermesso('fatture', 'read'), (req, res) => {
     FROM fatture f LEFT JOIN anagrafiche a ON a.id = f.anagrafica_id WHERE 1=1`;
   const params = [];
   if (tipo) { sql += ' AND f.tipo = ?'; params.push(tipo); }
-  if (direzione) { sql += ' AND COALESCE(f.direzione, CASE WHEN f.tipo = "emessa" THEN "attiva" ELSE "passiva" END) = ?'; params.push(direzione); }
+  if (direzione) { sql += ` AND COALESCE(f.direzione, CASE WHEN f.tipo = 'emessa' THEN 'attiva' ELSE 'passiva' END) = ?`; params.push(direzione); }
   if (stato) { sql += ' AND f.stato = ?'; params.push(stato); }
   sql += ' ORDER BY f.data DESC';
   res.json(db.prepare(sql).all(...params));
@@ -283,123 +283,218 @@ router.get('/:id/xml', requirePermesso('fatture', 'read'), (req, res) => {
   res.type('application/xml').send(fs.readFileSync(absolutePath, 'utf8'));
 });
 
+function saveManualInvoice(save) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const result = save();
+    db.exec('COMMIT');
+    return result;
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+function prepareIntegration(body, id) {
+  if (!['TD17', 'TD18'].includes(body.tipo_documento)) return body;
+  const current = id && db.prepare('SELECT numero, tipo_documento, data, tipo FROM fatture WHERE id = ?').get(id);
+  if (current?.tipo === 'ricevuta') return body;
+  if (!body.righe?.length || !body.anagrafica_id || !/^\d{4}-\d{2}-\d{2}$/.test(body.data)) {
+    throw new Error('Per una integrativa servono data, fornitore estero e almeno una riga di costo');
+  }
+  const supplier = db.prepare('SELECT paese, piva FROM anagrafiche WHERE id = ?').get(body.anagrafica_id);
+  const country = String(supplier?.paese || '').trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(country) || country === 'IT' || !supplier.piva) {
+    throw new Error('Selezionare un fornitore con paese estero e identificativo fiscale');
+  }
+  if (body.tipo_documento === 'TD18' && !'AT BE BG CY CZ DE DK EE ES FI FR GR HR HU IE LT LU LV MT NL PL PT RO SE SI SK XI'.split(' ').includes(country)) {
+    throw new Error('TD18 richiede un fornitore intracomunitario');
+  }
+  const year = body.data.slice(0, 4);
+  let numero = current?.numero;
+  if (!numero || !['TD17', 'TD18'].includes(current.tipo_documento) || current.data?.slice(0, 4) !== year) {
+    const { ultimo } = db.prepare(`
+      SELECT COALESCE(MAX(CAST(substr(numero, 3) AS INTEGER)), 0) AS ultimo
+      FROM fatture WHERE tipo = 'emessa' AND numero GLOB '2/[0-9]*'
+        AND substr(numero, 3) NOT GLOB '*[^0-9]*' AND substr(data, 1, 4) = ?
+    `).get(year);
+    numero = `2/${ultimo + 1}`;
+  }
+  const { imponibile, iva, totale, riepilogo } = prepareInvoiceLines(body.righe, body.esigibilita_iva).totali;
+  return { ...body, numero, tipo: 'emessa', direzione: 'passiva', imponibile, iva, totale,
+    partita_iva: supplier.piva, riepilogo_iva: riepilogo };
+}
+
+function insertManualInvoice(body) {
+  const { numero, tipo, direzione, tipo_documento, anagrafica_id, ordine_id, data, scadenza, data_ricezione, imponibile, iva, totale, sdi_id, stato, stato_pagamento, valuta, partita_iva, codice_fiscale, note, righe, riepilogo_iva, cig, cup, esigibilita_iva, riferimento_ordine_pa, riferimento_ordine_pa_data, capitolo_spesa, protocollo_pa } = prepareIntegration(body);
+  const hashDocumento = buildDocumentHash({ numero, data, partita_iva, totale });
+  const duplicate = db.prepare(`
+    SELECT id, numero, data, partita_iva, totale
+    FROM fatture
+    WHERE hash_documento = ?
+       OR (numero = ? AND COALESCE(data,'') = COALESCE(?, '') AND COALESCE(partita_iva,'') = COALESCE(?, '') AND COALESCE(totale,0) = COALESCE(?,0))
+    LIMIT 1
+  `).get(hashDocumento, numero, data, partita_iva, totale);
+  if (duplicate) throw new Error('Fattura duplicata o gia importata');
+  const r = db.prepare(`INSERT INTO fatture (
+    numero, numero_documento, tipo, direzione, tipo_documento, anagrafica_id, ordine_id, data, scadenza, data_ricezione,
+    imponibile, iva, totale, sdi_id, stato, stato_pagamento, valuta, partita_iva, codice_fiscale, note, hash_documento, origine_importazione,
+    cig, cup, esigibilita_iva, riferimento_ordine_pa, riferimento_ordine_pa_data, capitolo_spesa, protocollo_pa
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    sqlNullable(numero), sqlNullable(numero), sqlNullable(tipo), direzione || (tipo === 'emessa' ? 'attiva' : 'passiva'), tipo_documento || 'fattura',
+    sqlNullable(anagrafica_id), sqlNullable(ordine_id), sqlNullable(data), sqlNullable(scadenza), data_ricezione || null,
+    sqlNullable(imponibile), sqlNullable(iva), sqlNullable(totale), sqlNullable(sdi_id), stato || 'ricevuta', stato_pagamento || 'da_pagare', valuta || 'EUR',
+    partita_iva || null, codice_fiscale || null, sqlNullable(note), hashDocumento, 'manuale',
+    sqlNullable(cig), sqlNullable(cup), sqlNullable(esigibilita_iva),
+    sqlNullable(riferimento_ordine_pa), sqlNullable(riferimento_ordine_pa_data), sqlNullable(capitolo_spesa), sqlNullable(protocollo_pa)
+  );
+  const id = r.lastInsertRowid;
+  const prepared = prepareInvoiceLines(righe, esigibilita_iva);
+  if (prepared.righe.length) {
+    const ins = db.prepare(`INSERT INTO fatture_righe (
+      fattura_id,prodotto_id,descrizione,quantita,prezzo_unitario,sconto,imponibile,aliquota_iva,natura_iva,importo_iva,totale_riga,
+      regola_iva_id,codice_iva,riferimento_normativo
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    prepared.righe.forEach(riga => ins.run(
+      id,
+      riga.prodotto_id||null,
+      sqlNullable(riga.descrizione),
+      sqlNullable(riga.quantita),
+      sqlNullable(riga.prezzo_unitario),
+      riga.sconto || 0,
+      riga.imponibile ?? null,
+      riga.aliquota_iva ?? null,
+      riga.natura_iva || null,
+      riga.importo_iva ?? null,
+      sqlNullable(riga.totale_riga),
+      riga.regola_iva_id ?? null,
+      riga.codice_iva || null,
+      riga.riferimento_normativo || null
+    ));
+  }
+  saveVatSummary(id, riepilogo_iva?.length ? riepilogo_iva : prepared.totali.riepilogo);
+  try { require('../services/stamp-duty-service').recomputeStampDutyForInvoice(id); } catch {}
+  return { id };
+}
+
+const td17Pdf = require('../services/td17-pdf');
+const foreignPdfUpload = multer({ limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
+
+router.post('/import/td17-pdf', requirePermesso('fatture', 'edit'), foreignPdfUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) throw new Error('Selezionare un PDF');
+    const sha = crypto.createHash('sha256').update(req.file.buffer).digest('hex');
+    const companyVat = db.prepare("SELECT value FROM app_settings WHERE key='sdi.company.vat'").get()?.value;
+    const doc = td17Pdf.recognize(await td17Pdf.readPdf(req.file.buffer), companyVat);
+    const duplicate = () => db.prepare(`
+      SELECT id, numero FROM fatture WHERE original_sha256 = ? OR
+      (tipo_documento = 'TD17' AND partita_iva = ? AND substr(data,1,4) = ?
+       AND json_extract(CASE WHEN json_valid(documento_meta) THEN documento_meta END, '$.original_invoice_number') = ?)
+    `).get(sha, doc.vat, doc.date.slice(0, 4), doc.number);
+    const existing = duplicate();
+    if (existing) return res.json({ existing: true, ...existing });
+    const rate = await td17Pdf.getRate(doc.date);
+    const net = Math.round(doc.amount / rate.value * 100) / 100;
+    const righe = [{ descrizione: `ChatGPT Plus Subscription - rif. ${doc.number}`, quantita: 1, prezzo_unitario: net, aliquota_iva: 22 }];
+    const { imponibile, iva, totale } = prepareInvoiceLines(righe).totali;
+    const preview = { ...doc, rate: rate.value, imponibile, iva, totale };
+    if (req.body.confirm !== '1') return res.json(preview);
+    if (Number(req.body.rate) !== rate.value) throw new Error('Il cambio è cambiato. Ripetere l’anteprima.');
+    const result = saveManualInvoice(() => {
+      const prior = duplicate();
+      if (prior) return { existing: true, ...prior };
+      const supplier = db.prepare('SELECT id FROM anagrafiche WHERE piva=? AND upper(paese)=?').get(doc.vat, 'US');
+      const supplierId = supplier?.id || db.prepare(`INSERT INTO anagrafiche(tipo,ragione_sociale,piva,paese,indirizzo,cap,citta)
+        VALUES ('fornitore',?,?,'US',?,?,'San Francisco')`).run(doc.supplier, doc.vat, doc.address, doc.cap).lastInsertRowid;
+      const { id } = insertManualInvoice({ tipo_documento: 'TD17', data: doc.date, anagrafica_id: supplierId,
+        valuta: 'EUR', righe, note: `Fattura ${doc.number} del ${doc.date}, ${doc.amount} USD. Cambio BCE: 1 EUR = ${rate.value} USD.` });
+      const relative = `/uploads/fatture/${sha}.pdf`;
+      const destination = path.join(__dirname, '../..', relative);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.writeFileSync(destination, req.file.buffer);
+      const meta = { original_invoice_number: doc.number, original_invoice_date: doc.date,
+        original_currency: doc.currency, original_amount: doc.amount, rate_date: doc.date, usd_per_eur: rate.value, rate_source: rate.source };
+      db.prepare(`UPDATE fatture SET pdf_path=?, original_file_path=?, original_filename=?, original_sha256=?, documento_meta=?
+        WHERE id=?`).run(relative, relative, req.file.originalname, sha, JSON.stringify(meta), id);
+      return db.prepare('SELECT id,numero FROM fatture WHERE id=?').get(id);
+    });
+    res.json(result);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 // Crea fattura manuale
 router.post('/', requirePermesso('fatture', 'edit'), (req, res) => {
-  const { numero, tipo, direzione, tipo_documento, anagrafica_id, ordine_id, data, scadenza, data_ricezione, imponibile, iva, totale, sdi_id, stato, stato_pagamento, valuta, partita_iva, codice_fiscale, note, righe, riepilogo_iva, cig, cup, esigibilita_iva, riferimento_ordine_pa, riferimento_ordine_pa_data, capitolo_spesa, protocollo_pa } = req.body;
   try {
-    const hashDocumento = buildDocumentHash({ numero, data, partita_iva, totale });
-    const duplicate = db.prepare(`
-      SELECT id, numero, data, partita_iva, totale
-      FROM fatture
-      WHERE hash_documento = ?
-         OR (numero = ? AND COALESCE(data,'') = COALESCE(?, '') AND COALESCE(partita_iva,'') = COALESCE(?, '') AND COALESCE(totale,0) = COALESCE(?,0))
-      LIMIT 1
-    `).get(hashDocumento, numero, data, partita_iva, totale);
-    if (duplicate) return res.status(400).json({ error: 'Fattura duplicata o gia importata' });
-    const r = db.prepare(`INSERT INTO fatture (
-      numero, numero_documento, tipo, direzione, tipo_documento, anagrafica_id, ordine_id, data, scadenza, data_ricezione,
-      imponibile, iva, totale, sdi_id, stato, stato_pagamento, valuta, partita_iva, codice_fiscale, note, hash_documento, origine_importazione,
-      cig, cup, esigibilita_iva, riferimento_ordine_pa, riferimento_ordine_pa_data, capitolo_spesa, protocollo_pa
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-      sqlNullable(numero), sqlNullable(numero), sqlNullable(tipo), direzione || (tipo === 'emessa' ? 'attiva' : 'passiva'), tipo_documento || 'fattura',
-      sqlNullable(anagrafica_id), sqlNullable(ordine_id), sqlNullable(data), sqlNullable(scadenza), data_ricezione || null,
-      sqlNullable(imponibile), sqlNullable(iva), sqlNullable(totale), sqlNullable(sdi_id), stato || 'ricevuta', stato_pagamento || 'da_pagare', valuta || 'EUR',
-      partita_iva || null, codice_fiscale || null, sqlNullable(note), hashDocumento, 'manuale',
-      sqlNullable(cig), sqlNullable(cup), sqlNullable(esigibilita_iva),
-      sqlNullable(riferimento_ordine_pa), sqlNullable(riferimento_ordine_pa_data), sqlNullable(capitolo_spesa), sqlNullable(protocollo_pa)
-    );
-    const id = r.lastInsertRowid;
-    const prepared = prepareInvoiceLines(righe, esigibilita_iva);
-    if (prepared.righe.length) {
-      const ins = db.prepare(`INSERT INTO fatture_righe (
-        fattura_id,prodotto_id,descrizione,quantita,prezzo_unitario,sconto,imponibile,aliquota_iva,natura_iva,importo_iva,totale_riga,
-        regola_iva_id,codice_iva,riferimento_normativo
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-      prepared.righe.forEach(riga => ins.run(
-        id,
-        riga.prodotto_id||null,
-        sqlNullable(riga.descrizione),
-        sqlNullable(riga.quantita),
-        sqlNullable(riga.prezzo_unitario),
-        riga.sconto || 0,
-        riga.imponibile ?? null,
-        riga.aliquota_iva ?? null,
-        riga.natura_iva || null,
-        riga.importo_iva ?? null,
-        sqlNullable(riga.totale_riga),
-        riga.regola_iva_id ?? null,
-        riga.codice_iva || null,
-        riga.riferimento_normativo || null
-      ));
-    }
-    saveVatSummary(id, riepilogo_iva?.length ? riepilogo_iva : prepared.totali.riepilogo);
-    try { require('../services/stamp-duty-service').recomputeStampDutyForInvoice(id); } catch {}
-    res.json({ id });
+    const result = saveManualInvoice(() => insertManualInvoice(req.body));
+    res.json(result);
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 router.put('/:id', requirePermesso('fatture', 'edit'), (req, res) => {
-  const { numero, tipo, direzione, tipo_documento, anagrafica_id, ordine_id, data, scadenza, data_ricezione, imponibile, iva, totale, sdi_id, stato, stato_pagamento, valuta, partita_iva, codice_fiscale, note, righe, riepilogo_iva, cig, cup, esigibilita_iva, riferimento_ordine_pa, riferimento_ordine_pa_data, capitolo_spesa, protocollo_pa } = req.body;
   try {
-    const hashDocumento = buildDocumentHash({ numero, data, partita_iva, totale });
-    // I valori si normalizzano a null: un campo assente dal corpo della
-    // richiesta arriva come undefined, che SQLite non sa legare, e la modifica
-    // falliva con un errore che parlava di "parametro 5".
-    const duplicate = db.prepare(`
-      SELECT id FROM fatture
-      WHERE id <> ?
-        AND (hash_documento = ?
-          OR (numero = ? AND COALESCE(data,'') = COALESCE(?, '') AND COALESCE(partita_iva,'') = COALESCE(?, '') AND COALESCE(totale,0) = COALESCE(?,0)))
-      LIMIT 1
-    `).get(req.params.id, sqlNullable(hashDocumento), sqlNullable(numero), sqlNullable(data), sqlNullable(partita_iva), sqlNullable(totale));
-    if (duplicate) return res.status(400).json({ error: 'Esiste gia una fattura con gli stessi riferimenti' });
-    // Il collegamento all'ordine non e' un campo del modale: se non arriva
-    // nella richiesta va conservato, non azzerato. Rinumerare la fattura 6
-    // dall'interfaccia le aveva staccato l'ordine di origine, e con quello il
-    // riferimento che finisce in DatiOrdineAcquisto.
-    const attuale = db.prepare('SELECT ordine_id FROM fatture WHERE id = ?').get(req.params.id);
-    const ordineCollegato = ordine_id === undefined ? (attuale?.ordine_id ?? null) : sqlNullable(ordine_id);
-    db.prepare(`UPDATE fatture SET
-      numero=?, numero_documento=?, tipo=?, direzione=?, tipo_documento=?, anagrafica_id=?, ordine_id=?, data=?, scadenza=?, data_ricezione=?,
-      imponibile=?, iva=?, totale=?, sdi_id=?, stato=?, stato_pagamento=?, valuta=?, partita_iva=?, codice_fiscale=?, note=?, hash_documento=?,
-      cig=?, cup=?, esigibilita_iva=?, riferimento_ordine_pa=?, riferimento_ordine_pa_data=?, capitolo_spesa=?, protocollo_pa=?
-      WHERE id=?
-    `).run(
-      sqlNullable(numero), sqlNullable(numero), sqlNullable(tipo), direzione || (tipo === 'emessa' ? 'attiva' : 'passiva'), tipo_documento || 'fattura',
-      sqlNullable(anagrafica_id), ordineCollegato, sqlNullable(data), sqlNullable(scadenza), data_ricezione || null,
-      sqlNullable(imponibile), sqlNullable(iva), sqlNullable(totale), sqlNullable(sdi_id), stato || 'ricevuta', stato_pagamento || 'da_pagare', valuta || 'EUR',
-      partita_iva || null, codice_fiscale || null, sqlNullable(note), hashDocumento,
-      sqlNullable(cig), sqlNullable(cup), sqlNullable(esigibilita_iva),
-      sqlNullable(riferimento_ordine_pa), sqlNullable(riferimento_ordine_pa_data), sqlNullable(capitolo_spesa), sqlNullable(protocollo_pa), req.params.id
-    );
-    db.prepare('DELETE FROM fatture_righe WHERE fattura_id = ?').run(req.params.id);
-    db.prepare('DELETE FROM fatture_iva_riepilogo WHERE fattura_id = ?').run(req.params.id);
-    const prepared = prepareInvoiceLines(righe, esigibilita_iva);
-    if (prepared.righe.length) {
-      const ins = db.prepare(`INSERT INTO fatture_righe (
-        fattura_id,prodotto_id,descrizione,quantita,prezzo_unitario,sconto,imponibile,aliquota_iva,natura_iva,importo_iva,totale_riga,
-        regola_iva_id,codice_iva,riferimento_normativo
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-      prepared.righe.forEach(riga => ins.run(
-        req.params.id,
-        riga.prodotto_id||null,
-        sqlNullable(riga.descrizione),
-        sqlNullable(riga.quantita),
-        sqlNullable(riga.prezzo_unitario),
-        riga.sconto || 0,
-        riga.imponibile ?? null,
-        riga.aliquota_iva ?? null,
-        riga.natura_iva || null,
-        riga.importo_iva ?? null,
-        sqlNullable(riga.totale_riga),
-        riga.regola_iva_id ?? null,
-        riga.codice_iva || null,
-        riga.riferimento_normativo || null
-      ));
-    }
-    saveVatSummary(req.params.id, riepilogo_iva?.length ? riepilogo_iva : prepared.totali.riepilogo);
-    try { require('../services/stamp-duty-service').recomputeStampDutyForInvoice(req.params.id); } catch {}
-    res.json({ ok: true });
+    const result = saveManualInvoice(() => {
+      const { numero, tipo, direzione, tipo_documento, anagrafica_id, ordine_id, data, scadenza, data_ricezione, imponibile, iva, totale, sdi_id, stato, stato_pagamento, valuta, partita_iva, codice_fiscale, note, righe, riepilogo_iva, cig, cup, esigibilita_iva, riferimento_ordine_pa, riferimento_ordine_pa_data, capitolo_spesa, protocollo_pa } = prepareIntegration(req.body, req.params.id);
+      const hashDocumento = buildDocumentHash({ numero, data, partita_iva, totale });
+      // I valori si normalizzano a null: un campo assente dal corpo della
+      // richiesta arriva come undefined, che SQLite non sa legare, e la modifica
+      // falliva con un errore che parlava di "parametro 5".
+      const duplicate = db.prepare(`
+        SELECT id FROM fatture
+        WHERE id <> ?
+          AND (hash_documento = ?
+            OR (numero = ? AND COALESCE(data,'') = COALESCE(?, '') AND COALESCE(partita_iva,'') = COALESCE(?, '') AND COALESCE(totale,0) = COALESCE(?,0)))
+        LIMIT 1
+      `).get(req.params.id, sqlNullable(hashDocumento), sqlNullable(numero), sqlNullable(data), sqlNullable(partita_iva), sqlNullable(totale));
+      if (duplicate) throw new Error('Esiste gia una fattura con gli stessi riferimenti');
+      // Il collegamento all'ordine non e' un campo del modale: se non arriva
+      // nella richiesta va conservato, non azzerato. Rinumerare la fattura 6
+      // dall'interfaccia le aveva staccato l'ordine di origine, e con quello il
+      // riferimento che finisce in DatiOrdineAcquisto.
+      const attuale = db.prepare('SELECT ordine_id FROM fatture WHERE id = ?').get(req.params.id);
+      const ordineCollegato = ordine_id === undefined ? (attuale?.ordine_id ?? null) : sqlNullable(ordine_id);
+      db.prepare(`UPDATE fatture SET
+        numero=?, numero_documento=?, tipo=?, direzione=?, tipo_documento=?, anagrafica_id=?, ordine_id=?, data=?, scadenza=?, data_ricezione=?,
+        imponibile=?, iva=?, totale=?, sdi_id=?, stato=?, stato_pagamento=?, valuta=?, partita_iva=?, codice_fiscale=?, note=?, hash_documento=?,
+        cig=?, cup=?, esigibilita_iva=?, riferimento_ordine_pa=?, riferimento_ordine_pa_data=?, capitolo_spesa=?, protocollo_pa=?
+        WHERE id=?
+      `).run(
+        sqlNullable(numero), sqlNullable(numero), sqlNullable(tipo), direzione || (tipo === 'emessa' ? 'attiva' : 'passiva'), tipo_documento || 'fattura',
+        sqlNullable(anagrafica_id), ordineCollegato, sqlNullable(data), sqlNullable(scadenza), data_ricezione || null,
+        sqlNullable(imponibile), sqlNullable(iva), sqlNullable(totale), sqlNullable(sdi_id), stato || 'ricevuta', stato_pagamento || 'da_pagare', valuta || 'EUR',
+        partita_iva || null, codice_fiscale || null, sqlNullable(note), hashDocumento,
+        sqlNullable(cig), sqlNullable(cup), sqlNullable(esigibilita_iva),
+        sqlNullable(riferimento_ordine_pa), sqlNullable(riferimento_ordine_pa_data), sqlNullable(capitolo_spesa), sqlNullable(protocollo_pa), req.params.id
+      );
+      db.prepare('DELETE FROM fatture_righe WHERE fattura_id = ?').run(req.params.id);
+      db.prepare('DELETE FROM fatture_iva_riepilogo WHERE fattura_id = ?').run(req.params.id);
+      const prepared = prepareInvoiceLines(righe, esigibilita_iva);
+      if (prepared.righe.length) {
+        const ins = db.prepare(`INSERT INTO fatture_righe (
+          fattura_id,prodotto_id,descrizione,quantita,prezzo_unitario,sconto,imponibile,aliquota_iva,natura_iva,importo_iva,totale_riga,
+          regola_iva_id,codice_iva,riferimento_normativo
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+        prepared.righe.forEach(riga => ins.run(
+          req.params.id,
+          riga.prodotto_id||null,
+          sqlNullable(riga.descrizione),
+          sqlNullable(riga.quantita),
+          sqlNullable(riga.prezzo_unitario),
+          riga.sconto || 0,
+          riga.imponibile ?? null,
+          riga.aliquota_iva ?? null,
+          riga.natura_iva || null,
+          riga.importo_iva ?? null,
+          sqlNullable(riga.totale_riga),
+          riga.regola_iva_id ?? null,
+          riga.codice_iva || null,
+          riga.riferimento_normativo || null
+        ));
+      }
+      saveVatSummary(req.params.id, riepilogo_iva?.length ? riepilogo_iva : prepared.totali.riepilogo);
+      try { require('../services/stamp-duty-service').recomputeStampDutyForInvoice(req.params.id); } catch {}
+      return { ok: true };
+    });
+    res.json(result);
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
@@ -592,6 +687,8 @@ function normalizeDate(value) {
 
 function inferInvoiceType(row) {
   const label = String(getRowValue(row, ['tipo_documento', 'Tipo documento', 'tipo', 'Tipo', 'TD']) || '').toLowerCase();
+  const integration = label.match(/td1[78]/);
+  if (integration) return { tipo: 'ricevuta', direzione: 'passiva', tipo_documento: integration[0].toUpperCase() };
   if (label.includes('td04') || label.includes('credito')) return { tipo: 'ricevuta', direzione: 'passiva', tipo_documento: 'nota_credito' };
   if (label.includes('td05') || label.includes('debito')) return { tipo: 'ricevuta', direzione: 'passiva', tipo_documento: 'nota_debito' };
   if (label.includes('td16') || label.includes('auto')) return { tipo: 'ricevuta', direzione: 'passiva', tipo_documento: 'autofattura' };
@@ -663,7 +760,8 @@ function mapFatturaPaDocumentType(value) {
   if (code === 'TD04') return 'nota_credito';
   if (code === 'TD05') return 'nota_debito';
   if (code === 'TD16') return 'autofattura';
-  if (['TD17', 'TD18', 'TD19'].includes(code)) return 'integrazione_estero';
+  if (['TD17', 'TD18'].includes(code)) return code;
+  if (code === 'TD19') return 'integrazione_estero';
   return 'fattura';
 }
 

@@ -522,6 +522,11 @@ function ensureAccountingSections() {
   if (passiveBody) passiveBody.id = 'fatture-passive-body';
   const passiveHeaderActions = passive.querySelector('.header-actions');
   if (passiveHeaderActions) {
+    const importLabel = document.createElement('label');
+    importLabel.className = 'btn btn-outline btn-sm';
+    importLabel.innerHTML = 'Importa PDF TD17<input type="file" accept="application/pdf" hidden>';
+    importLabel.querySelector('input').onchange = event => importTd17Pdf(event.target);
+    passiveHeaderActions.appendChild(importLabel);
     const createBtn = [...passiveHeaderActions.querySelectorAll('button')].find(btn => btn.textContent.includes('Nuova Fattura'));
     if (createBtn) createBtn.remove();
   }
@@ -3040,6 +3045,16 @@ async function preparePreventivoModal(id = null) {
   ricalcolaRigheDocumento('prev');
 }
 
+function aggiornaCampiIntegrativa() {
+  const integration = ['TD17', 'TD18'].includes(document.getElementById('fatt-tipo-documento').value);
+  const tipo = document.getElementById('fatt-tipo');
+  const nuova = !document.getElementById('fatt-id').value;
+  if (integration && nuova) tipo.value = 'emessa';
+  tipo.disabled = integration;
+  document.getElementById('fatt-numero').readOnly = integration && tipo.value === 'emessa';
+  document.getElementById('fatt-controparte-label').textContent = integration ? 'Fornitore estero' : 'Cliente/Fornitore';
+}
+
 async function prepareFatturaModal(id = null) {
   const [anag, prodotti] = await Promise.all([api('GET', '/anagrafiche'), api('GET', '/prodotti'), loadRegoleIvaCache()]);
   fatturaProdottiCache = prodotti || [];
@@ -3056,6 +3071,7 @@ async function prepareFatturaModal(id = null) {
     document.getElementById('fatt-numero').value = '';
     document.getElementById('fatt-tipo').value = 'emessa';
     document.getElementById('fatt-tipo-documento').value = 'fattura';
+    aggiornaCampiIntegrativa();
     document.getElementById('fatt-anagrafica').value = '';
     document.getElementById('fatt-anagrafica-label').value = '';
     document.getElementById('fatt-valuta').value = 'EUR';
@@ -3087,6 +3103,7 @@ async function prepareFatturaModal(id = null) {
   document.getElementById('fatt-numero').value = f.numero || '';
   document.getElementById('fatt-tipo').value = f.tipo || 'emessa';
   document.getElementById('fatt-tipo-documento').value = f.tipo_documento || 'fattura';
+  aggiornaCampiIntegrativa();
   document.getElementById('fatt-anagrafica').value = f.anagrafica_id || '';
   document.getElementById('fatt-anagrafica-label').value = (fatturaAnagraficheCache.find(a => String(a.id) === String(f.anagrafica_id || ''))?.ragione_sociale) || f.ragione_sociale || '';
   document.getElementById('fatt-valuta').value = f.valuta || 'EUR';
@@ -3992,7 +4009,7 @@ async function loadFattureBySection(section) {
   ensureAccountingSections();
   if (section === 'fatture-passive') {
     ensureRiconciliazioneToolbar();
-    const rows = await api('GET', '/fatture?tipo=ricevuta');
+    const rows = await api('GET', '/fatture?direzione=passiva');
     renderFattureRows('fatture-passive-body', rows || []);
     return;
   }
@@ -4003,7 +4020,7 @@ async function loadFattureBySection(section) {
   }
   ensureBolloPanel();
   const rows = await api('GET', '/fatture?tipo=emessa');
-  renderFattureRows('fatture-attive-body', rows || []);
+  renderFattureRows('fatture-attive-body', (rows || []).filter(row => row.direzione !== 'passiva'));
 }
 
 // Riconciliazione SdI di sicurezza: toolbar in Fatture passive con "Verifica SdI
@@ -8751,6 +8768,27 @@ async function salvaFattura() {
     const active = document.querySelector('.section.active')?.id?.replace('section-', '') || 'fatture-attive';
     loadFattureBySection(active);
   } catch (e) { toast(e.message, 'error'); }
+}
+
+async function importTd17Pdf(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append('file', file);
+  input.disabled = true;
+  try {
+    let result = await apiForm('POST', '/fatture/import/td17-pdf', form);
+    if (!result.existing) {
+      const { supplier, number, date, amount, rate, imponibile, iva, totale } = result;
+      if (!confirm(`Importare la TD17 di ${supplier}?\nFattura ${number} del ${date} · ${amount} USD\nCambio BCE: 1 EUR = ${rate} USD\nImponibile € ${imponibile.toFixed(2)} + IVA 22% € ${iva.toFixed(2)} = € ${totale.toFixed(2)}`)) return;
+      form.append('confirm', '1');
+      form.append('rate', String(rate));
+      result = await apiForm('POST', '/fatture/import/td17-pdf', form);
+    }
+    toast(`TD17 ${result.numero} ${result.existing ? 'già presente' : 'registrata'}`, 'success');
+    await loadFattureBySection('fatture-passive');
+  } catch (e) { toast(e.message, 'error'); }
+  finally { input.value = ''; input.disabled = false; }
 }
 
 async function importFattureSpreadsheet(input) {

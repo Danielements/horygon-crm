@@ -42,6 +42,7 @@ function ultimoProgressivo(anno) {
     SELECT numero
     FROM fatture
     WHERE tipo = 'emessa'
+      AND COALESCE(upper(tipo_documento), '') NOT IN ('TD17', 'TD18')
       AND numero IS NOT NULL
       AND substr(COALESCE(data, ''), 1, 4) = ?
   `).all(String(anno));

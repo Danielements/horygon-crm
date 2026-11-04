@@ -247,7 +247,8 @@ function mapFatturaPaDocumentType(value) {
   if (code === 'TD04') return 'nota_credito';
   if (code === 'TD05') return 'nota_debito';
   if (code === 'TD16') return 'autofattura';
-  if (['TD17', 'TD18', 'TD19'].includes(code)) return 'integrazione_estero';
+  if (['TD17', 'TD18'].includes(code)) return code;
+  if (code === 'TD19') return 'integrazione_estero';
   return 'fattura';
 }
 

@@ -1512,13 +1512,13 @@
     <div class="form-section-card">
       <div class="section-card-title">Anagrafica e dati testata</div>
       <div class="form-row">
-        <div class="form-group"><label>Numero *</label><input type="text" id="fatt-numero"></div>
+        <div class="form-group"><label>Numero *</label><input type="text" id="fatt-numero" placeholder="Automatico per TD17 e TD18"></div>
         <div class="form-group"><label>Tipo</label><select id="fatt-tipo"><option value="emessa">Emessa</option><option value="ricevuta">Ricevuta</option></select></div>
-        <div class="form-group"><label>Documento</label><select id="fatt-tipo-documento"><option value="fattura">Fattura</option><option value="nota_credito">Nota credito</option><option value="nota_debito">Nota debito</option><option value="autofattura">Autofattura</option><option value="integrazione_estero">Integrazione estero</option></select></div>
+        <div class="form-group"><label>Documento</label><select id="fatt-tipo-documento" onchange="aggiornaCampiIntegrativa()"><option value="fattura">Fattura</option><option value="nota_credito">Nota credito</option><option value="nota_debito">Nota debito</option><option value="autofattura">Autofattura</option><option value="TD17">TD17 - Servizi dall’estero</option><option value="TD18">TD18 - Beni intracomunitari</option><option value="integrazione_estero">Integrazione estero</option></select></div>
       </div>
       <div class="form-row">
         <div class="form-group">
-          <label>Cliente/Fornitore</label>
+          <label id="fatt-controparte-label">Cliente/Fornitore</label>
           <input type="hidden" id="fatt-anagrafica">
           <div class="picker-input-row">
             <input type="text" id="fatt-anagrafica-label" readonly placeholder="Seleziona anagrafica dal popup">

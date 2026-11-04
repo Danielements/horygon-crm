@@ -25,7 +25,17 @@ async function generateOutboundXmlForInvoice(fatturaId, options = {}) {
   if (invoice.tipo !== 'emessa') throw new Error('La generazione XML SDI e disponibile solo per fatture emesse');
 
   const company = loadCompanyProfile();
-  const customer = loadRecipientProfile(invoice.anagrafica_id);
+  const counterparty = loadRecipientProfile(invoice.anagrafica_id);
+  const integration = ['TD17', 'TD18'].includes(mapDocumentType(invoice.tipo_documento));
+  const customer = integration ? {
+    ragione_sociale: company.denomination, paese: company.country, piva: company.vat,
+    cf: company.fiscalCode, indirizzo: company.address, cap: company.cap,
+    citta: company.city, provincia: company.province, pec: company.pec,
+    destinationCode: '0000000'
+  } : counterparty;
+  if (integration && options.forceFormat && options.forceFormat !== 'FPR12') {
+    throw new Error('Per TD17 e TD18 occorre il formato ordinario FPR12');
+  }
   const format = options.forceFormat || (customer.isPa ? 'FPA12' : 'FPR12');
 
   // Firma e codice destinatario vanno verificati prima di consumare un
@@ -45,6 +55,20 @@ async function generateOutboundXmlForInvoice(fatturaId, options = {}) {
     ...options,
     progressivo: options.progressivo || allocateOutboundProgressivo()
   });
+  if (integration) {
+    const country = normalizeCountry(counterparty.paese);
+    const vat = normalizeVat(counterparty.piva);
+    if (!/^[A-Z]{2}$/.test(country) || country === 'IT' || !vat || !counterparty.indirizzo || !counterparty.citta) {
+      throw new Error('Completare paese estero, identificativo fiscale, indirizzo e citta del fornitore');
+    }
+    payload.supplier = {
+      country, vat: vat.startsWith(country) ? vat.slice(2) : vat,
+      denomination: normalizeLatinText(counterparty.ragione_sociale),
+      address: normalizeLatinText(counterparty.indirizzo), city: normalizeLatinText(counterparty.citta),
+      cap: /^\d{5}$/.test(counterparty.cap) ? counterparty.cap : '00000', regimeFiscale: 'RF18'
+    };
+    payload.payment = null;
+  }
   const xml = payload.formatoTrasmissione === 'FSM10'
     ? buildSimplifiedInvoiceXml(payload)
     : buildOrdinaryInvoiceXml(payload);
@@ -346,6 +370,12 @@ function buildDatiOrdineAcquisto(invoice, numeroFattura) {
 // c'e': una nota emessa a mano senza riferimento resta valida per lo schema,
 // ma chi la riceve non sa a quale documento si riferisce.
 function buildDatiFattureCollegate(invoice) {
+  if (['TD17', 'TD18'].includes(invoice.tipo_documento) && invoice.documento_meta) {
+    const meta = JSON.parse(invoice.documento_meta);
+    if (meta.original_invoice_number) return {
+      idDocumento: String(meta.original_invoice_number).slice(0, 20), data: normalizeDate(meta.original_invoice_date)
+    };
+  }
   const numero = String(invoice.riferimento_numero || invoice.riferimento_numero_fallback || '').trim();
   if (!numero) return null;
   return {
