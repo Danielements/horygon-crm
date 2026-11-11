@@ -1,0 +1,7 @@
+FROM node:20-alpine
+WORKDIR /app
+COPY server.js ./
+COPY public ./public
+ENV PORT=8090 DATA_DIR=/data
+EXPOSE 8090
+CMD ["node", "server.js"]
