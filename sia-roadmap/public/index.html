@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Stato roadmap App Rilievi</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: registro di revisione come un cartiglio tecnico; riepilogo in alto, voci per sezione della roadmap, ogni voce una riga con stato sviluppo, stato revisione e note */
+:root{
+  --bg:#f5f6f4; --surface:#ffffff; --fg:#1d2422; --muted:#5d6864; --line:#d8ddd9; --accent:#1f5f8b;
+  --ok:#1f7a4a; --ok-bg:#e3f2e9; --no:#b03a2e; --no-bg:#f8e4e1; --rev:#8a5a00; --rev-bg:#fbefd5; --upd:#2d5fa8; --upd-bg:#e2ebf8; --neu:#56615d; --neu-bg:#eceeec;
+  --f-display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif; --f-body:"IBM Plex Sans",system-ui,sans-serif; --f-mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#141917; --surface:#1b2220; --fg:#e4e9e6; --muted:#9aa6a1; --line:#2e3835; --accent:#7fb6dc;
+  --ok:#6fd19a; --ok-bg:#183326; --no:#f08c80; --no-bg:#3a1f1c; --rev:#f0c062; --rev-bg:#372b12; --upd:#8fb5ef; --upd-bg:#1b2a40; --neu:#b2bcb8; --neu-bg:#262e2b; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#141917; --surface:#1b2220; --fg:#e4e9e6; --muted:#9aa6a1; --line:#2e3835; --accent:#7fb6dc;
+  --ok:#6fd19a; --ok-bg:#183326; --no:#f08c80; --no-bg:#3a1f1c; --rev:#f0c062; --rev-bg:#372b12; --upd:#8fb5ef; --upd-bg:#1b2a40; --neu:#b2bcb8; --neu-bg:#262e2b; color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:14px;line-height:1.5}
+.wrap{max-width:1100px;margin:0 auto;padding-block:28px 60px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:22px}
+header{display:flex;flex-direction:column;gap:6px;border-bottom:2px solid var(--fg);padding-bottom:14px}
+.eyebrow{font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1{font-family:var(--f-display);font-weight:600;font-size:clamp(24px,4vw,34px);margin:0;text-wrap:balance;letter-spacing:-.01em}
+.lead{color:var(--muted);max-width:70ch;margin:0}
+.cartiglio{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));border:1px solid var(--line);background:var(--surface)}
+.cartiglio div{padding:10px 12px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:2px;min-width:0}
+.cartiglio b{font-family:var(--f-mono);font-size:22px;font-weight:500;font-variant-numeric:tabular-nums}
+.cartiglio span{font-size:12px;color:var(--muted)}
+.box{background:var(--surface);border:1px solid var(--line);padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+.box h2{font-family:var(--f-display);font-size:17px;margin:0}
+.box ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
+.filtri{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.filtri label{font-size:12px;color:var(--muted)}
+select,input,textarea{font:inherit;color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:5px 8px}
+select:focus-visible,textarea:focus-visible,input:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.sez{display:flex;flex-direction:column;gap:0}
+.sez h3{font-family:var(--f-display);font-size:18px;margin:10px 0 6px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.sez h3 small{font-family:var(--f-mono);font-size:11px;color:var(--muted);font-weight:400}
+.riga{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1.6fr) 210px;gap:14px;padding:12px 14px;background:var(--surface);border:1px solid var(--line);border-top:none}
+.sez .riga:first-of-type{border-top:1px solid var(--line)}
+.voce{display:flex;flex-direction:column;gap:4px;min-width:0}
+.voce .t{font-weight:600}
+.voce .rif{font-family:var(--f-mono);font-size:11px;color:var(--muted)}
+.dett{color:var(--fg);min-width:0;display:flex;flex-direction:column;gap:6px}
+.dett p{margin:0}
+.ctrl{display:flex;flex-direction:column;gap:6px;min-width:0}
+.ctrl textarea{min-height:38px;resize:vertical;font-size:13px}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;padding:2px 8px;border-radius:999px;width:max-content}
+.s-fatto{color:var(--ok);background:var(--ok-bg)} .s-parziale{color:var(--rev);background:var(--rev-bg)} .s-dafare{color:var(--no);background:var(--no-bg)} .s-diverso{color:var(--upd);background:var(--upd-bg)} .s-extra{color:var(--neu);background:var(--neu-bg)}
+.r-Approvato{border-left:4px solid var(--ok)} .r-Non{border-left:4px solid var(--no)} .r-Da-revisionare{border-left:4px solid var(--rev)} .r-Da-aggiornare{border-left:4px solid var(--upd)}
+.chi{font-size:11px;color:var(--muted)}
+.testa{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.tema{font:inherit;font-size:12px;color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:4px 10px;cursor:pointer}
+.salvo{font-size:11px;color:var(--muted);min-height:1em}
+.avviso{font-size:12px;color:var(--muted)}
+@media (max-width:760px){.riga{grid-template-columns:minmax(0,1fr)}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="testa"><span class="eyebrow">Allegato A · Roadmap App Rilievi – Testimoniali di Stato · confronto con l'app alla fase 2t (30/10/2026)</span><button type="button" id="tema" class="tema">Tema scuro</button></div>
+    <h1>Stato della roadmap</h1>
+    <p class="lead">Ogni voce della roadmap con lo stato dello sviluppo e una proposta di revisione. La proposta è di Claude: cambia lo stato e scrivi le note, vengono salvate e restano per chi riapre la pagina.</p>
+  </header>
+
+  <div class="cartiglio" id="cartiglio"></div>
+
+  <div class="box">
+    <h2>Cosa cambia tra la roadmap originale e l'Allegato A</h2>
+    <ul>
+      <li>Il contenuto tecnico (vincoli, modello dati, fasi 0–9, cancelli, test, rischi) è uguale.</li>
+      <li>Tolti tutti i riferimenti a Emilio (approvazioni, demo, revisione Git, aggiornamento del venerdì).</li>
+      <li>Tolte le durate delle fasi (33 settimane); resta solo "Cancello 1, dopo 8 settimane" nella sezione Rischi.</li>
+      <li>Tolti il dettaglio della Fase 0, la checklist della prima settimana, le fonti e quasi tutte le "Consegna" di fase (resta solo quella della Fase 3).</li>
+    </ul>
+  </div>
+
+  <div class="filtri">
+    <label for="f-fase">Sezione</label><select id="f-fase"></select>
+    <label for="f-svil">Sviluppo</label>
+    <select id="f-svil"><option value="">Tutti</option><option>Fatto</option><option>Parziale</option><option>Da fare</option><option>Diverso dalla roadmap</option><option>Extra</option></select>
+    <label for="f-rev">Revisione</label>
+    <select id="f-rev"><option value="">Tutte</option><option>Approvato</option><option>Non approvato</option><option>Da revisionare</option><option>Da aggiornare</option></select>
+    <span class="avviso" id="stato-db">Collegamento al server…</span>
+  </div>
+
+  <div id="elenco"></div>
+</div>
+
+<script>
+(function(){let t='light';try{t=localStorage.getItem('tema')||'light';}catch(e){}
+const b=document.getElementById('tema');
+const applica=x=>{document.documentElement.setAttribute('data-theme',x);b.textContent=x==='light'?'Tema scuro':'Tema chiaro';};
+applica(t);b.addEventListener('click',()=>{t=t==='light'?'dark':'light';applica(t);try{localStorage.setItem('tema',t);}catch(e){}});})();
+const STATI=["Approvato","Non approvato","Da revisionare","Da aggiornare"];
+const VOCI=[
+// Sezione 2 — Punti fermi
+["s2","2. Punti fermi","pf-proprietaria","App proprietaria, nessun servizio esterno","Diverso dalla roadmap","Da revisionare","L'inquadramento (fase 2o) usa Google Static Maps per l'ortofoto, il WMS dell'Agenzia delle Entrate e il geocoder di Android. Il 30/10 per il PDF era stato detto che dati catastali, ortofoto e mappa si inseriscono a mano: va deciso se tenere i servizi esterni come aiuto facoltativo."],
+["s2","2. Punti fermi","pf-licenze","Licenze permissive e LICENZE.md","Fatto","Approvato","LICENZE.md presente, solo dipendenze Apache 2.0. Google Static Maps non è una libreria ma un servizio con termini propri, a pagamento oltre la soglia gratuita."],
+["s2","2. Punti fermi","pf-s24","Dispositivo di riferimento S24 Ultra","Diverso dalla roadmap","Da revisionare","Si sviluppa e si prova sul Galaxy S23 (decisione 21/10). Il collaudo sul S24 Ultra non è ancora stato fatto."],
+["s2","2. Punti fermi","pf-camera","Misura con la sola fotocamera, niente LiDAR","Fatto","Approvato","Solo ARCore e Depth API. Il distanziometro laser è in sospeso, come prevede la roadmap (estensione futura)."],
+["s2","2. Punti fermi","pf-errore","Errore massimo 3–4%","Da fare","Da aggiornare","Nessun test di precisione formale (sezione 8) è stato registrato. Si sa solo della prima prova del 24/10 (h 2,34, 7 pareti) senza confronto col laser."],
+["s2","2. Punti fermi","pf-aperture","Porte e finestre proposte in automatico","Da fare","Da aggiornare","Oggi porte e finestre si inseriscono con due angoli sulla parete (fase 2g): è il ripiego semi-automatico del Cancello 2, non il riconoscimento automatico."],
+["s2","2. Punti fermi","pf-foto","Foto e commenti per ogni stanza, legati a un difetto","Parziale","Da aggiornare","Foto legate a stanza e parete con SHA-256. Mancano commenti e collegamento al difetto (Osservazione)."],
+["s2","2. Punti fermi","pf-relazione","Relazione finale PDF generata dal sistema","Da fare","Da aggiornare","Non c'è ancora nessuna esportazione PDF. Pronte solo le immagini di inquadramento (ortofoto, mappa)."],
+["s2","2. Punti fermi","pf-offline","Funzionamento offline","Fatto","Approvato","Il rilievo funziona senza rete (archivio JSON sul telefono). Solo l'inquadramento GPS e mappe richiede rete, ed è facoltativo."],
+["s2","2. Punti fermi","pf-budget","Budget contenuto, IIS e SQL Server","Da fare","Da revisionare","Server non iniziato. Domanda ancora aperta: il server IIS è raggiungibile da fuori con HTTPS? La chiave Google Maps richiede fatturazione attiva."],
+// Sezione 5 — Modello dati
+["s5","5. Modello dati","md-guid","Identificativi GUID generati sul telefono","Fatto","Approvato","UUID su ogni entità (Modello.kt)."],
+["s5","5. Modello dati","md-room","Database locale Room","Diverso dalla roadmap","Da aggiornare","Oggi un file JSON per pratica (scrittura su file temporaneo e rinomina). Room previsto più avanti senza cambiare le schermate."],
+["s5","5. Modello dati","md-pratica","Pratica: codice, committente, motivo, tecnico, data, presenti, stato","Parziale","Da aggiornare","Campi presenti. Lo stato è solo \"completata sì/no\": mancano bozza / completata / firmata."],
+["s5","5. Modello dati","md-immobile","Immobile: indirizzo, comune, catasto, anno, tipologia","Fatto","Approvato","Tutti i campi, più GPS, contorno sull'ortofoto e immagini di inquadramento."],
+["s5","5. Modello dati","md-unita","Unità: piano, interno, proprietario, note di accesso","Fatto","Approvato","Tutti i campi."],
+["s5","5. Modello dati","md-piano","Livello Piano tra Unità e Stanza","Extra","Approvato","Non è nella roadmap: aggiunto per ville, più piani, scale e mansarde (ambito allargato da Daniele il 24/10)."],
+["s5","5. Modello dati","md-stanza","Stanza: nome, destinazione, poligono, altezza, superficie, giudizio","Parziale","Da aggiornare","Tutto tranne il giudizio sintetico della stanza. Altezza per parete invece di una sola."],
+["s5","5. Modello dati","md-parete","Parete: vertici, lunghezza, finitura","Parziale","Da aggiornare","Le pareti derivano dal poligono, con altezza per parete. Manca la finitura (intonaco, piastrelle, carta da parati)."],
+["s5","5. Modello dati","md-apertura","Apertura: tipo, distanza, larghezza, altezza, davanzale, flag automatico/confermata","Parziale","Da aggiornare","Tutto tranne i due flag \"rilevata in automatico\" e \"confermata\" (serviranno in Fase 5)."],
+["s5","5. Modello dati","md-osservazione","Osservazione (il difetto)","Da fare","Da aggiornare","Entità assente. È il cuore del testimoniale e la prossima cosa da costruire (Fase 4)."],
+["s5","5. Modello dati","md-foto","Foto: osservazione, data, hash, posizione e direzione, didascalia, numero progressivo","Parziale","Da aggiornare","Ci sono stanza, parete, SHA-256 e posa. Mancano osservazione, didascalia e numero progressivo (formato deciso il 30/10, es. SIA-2026-014/0153)."],
+["s5","5. Modello dati","md-commento","Commento","Da fare","Da aggiornare","Entità assente."],
+["s5","5. Modello dati","md-relazione","Relazione con versioni e hash del PDF","Da fare","Da aggiornare","Entità assente (Fase 7)."],
+["s5","5. Modello dati","md-liste","Liste fisse: tipi di difetto, gravità, giudizio, configurabili sul server","Da fare","Da aggiornare","Da definire prima della Fase 4. Il 30/10 Daniele ha confermato tabelle configurabili, con i codici dell'esempio come valori provvisori."],
+// Sezione 6 — Requisiti
+["s6","6. Requisiti del testimoniale","rq-hash","Hash SHA-256 allo scatto","Fatto","Approvato","Calcolato su ogni foto, normale e HD, salvato nel JSON e nella stanza."],
+["s6","6. Requisiti del testimoniale","rq-originali","Originali intoccabili, copie ridotte separate","Fatto","Approvato","Gli originali non vengono modificati. Copie ridotte per il PDF non ancora necessarie."],
+["s6","6. Requisiti del testimoniale","rq-privata","Foto solo dall'app, in memoria privata","Parziale","Da revisionare","Le foto si scattano solo nell'app e non vanno in galleria, ma stanno in Android/data/it.sia.rilievi (cartella dell'app sulla memoria esterna, leggibile via USB). Valutare la memoria interna privata."],
+["s6","6. Requisiti del testimoniale","rq-archivio","Archivio in sola scrittura sul server","Da fare","Da aggiornare","Fase 6."],
+["s6","6. Requisiti del testimoniale","rq-marca","Manifesto, marca temporale RFC 3161, firma PAdES","Da fare","Da revisionare","Soluzione ancora \"da approvare\" nella roadmap, con un consulente."],
+["s6","6. Requisiti del testimoniale","rq-presenti","Presenti al sopralluogo e convocazione inviata","Parziale","Da aggiornare","I presenti si scrivono come testo libero. La convocazione non è registrata."],
+["s6","6. Requisiti del testimoniale","rq-pianta-foto","Foto sulla pianta con numero e freccia di direzione","Parziale","Da aggiornare","La posa è salvata per le foto in AR, ma le foto non sono disegnate sulla pianta. Le foto grandangolari dalla planimetria (fase 2t) non hanno posa, solo la parete."],
+["s6","6. Requisiti del testimoniale","rq-verbale","Verbale di sopralluogo da firmare","Da fare","Da aggiornare",""],
+["s6","6. Requisiti del testimoniale","rq-copertura","Copertura minima: una foto per parete, soffitto, pavimento","Parziale","Da aggiornare","\"Mancano foto\" nell'elenco stanze se una parete non ha foto. Soffitto e pavimento non controllati; nessun avviso alla chiusura della stanza."],
+["s6","6. Requisiti del testimoniale","rq-metrico","Foto di dettaglio con riferimento metrico","Da fare","Da aggiornare","Nessuna guida in app (dipende dall'Osservazione)."],
+["s6","6. Requisiti del testimoniale","rq-gdpr","GDPR: informativa, dati cifrati, HTTPS, registro accessi, conservazione","Da fare","Da aggiornare","Dati non cifrati sul telefono. Informativa e tempo di conservazione da definire."],
+// Fase 0
+["f0","Fase 0 · Preparazione","f0-amb","Ambiente, repository con README, LICENZE, DECISIONI","Fatto","Approvato","Android Studio, progetto SiaRilievi, i tre file presenti. DECISIONI.md aggiornato fino alla fase 2t."],
+// Fase 1
+["f1","Fase 1 · Prototipo di misura","f1-supporto","Verifica supporto ARCore e Depth a schermo","Fatto","Approvato","Riga \"Telefono pronto per il rilievo\" e pagina Impostazioni con ARCore, Depth, Raw Depth, fps."],
+["f1","Fase 1 · Prototipo di misura","f1-pav","Riconoscere il pavimento e mostrarlo","Fatto","Approvato","Pavimento riconosciuto, freccia animata e piano infinito del pavimento per gli angoli."],
+["f1","Fase 1 · Prototipo di misura","f1-angoli","Toccare gli angoli alla base: hit-test, ancoraggio, linee","Diverso dalla roadmap","Da revisionare","Mirino al centro e pulsante \"+\" invece del tocco, un solo Anchor per stanza, angoli anche in alto. Chiusura automatica vicino al primo angolo, Ricentra e Riallinea."],
+["f1","Fase 1 · Prototipo di misura","f1-poligono","Chiusura poligono, lunghezze, superficie","Fatto","Approvato","Più area di ogni parete."],
+["f1","Fase 1 · Prototipo di misura","f1-altezza","Altezza: tocco a terra e al soffitto sulla stessa verticale","Diverso dalla roadmap","Da revisionare","Verticale a piombo dal primo angolo, salendo col mirino; altezza applicata a tutte le pareti e correggibile parete per parete."],
+["f1","Fase 1 · Prototipo di misura","f1-json","Esportazione della stanza in JSON","Parziale","Da aggiornare","La pratica è salvata in JSON e ogni foto ha il suo JSON, ma manca un comando per esportare o condividere il file."],
+["f1","Fase 1 · Prototipo di misura","f1-sessioni","Registrazione e riproduzione delle sessioni ARCore","Da fare","Da aggiornare","Non implementata. Serve per ripetere i test al computer senza tornare sul posto."],
+["f1","Fase 1 · Prototipo di misura","f1-test5","Primo test di precisione su 5 stanze","Da fare","Da aggiornare","Protocollo della sezione 8 non ancora applicato."],
+// Fase 2
+["f2","Fase 2 · Precisione (Cancello 1)","f2-squadra","Regolarizzazione angoli entro ±5° da 90°","Diverso dalla roadmap","Da revisionare","\"Squadra\" porta tutti gli angoli a 90°/270°, non solo quelli entro ±5°, ed è un comando manuale. Rischio: raddrizza anche angoli realmente fuori squadra."],
+["f2","Fase 2 · Precisione (Cancello 1)","f2-aruco","Marker ArUco con OpenCV per la scala","Da fare","Da aggiornare",""],
+["f2","Fase 2 · Precisione (Cancello 1)","f2-guida","Avvisi su tracking, luce, movimento","Fatto","Approvato","Semafori velocità e inquadratura, barra \"Fermo\", pallino di qualità, torcia."],
+["f2","Fase 2 · Precisione (Cancello 1)","f2-test10","Test su 10 stanze e decisione del Cancello 1","Da fare","Non approvato","Il Cancello 1 non è stato fatto, mentre lo sviluppo è già andato avanti su Fasi 3 e 4. È il punto di rischio principale della roadmap."],
+// Fase 3
+["f3","Fase 3 · App di rilievo completa","f3-schermate","Schermate: pratiche, scheda, immobile, unità, stanze, rilievo, pianta d'insieme","Fatto","Approvato","UX leggera dal mockup approvato (fase 2p), pianta d'insieme e foglio catastale."],
+["f3","Fase 3 · App di rilievo completa","f3-room","Database Room con GUID","Diverso dalla roadmap","Da aggiornare","JSON al posto di Room (vedi Modello dati)."],
+["f3","Fase 3 · App di rilievo completa","f3-sessione","Più stanze nella stessa sessione, pianta che si compone da sola","Fatto","Approvato","Le stanze della stessa sessione si collocano dalla posa salvata."],
+["f3","Fase 3 · App di rilievo completa","f3-porta","Riallineo a sessione interrotta toccando una porta comune","Diverso dalla roadmap","Da revisionare","Si fa a posteriori nella composizione (\"Collega a…\", stessa porta vista dalle due stanze), non in AR."],
+["f3","Fase 3 · App di rilievo completa","f3-spessore","Spessore dei muri calcolato dalle pareti affacciate","Diverso dalla roadmap","Da aggiornare","Lo spessore si scrive (predefinito 0,12 m), non si calcola. Nel disegno è solo grafico (10–15 cm)."],
+["f3","Fase 3 · App di rilievo completa","f3-modifica","Modifica manuale della pianta","Fatto","Approvato","Correzione con i numeri e cronologia di annullamento. Lo spostamento dei vertici col dito è stato tolto su richiesta di Daniele (26/10)."],
+["f3","Fase 3 · App di rilievo completa","f3-fotogrammi","Salvare fotogrammi di ogni rilievo per la Fase 5","Da fare","Da aggiornare","Non implementato, ma la roadmap lo chiede \"da subito\": ogni rilievo fatto senza perde materiale per il dataset."],
+["f3","Fase 3 · App di rilievo completa","f3-consegna","Consegna: appartamento di almeno 4 stanze, pianta coerente","Parziale","Da revisionare","La pratica di prova PROVA-LT-118 viene dalle planimetrie, non da un rilievo vero. Serve un rilievo reale di 4+ stanze."],
+// Fase 4
+["f4","Fase 4 · Foto, osservazioni, commenti","f4-hd","Foto di qualità: provare fotocamera condivisa e pausa, registrare la scelta","Fatto","Approvato","Provate tutte e due (Shared Camera 22/10, pausa con Camera2 e zoom 30/10), scelte in DECISIONI.md. Camera2 al posto di CameraX."],
+["f4","Fase 4 · Foto, osservazioni, commenti","f4-posizione","Scatto con posizione e direzione sulla pianta","Parziale","Da aggiornare","Sì per le foto in AR; no per le grandangolari dalla planimetria. Manca il disegno sulla pianta."],
+["f4","Fase 4 · Foto, osservazioni, commenti","f4-hash","Hash SHA-256 subito dopo lo scatto","Fatto","Approvato",""],
+["f4","Fase 4 · Foto, osservazioni, commenti","f4-scheda","Scheda osservazione","Da fare","Da aggiornare","Prossimo passo concordato il 29/10."],
+["f4","Fase 4 · Foto, osservazioni, commenti","f4-voce","Commenti scritti o dettati a voce","Da fare","Da aggiornare",""],
+["f4","Fase 4 · Foto, osservazioni, commenti","f4-annotazioni","Annotazioni sulla foto su livello separato","Da fare","Da aggiornare",""],
+["f4","Fase 4 · Foto, osservazioni, commenti","f4-copertura","Controllo copertura minima prima di chiudere","Parziale","Da aggiornare","Vedi requisito di copertura: avviso solo nell'elenco stanze."],
+["f4","Fase 4 · Foto, osservazioni, commenti","f4-giudizio","Giudizio sintetico per stanza","Da fare","Da aggiornare",""],
+// Fase 5
+["f5","Fase 5 · Porte e finestre automatiche (Cancello 2)","f5-dataset","Dataset di porte e finestre etichettato","Da fare","Da aggiornare","Dipende dai fotogrammi della Fase 3, non ancora raccolti."],
+["f5","Fase 5 · Porte e finestre automatiche (Cancello 2)","f5-modello","Modello YOLOX o RT-DETR convertito per LiteRT","Da fare","Da aggiornare",""],
+["f5","Fase 5 · Porte e finestre automatiche (Cancello 2)","f5-integrazione","Proiezione sul piano della parete e controllo con la profondità","Da fare","Da aggiornare","La proiezione sul piano della parete esiste già per l'inserimento manuale e si potrà riusare."],
+["f5","Fase 5 · Porte e finestre automatiche (Cancello 2)","f5-conferma","Interfaccia di conferma sulla pianta","Parziale","Da aggiornare","C'è la modifica numerica di ogni apertura; manca il flusso proponi / accetta / scarta."],
+// Fase 6
+["f6","Fase 6 · Server e sincronizzazione","f6-api","API REST ASP.NET Core su IIS, SQL Server","Da fare","Da aggiornare",""],
+["f6","Fase 6 · Server e sincronizzazione","f6-jwt","Autenticazione JWT e permessi per pratica","Da fare","Da aggiornare",""],
+["f6","Fase 6 · Server e sincronizzazione","f6-sync","Sincronizzazione con WorkManager e ripresa","Da fare","Da aggiornare",""],
+["f6","Fase 6 · Server e sincronizzazione","f6-hash","Verifica hash all'arrivo e archivio in sola scrittura","Da fare","Da aggiornare",""],
+["f6","Fase 6 · Server e sincronizzazione","f6-web","Interfaccia web interna per cercare le pratiche","Da fare","Da aggiornare",""],
+// Fase 7
+["f7","Fase 7 · Relazione, esportazioni, data certa","f7-pdf","Relazione PDF dal server con la struttura prevista","Da fare","Da aggiornare","Modello di riferimento: il testimoniale di esempio di 61 pagine. Pronte le immagini di inquadramento."],
+["f7","Fase 7 · Relazione, esportazioni, data certa","f7-lib","PdfSharp/MigraDoc (MIT)","Da fare","Da aggiornare",""],
+["f7","Fase 7 · Relazione, esportazioni, data certa","f7-dxf","Pianta in DXF con netDxf, livelli separati","Da fare","Da aggiornare","Il foglio catastale esiste a schermo ma non si esporta."],
+["f7","Fase 7 · Relazione, esportazioni, data certa","f7-verbale","Verbale di sopralluogo","Da fare","Da aggiornare",""],
+["f7","Fase 7 · Relazione, esportazioni, data certa","f7-marca","Manifesto, marca temporale, firma digitale","Da fare","Da revisionare","Prima serve l'approvazione della soluzione (sezione 6)."],
+["f7","Fase 7 · Relazione, esportazioni, data certa","f7-versioni","Testo modificabile e versioni della relazione","Da fare","Da aggiornare",""],
+// Fase 8-9
+["f8","Fase 8 · Collaudo sul campo","f8-collaudo","5 testimoniali, tempi, test su tutte le stanze, elenco difetti","Da fare","Da aggiornare",""],
+["f9","Fase 9 · Rilascio","f9-apk","APK firmato distribuito in privato","Da fare","Da aggiornare",""],
+["f9","Fase 9 · Rilascio","f9-manuale","Manuale operatore di 2–3 pagine","Da fare","Da aggiornare",""],
+["f9","Fase 9 · Rilascio","f9-backup","Procedura di backup di database e foto","Da fare","Da aggiornare",""],
+// Sezione 8 e 10
+["s8","8. Protocollo di test","s8-foglio","Foglio di collaudo e misure col laser da cantiere","Da fare","Da aggiornare","Serve un distanziometro da cantiere solo per il collaudo (non fa parte dell'app)."],
+["s10","10. Regole di lavoro","r-git","Git: un ramo per attività, commit in italiano, revisione","Diverso dalla roadmap","Non approvato","Nel repository locale c'è un solo commit (Fase 0). Le fasi 1a–2t sono consegnate come file e archivi in \"consegne\" e copiate a mano, senza storia Git."],
+["s10","10. Regole di lavoro","r-decisioni","DECISIONI.md","Fatto","Approvato","Aggiornato a ogni fase."],
+["s10","10. Regole di lavoro","r-licenze","LICENZE.md aggiornato prima di ogni dipendenza","Fatto","Approvato",""],
+["s10","10. Regole di lavoro","r-campo","Nessuna misura finita senza prova in una stanza vera","Parziale","Da revisionare","Molte funzioni provate da Daniele sul S23; le ultime (fasi 2r–2t) attendono la prova."],
+["s10","10. Regole di lavoro","r-registrazioni","Conservare le registrazioni ARCore delle prove","Da fare","Da aggiornare","Dipende dalla registrazione delle sessioni (Fase 1)."],
+// Extra
+["ex","Già fatto oltre la roadmap","ex-multipiano","Più piani, solai, vista 3D dell'edificio","Extra","Approvato","Ambito allargato del 24/10."],
+["ex","Già fatto oltre la roadmap","ex-scale","Scale (dritta, a U, a L, chiocciola, esterna, botola) disegnate come in catasto","Extra","Approvato",""],
+["ex","Già fatto oltre la roadmap","ex-catastale","Foglio in stile catastale e composizione del piano","Extra","Approvato",""],
+["ex","Già fatto oltre la roadmap","ex-3d","Vista 3D della stanza","Extra","Approvato",""],
+["ex","Già fatto oltre la roadmap","ex-inquadramento","GPS, foglio e particella, ortofoto, mappa catastale","Extra","Da revisionare","Vedi il punto fermo sui servizi esterni."],
+["ex","Già fatto oltre la roadmap","ex-visore","Esportazione glTF per visore 3D","Da fare","Da revisionare","Idea del 26/10, ancora da chiedere quale visore."],
+];
+const items=VOCI.map(v=>({sez:v[0],sezNome:v[1],id:v[2],voce:v[3],svil:v[4],proposta:v[5],dett:v[6]}));
+const decisi={}; // id -> {stato,note,quando}
+let db=null, canWrite=true;
+
+const sezioni=[...new Map(items.map(i=>[i.sez,i.sezNome])).entries()];
+const fSez=document.getElementById("f-fase");
+fSez.innerHTML='<option value="">Tutte</option>'+sezioni.map(([k,n])=>`<option value="${k}">${n}</option>`).join("");
+["f-fase","f-svil","f-rev"].forEach(id=>document.getElementById(id).addEventListener("change",render));
+
+const sclass={"Fatto":"s-fatto","Parziale":"s-parziale","Da fare":"s-dafare","Diverso dalla roadmap":"s-diverso","Extra":"s-extra"};
+const rclass=s=>"r-"+(s==="Non approvato"?"Non":s.replace(/ /g,"-"));
+const statoDi=i=>(decisi[i.id]&&decisi[i.id].stato)||i.proposta;
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function cartiglio(){
+  const c=k=>items.filter(i=>i.svil===k).length;
+  const r=k=>items.filter(i=>statoDi(i)===k).length;
+  const fatti=Object.keys(decisi).filter(k=>decisi[k].stato).length;
+  document.getElementById("cartiglio").innerHTML=[
+    [items.length,"voci"],[c("Fatto"),"fatte"],[c("Parziale"),"parziali"],[c("Da fare"),"da fare"],[c("Diverso dalla roadmap"),"diverse dalla roadmap"],
+    [r("Approvato"),"approvate"],[r("Da revisionare"),"da revisionare"],[r("Da aggiornare"),"da aggiornare"],[r("Non approvato"),"non approvate"],[fatti,"decise da te"]
+  ].map(([n,t])=>`<div><b>${n}</b><span>${t}</span></div>`).join("");
+}
+
+function render(){
+  const fs=fSez.value, fv=document.getElementById("f-svil").value, fr=document.getElementById("f-rev").value;
+  const out=[];
+  for(const [k,n] of sezioni){
+    if(fs&&fs!==k) continue;
+    const righe=items.filter(i=>i.sez===k&&(!fv||i.svil===fv)&&(!fr||statoDi(i)===fr));
+    if(!righe.length) continue;
+    out.push(`<section class="sez"><h3>${esc(n)} <small>${righe.length} voci</small></h3>`+righe.map(riga).join("")+`</section>`);
+  }
+  document.getElementById("elenco").innerHTML=out.join("")||'<p class="avviso">Nessuna voce con questi filtri.</p>';
+  cartiglio();
+}
+
+function riga(i){
+  const d=decisi[i.id]||{}; const st=statoDi(i);
+  const chi=d.stato?`Deciso${d.quando?" il "+new Date(d.quando).toLocaleDateString("it-IT"):""}`:`Proposta di Claude`;
+  return `<div class="riga ${rclass(st)}">
+    <div class="voce"><span class="t">${esc(i.voce)}</span><span class="pill ${sclass[i.svil]}">${esc(i.svil)}</span></div>
+    <div class="dett">${i.dett?`<p>${esc(i.dett)}</p>`:`<p class="avviso">Nessuna nota.</p>`}</div>
+    <div class="ctrl">
+      <select id="st-${i.id}" data-id="${i.id}" aria-label="Stato di revisione" ${canWrite?"":"disabled"}>${STATI.map(s=>`<option ${s===st?"selected":""}>${s}</option>`).join("")}</select>
+      <span class="chi">${chi}</span>
+      <textarea id="nt-${i.id}" data-id="${i.id}" placeholder="Note" aria-label="Note" ${canWrite?"":"disabled"}>${esc(d.note||"")}</textarea>
+      <span class="salvo" id="sv-${i.id}"></span>
+    </div></div>`;
+}
+
+const elenco=document.getElementById("elenco");
+elenco.addEventListener("change",e=>{
+  const t=e.target; if(!t.dataset.id) return;
+  if(t.tagName==="SELECT") salva(t.dataset.id,{stato:t.value});
+  if(t.tagName==="TEXTAREA") salva(t.dataset.id,{note:t.value});
+});
+
+async function salva(id,patch){
+  const prima=decisi[id]||{};
+  decisi[id]={...prima,...patch,quando:Date.now()};
+  if(patch.stato) render();
+  const el=document.getElementById("sv-"+id);
+  if(!db){ if(el) el.textContent="Non salvato: server non raggiungibile."; return; }
+  try{
+    const r=await fetch("api/revisione/"+encodeURIComponent(id),{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({stato:decisi[id].stato||"",note:decisi[id].note||""})});
+    if(!r.ok) throw {code:r.status};
+    const e2=document.getElementById("sv-"+id); if(e2) e2.textContent="Salvato";
+  }catch(err){
+    const e2=document.getElementById("sv-"+id); if(e2) e2.textContent="Non salvato: "+"riprova tra poco.";
+  }
+}
+
+render();
+
+(async()=>{
+  const info=document.getElementById("stato-db");
+  try{
+    const r=await fetch("api/revisione",{cache:"no-store"});
+    if(!r.ok) throw new Error(r.status);
+    const righe=await r.json();
+    for(const [id,x] of Object.entries(righe)) decisi[id]={stato:x.stato||"",note:x.note||"",quando:x.quando};
+    db=true; info.textContent="Stato e note si salvano da soli.";
+    render();
+  }catch(e){info.textContent="Server non raggiungibile: le scelte non vengono salvate.";}
+})();
+</script>
+
+</body>
+</html>

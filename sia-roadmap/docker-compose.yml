@@ -1,0 +1,9 @@
+services:
+  sia-roadmap:
+    build: .
+    container_name: sia-roadmap
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./data:/data
