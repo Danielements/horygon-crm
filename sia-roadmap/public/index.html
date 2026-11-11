@@ -51,10 +51,24 @@ select:focus-visible,textarea:focus-visible,input:focus-visible,button:focus-vis
 .ctrl textarea{min-height:38px;resize:vertical;font-size:13px}
 .pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;padding:2px 8px;border-radius:999px;width:max-content}
 .s-fatto{color:var(--ok);background:var(--ok-bg)} .s-parziale{color:var(--rev);background:var(--rev-bg)} .s-dafare{color:var(--no);background:var(--no-bg)} .s-diverso{color:var(--upd);background:var(--upd-bg)} .s-extra{color:var(--neu);background:var(--neu-bg)}
-.r-Approvato{border-left:4px solid var(--ok)} .r-Non{border-left:4px solid var(--no)} .r-Da-revisionare{border-left:4px solid var(--rev)} .r-Da-aggiornare{border-left:4px solid var(--upd)}
+.r-Approvato{border-left:4px solid var(--ok)} .r-Non{border-left:4px solid var(--no)} .r-Da-revisionare{border-left:4px solid var(--rev)} .r-Da-aggiornare{border-left:4px solid var(--upd)} .r-Non-piu{border-left:4px solid var(--line);opacity:.75}
 .chi{font-size:11px;color:var(--muted)}
 .testa{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
 .tema{font:inherit;font-size:12px;color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:4px 10px;cursor:pointer}
+.st{font-weight:600;font-size:13px}
+.azioni{display:flex;gap:6px;flex-wrap:wrap}
+.btn{font:inherit;font-size:12px;color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:4px 10px;cursor:pointer}
+.btn.prim{background:var(--accent);border-color:var(--accent);color:var(--surface)}
+.form{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;border-top:1px dashed var(--line);padding-top:12px}
+.form label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted);min-width:0}
+.form .largo{grid-column:1/-1}
+.form textarea{min-height:60px;resize:vertical}
+.storico{grid-column:1/-1;border-top:1px dashed var(--line);padding-top:10px;display:flex;flex-direction:column;gap:8px}
+.ev{font-size:13px;display:flex;flex-direction:column;gap:2px}
+.ev .q{font-family:var(--f-mono);font-size:11px;color:var(--muted)}
+.ev .m{font-style:italic}
+.ev del{color:var(--muted)}
+.err{color:var(--no);font-size:12px}
 .salvo{font-size:11px;color:var(--muted);min-height:1em}
 .avviso{font-size:12px;color:var(--muted)}
 @media (max-width:760px){.riga{grid-template-columns:minmax(0,1fr)}}
@@ -67,7 +81,7 @@ select:focus-visible,textarea:focus-visible,input:focus-visible,button:focus-vis
   <header>
     <div class="testa"><span class="eyebrow">Allegato A · Roadmap App Rilievi – Testimoniali di Stato · confronto con l'app alla fase 2t (30/10/2026)</span><button type="button" id="tema" class="tema">Tema scuro</button></div>
     <h1>Stato della roadmap</h1>
-    <p class="lead">Ogni voce della roadmap con lo stato dello sviluppo e una proposta di revisione. La proposta è di Claude: cambia lo stato e scrivi le note, vengono salvate e restano per chi riapre la pagina.</p>
+    <p class="lead">Ogni voce della roadmap con lo stato dello sviluppo e una proposta di revisione. La proposta è di Claude. Con "Modifica" cambi stato, testo e note di una voce indicando la motivazione; ogni modifica resta nello storico.</p>
   </header>
 
   <div class="cartiglio" id="cartiglio"></div>
@@ -87,7 +101,7 @@ select:focus-visible,textarea:focus-visible,input:focus-visible,button:focus-vis
     <label for="f-svil">Sviluppo</label>
     <select id="f-svil"><option value="">Tutti</option><option>Fatto</option><option>Parziale</option><option>Da fare</option><option>Diverso dalla roadmap</option><option>Extra</option></select>
     <label for="f-rev">Revisione</label>
-    <select id="f-rev"><option value="">Tutte</option><option>Approvato</option><option>Non approvato</option><option>Da revisionare</option><option>Da aggiornare</option></select>
+    <select id="f-rev"><option value="">Tutte</option><option>Approvato</option><option>Non approvato</option><option>Da revisionare</option><option>Da aggiornare</option><option>Non più necessario</option></select>
     <span class="avviso" id="stato-db">Collegamento al server…</span>
   </div>
 
@@ -99,7 +113,8 @@ select:focus-visible,textarea:focus-visible,input:focus-visible,button:focus-vis
 const b=document.getElementById('tema');
 const applica=x=>{document.documentElement.setAttribute('data-theme',x);b.textContent=x==='light'?'Tema scuro':'Tema chiaro';};
 applica(t);b.addEventListener('click',()=>{t=t==='light'?'dark':'light';applica(t);try{localStorage.setItem('tema',t);}catch(e){}});})();
-const STATI=["Approvato","Non approvato","Da revisionare","Da aggiornare"];
+const STATI=["Approvato","Non approvato","Da revisionare","Da aggiornare","Non più necessario"];
+const SVIL=["Fatto","Parziale","Da fare","Diverso dalla roadmap","Extra"];
 const VOCI=[
 // Sezione 2 — Punti fermi
 ["s2","2. Punti fermi","pf-proprietaria","App proprietaria, nessun servizio esterno","Diverso dalla roadmap","Da revisionare","L'inquadramento (fase 2o) usa Google Static Maps per l'ortofoto, il WMS dell'Agenzia delle Entrate e il geocoder di Android. Il 30/10 per il PDF era stato detto che dati catastali, ortofoto e mappa si inseriscono a mano: va deciso se tenere i servizi esterni come aiuto facoltativo."],
@@ -212,8 +227,11 @@ const VOCI=[
 ["ex","Già fatto oltre la roadmap","ex-visore","Esportazione glTF per visore 3D","Da fare","Da revisionare","Idea del 26/10, ancora da chiedere quale visore."],
 ];
 const items=VOCI.map(v=>({sez:v[0],sezNome:v[1],id:v[2],voce:v[3],svil:v[4],proposta:v[5],dett:v[6]}));
-const decisi={}; // id -> {stato,note,quando}
-let db=null, canWrite=true;
+const decisi={};   // id -> valori salvati {stato,note,voce,svil,dett,quando}
+let storico={};    // id -> [{quando,campi:{campo:[prima,dopo]},motivo}]
+let online=false;
+const aperti={modifica:new Set(),storico:new Set()};
+const CAMPI={stato:"Stato",voce:"Voce",svil:"Sviluppo",dett:"Dettaglio",note:"Note"};
 
 const sezioni=[...new Map(items.map(i=>[i.sez,i.sezNome])).entries()];
 const fSez=document.getElementById("f-fase");
@@ -221,17 +239,19 @@ fSez.innerHTML='<option value="">Tutte</option>'+sezioni.map(([k,n])=>`<option v
 ["f-fase","f-svil","f-rev"].forEach(id=>document.getElementById(id).addEventListener("change",render));
 
 const sclass={"Fatto":"s-fatto","Parziale":"s-parziale","Da fare":"s-dafare","Diverso dalla roadmap":"s-diverso","Extra":"s-extra"};
-const rclass=s=>"r-"+(s==="Non approvato"?"Non":s.replace(/ /g,"-"));
-const statoDi=i=>(decisi[i.id]&&decisi[i.id].stato)||i.proposta;
-const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const rclass=s=>s==="Non approvato"?"r-Non":s==="Non più necessario"?"r-Non-piu":"r-"+s.replace(/ /g,"-");
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const dataOra=t=>new Date(t).toLocaleString("it-IT",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
+// valori correnti: quelli salvati, altrimenti quelli della roadmap / proposta di Claude
+function val(i){const d=decisi[i.id]||{};return{stato:d.stato||i.proposta,voce:d.voce||i.voce,svil:d.svil||i.svil,dett:d.dett??i.dett,note:d.note||""};}
 
 function cartiglio(){
-  const c=k=>items.filter(i=>i.svil===k).length;
-  const r=k=>items.filter(i=>statoDi(i)===k).length;
-  const fatti=Object.keys(decisi).filter(k=>decisi[k].stato).length;
+  const v=items.map(val);
+  const c=k=>v.filter(x=>x.svil===k).length, r=k=>v.filter(x=>x.stato===k).length;
+  const modificate=items.filter(i=>(storico[i.id]||[]).length).length;
   document.getElementById("cartiglio").innerHTML=[
     [items.length,"voci"],[c("Fatto"),"fatte"],[c("Parziale"),"parziali"],[c("Da fare"),"da fare"],[c("Diverso dalla roadmap"),"diverse dalla roadmap"],
-    [r("Approvato"),"approvate"],[r("Da revisionare"),"da revisionare"],[r("Da aggiornare"),"da aggiornare"],[r("Non approvato"),"non approvate"],[fatti,"decise da te"]
+    [r("Approvato"),"approvate"],[r("Da revisionare"),"da revisionare"],[r("Da aggiornare"),"da aggiornare"],[r("Non approvato"),"non approvate"],[r("Non più necessario"),"non più necessarie"],[modificate,"modificate"]
   ].map(([n,t])=>`<div><b>${n}</b><span>${t}</span></div>`).join("");
 }
 
@@ -240,7 +260,7 @@ function render(){
   const out=[];
   for(const [k,n] of sezioni){
     if(fs&&fs!==k) continue;
-    const righe=items.filter(i=>i.sez===k&&(!fv||i.svil===fv)&&(!fr||statoDi(i)===fr));
+    const righe=items.filter(i=>{const v=val(i);return i.sez===k&&(!fv||v.svil===fv)&&(!fr||v.stato===fr);});
     if(!righe.length) continue;
     out.push(`<section class="sez"><h3>${esc(n)} <small>${righe.length} voci</small></h3>`+righe.map(riga).join("")+`</section>`);
   }
@@ -249,40 +269,54 @@ function render(){
 }
 
 function riga(i){
-  const d=decisi[i.id]||{}; const st=statoDi(i);
-  const chi=d.stato?`Deciso${d.quando?" il "+new Date(d.quando).toLocaleDateString("it-IT"):""}`:`Proposta di Claude`;
-  return `<div class="riga ${rclass(st)}">
-    <div class="voce"><span class="t">${esc(i.voce)}</span><span class="pill ${sclass[i.svil]}">${esc(i.svil)}</span></div>
-    <div class="dett">${i.dett?`<p>${esc(i.dett)}</p>`:`<p class="avviso">Nessuna nota.</p>`}</div>
-    <div class="ctrl">
-      <select id="st-${i.id}" data-id="${i.id}" aria-label="Stato di revisione" ${canWrite?"":"disabled"}>${STATI.map(s=>`<option ${s===st?"selected":""}>${s}</option>`).join("")}</select>
-      <span class="chi">${chi}</span>
-      <textarea id="nt-${i.id}" data-id="${i.id}" placeholder="Note" aria-label="Note" ${canWrite?"":"disabled"}>${esc(d.note||"")}</textarea>
-      <span class="salvo" id="sv-${i.id}"></span>
-    </div></div>`;
+  const v=val(i), d=decisi[i.id], ev=storico[i.id]||[];
+  const chi=d&&d.quando?`Modificata il ${dataOra(d.quando)}`:`Proposta di Claude`;
+  let h=`<div class="riga ${rclass(v.stato)}" id="r-${i.id}">
+    <div class="voce"><span class="t">${esc(v.voce)}</span><span class="pill ${sclass[v.svil]||"s-extra"}">${esc(v.svil)}</span></div>
+    <div class="dett">${v.dett?`<p>${esc(v.dett)}</p>`:`<p class="avviso">Nessun dettaglio.</p>`}${v.note?`<p><b>Note:</b> ${esc(v.note)}</p>`:""}</div>
+    <div class="ctrl"><span class="st">${esc(v.stato)}</span><span class="chi">${chi}</span>
+      <div class="azioni"><button type="button" class="btn" data-az="modifica" data-id="${i.id}" ${online?"":"disabled"}>Modifica</button>
+      <button type="button" class="btn" data-az="storico" data-id="${i.id}">Storico (${ev.length})</button></div></div>`;
+  if(aperti.modifica.has(i.id)) h+=`<form class="form" data-id="${i.id}">
+      <label>Stato<select name="stato" id="m-st-${i.id}">${STATI.map(s=>`<option ${s===v.stato?"selected":""}>${s}</option>`).join("")}</select></label>
+      <label>Sviluppo<select name="svil" id="m-sv-${i.id}">${SVIL.map(s=>`<option ${s===v.svil?"selected":""}>${s}</option>`).join("")}</select></label>
+      <label class="largo">Voce<input name="voce" id="m-vo-${i.id}" value="${esc(v.voce)}"></label>
+      <label class="largo">Dettaglio<textarea name="dett" id="m-de-${i.id}">${esc(v.dett)}</textarea></label>
+      <label class="largo">Note<textarea name="note" id="m-no-${i.id}">${esc(v.note)}</textarea></label>
+      <label class="largo">Motivazione della modifica (obbligatoria)<textarea name="motivo" id="m-mo-${i.id}" required></textarea></label>
+      <div class="azioni largo"><button type="submit" class="btn prim">Salva</button><button type="button" class="btn" data-az="annulla" data-id="${i.id}">Annulla</button><span class="err" id="e-${i.id}"></span></div>
+    </form>`;
+  if(aperti.storico.has(i.id)) h+=`<div class="storico">${ev.length?ev.slice().reverse().map(e=>`<div class="ev"><span class="q">${dataOra(e.quando)}</span>${
+      Object.entries(e.campi).map(([c,[a,b]])=>`<span><b>${CAMPI[c]||c}:</b> <del>${esc(a)||"—"}</del> → ${esc(b)||"—"}</span>`).join("")}<span class="m">Motivazione: ${esc(e.motivo)}</span></div>`).join(""):'<span class="avviso">Nessuna modifica: la voce è com\'era nel confronto iniziale.</span>'}</div>`;
+  return h+`</div>`;
 }
 
 const elenco=document.getElementById("elenco");
-elenco.addEventListener("change",e=>{
-  const t=e.target; if(!t.dataset.id) return;
-  if(t.tagName==="SELECT") salva(t.dataset.id,{stato:t.value});
-  if(t.tagName==="TEXTAREA") salva(t.dataset.id,{note:t.value});
+elenco.addEventListener("click",e=>{
+  const b=e.target.closest("button[data-az]"); if(!b) return;
+  const id=b.dataset.id, az=b.dataset.az;
+  if(az==="modifica"){aperti.modifica.has(id)?aperti.modifica.delete(id):aperti.modifica.add(id);}
+  if(az==="annulla") aperti.modifica.delete(id);
+  if(az==="storico"){aperti.storico.has(id)?aperti.storico.delete(id):aperti.storico.add(id);}
+  render();
+  if(az==="modifica"&&aperti.modifica.has(id)){const m=document.getElementById("m-mo-"+id); if(m) m.focus();}
 });
-
-async function salva(id,patch){
-  const prima=decisi[id]||{};
-  decisi[id]={...prima,...patch,quando:Date.now()};
-  if(patch.stato) render();
-  const el=document.getElementById("sv-"+id);
-  if(!db){ if(el) el.textContent="Non salvato: server non raggiungibile."; return; }
+elenco.addEventListener("submit",async e=>{
+  e.preventDefault();
+  const f=e.target, id=f.dataset.id, i=items.find(x=>x.id===id), v=val(i), err=document.getElementById("e-"+id);
+  const nuovo={}; for(const c of Object.keys(CAMPI)) nuovo[c]=(f.elements[c].value||"").trim();
+  const motivo=f.elements.motivo.value.trim();
+  const campi={}; for(const c of Object.keys(CAMPI)) if(nuovo[c]!==(v[c]||"").trim()) campi[c]=[v[c]||"",nuovo[c]];
+  if(!Object.keys(campi).length){err.textContent="Non hai cambiato nulla.";return;}
+  if(!motivo){err.textContent="Scrivi la motivazione.";return;}
+  err.textContent="Salvataggio…";
   try{
-    const r=await fetch("api/revisione/"+encodeURIComponent(id),{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({stato:decisi[id].stato||"",note:decisi[id].note||""})});
-    if(!r.ok) throw {code:r.status};
-    const e2=document.getElementById("sv-"+id); if(e2) e2.textContent="Salvato";
-  }catch(err){
-    const e2=document.getElementById("sv-"+id); if(e2) e2.textContent="Non salvato: "+"riprova tra poco.";
-  }
-}
+    const r=await fetch("api/revisione/"+encodeURIComponent(id),{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({valori:nuovo,campi,motivo})});
+    if(!r.ok){const x=await r.json().catch(()=>({}));throw new Error(x.errore||("errore "+r.status));}
+    const x=await r.json(); decisi[id]=x.valori; storico[id]=x.storico;
+    aperti.modifica.delete(id); aperti.storico.add(id); render();
+  }catch(ex){err.textContent="Non salvato: "+ex.message+". Riprova.";}
+});
 
 render();
 
@@ -291,11 +325,11 @@ render();
   try{
     const r=await fetch("api/revisione",{cache:"no-store"});
     if(!r.ok) throw new Error(r.status);
-    const righe=await r.json();
-    for(const [id,x] of Object.entries(righe)) decisi[id]={stato:x.stato||"",note:x.note||"",quando:x.quando};
-    db=true; info.textContent="Stato e note si salvano da soli.";
+    const d=await r.json();
+    Object.assign(decisi,d.voci||{}); storico=d.storico||{};
+    online=true; info.textContent="Le modifiche si salvano sul server con la loro motivazione.";
     render();
-  }catch(e){info.textContent="Server non raggiungibile: le scelte non vengono salvate.";}
+  }catch(e){info.textContent="Server non raggiungibile: non si possono fare modifiche.";}
 })();
 </script>
 
