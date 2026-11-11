@@ -1,0 +1,10 @@
+**/bin
+**/obj
+.git
+.dotnet
+.nuget
+.cli
+artifacts
+**/.env
+**/*.horygon
+**/data

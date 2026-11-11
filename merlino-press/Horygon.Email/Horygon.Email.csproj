@@ -1,0 +1,1 @@
+<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><ProjectReference Include="..\Horygon.Core\Horygon.Core.csproj" /><PackageReference Include="MailKit" Version="4.18.2" /><PackageReference Include="AngleSharp" Version="1.8.6" /><PackageReference Include="Google.Apis.Auth" Version="1.77.0" /></ItemGroup></Project>

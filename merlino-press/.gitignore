@@ -1,0 +1,13 @@
+.dotnet/
+.nuget/
+.cli/
+**/bin/
+**/obj/
+artifacts/
+TestResults/
+dotnet-install.ps1
+*.user
+*.db*
+
+**/.env
+*.horygon

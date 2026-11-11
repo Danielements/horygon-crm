@@ -1,0 +1,1 @@
+<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup></PropertyGroup><ItemGroup><ProjectReference Include="..\Horygon.Core\Horygon.Core.csproj" /><PackageReference Include="AngleSharp" Version="1.8.6" /><PackageReference Include="Microsoft.Playwright" Version="1.64.1" /></ItemGroup></Project>

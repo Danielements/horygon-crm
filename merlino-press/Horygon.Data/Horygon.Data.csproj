@@ -1,0 +1,1 @@
+<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><ProjectReference Include="..\Horygon.Core\Horygon.Core.csproj" /><PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.14" /></ItemGroup></Project>

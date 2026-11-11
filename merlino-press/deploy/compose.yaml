@@ -1,0 +1,35 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Horygon.Server/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      HORYGON_DATA: /data
+      HORYGON_URLS: http://0.0.0.0:5080
+    ports:
+      - "${HORYGON_BIND:-127.0.0.1:5080}:5080"
+    volumes:
+      - horygon_data:/data
+    security_opt:
+      - no-new-privileges:true
+  gateway:
+    image: caddy:2
+    profiles: [https]
+    restart: unless-stopped
+    environment:
+      HORYGON_DOMAIN: ${HORYGON_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+volumes:
+  horygon_data:
+  caddy_data:
+  caddy_config:

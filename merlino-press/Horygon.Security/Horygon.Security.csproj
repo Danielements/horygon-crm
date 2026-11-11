@@ -1,0 +1,1 @@
+<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup></PropertyGroup><ItemGroup><ProjectReference Include="..\Horygon.Core\Horygon.Core.csproj" /><PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.14" /></ItemGroup></Project>
