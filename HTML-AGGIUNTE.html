@@ -1,0 +1,87 @@
+<!-- ═══════════════════════════════════════════════════
+     AGGIUNTE HTML — inserire in index.html
+════════════════════════════════════════════════════ -->
+
+<!-- 1. SEZIONE STORICO CPV — aggiungere dentro section-analytics dopo an-cpv-detail -->
+<div class="dash-card" style="margin-top:16px">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+    <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin:0">📆 Storico CPV — Andamento annuale</h3>
+    <select id="stor-cpv-sel" onchange="loadStoricoCPV()"
+      style="background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 12px;color:var(--text);font-size:12px">
+      <option value="tutti">Tutti i prodotti</option>
+    </select>
+    <select id="stor-anni-sel" onchange="loadStoricoCPV()"
+      style="background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 12px;color:var(--text);font-size:12px">
+      <option value="1">Ultimo anno</option>
+      <option value="2">Ultimi 2 anni</option>
+      <option value="3" selected>Ultimi 3 anni</option>
+    </select>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+    <div>
+      <h4 style="font-size:12px;color:var(--text-muted);margin-bottom:10px">📦 MEPA — Valore acquistato per anno</h4>
+      <canvas id="stor-mepa-bar" height="180"></canvas>
+    </div>
+    <div>
+      <h4 style="font-size:12px;color:var(--text-muted);margin-bottom:10px">📋 CIG — Bandi mensili per anno</h4>
+      <canvas id="stor-cig-line" height="180"></canvas>
+    </div>
+  </div>
+  <h4 style="font-size:12px;color:var(--text-muted);margin-bottom:10px">📊 Variazione Year-over-Year</h4>
+  <table class="data-table">
+    <thead><tr><th>Periodo</th><th style="text-align:right">Anno prec.</th><th style="text-align:right">Anno curr.</th><th style="text-align:right">Var. %</th><th style="text-align:right">Delta €</th></tr></thead>
+    <tbody id="stor-yoy"></tbody>
+  </table>
+</div>
+
+
+<!-- 2. MODAL TRACKING ORDINE — aggiungere prima di </body> -->
+<div id="modal-tracking" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">🚚 Tracking Spedizione</div>
+    <input type="hidden" id="tracking-ordine-id">
+    <div class="form-row">
+      <div class="form-group">
+        <label>Numero Spedizione</label>
+        <input type="text" id="ord-tracking-num" placeholder="es. 1234567890">
+      </div>
+      <div class="form-group">
+        <label>Corriere</label>
+        <select id="ord-tracking-corriere">
+          <option value="">Seleziona...</option>
+          <option value="gls">GLS</option>
+          <option value="brt">BRT / Bartolini</option>
+          <option value="sda">SDA</option>
+          <option value="poste">Poste Italiane</option>
+          <option value="dhl">DHL</option>
+          <option value="fedex">FedEx</option>
+          <option value="ups">UPS</option>
+          <option value="tnt">TNT</option>
+          <option value="nexive">Nexive</option>
+          <option value="altro">Altro</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAllModals()">Chiudi</button>
+      <button class="btn btn-outline" onclick="apriTracking(document.getElementById('tracking-ordine-id').value)">🔍 Controlla</button>
+      <button class="btn btn-accent" onclick="salvaTracking(document.getElementById('tracking-ordine-id').value)">Salva</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- 3. PULSANTI DA AGGIUNGERE NELLA TABELLA ORDINI (in loadOrdini) -->
+<!-- Sostituisci la colonna azioni ordini nel JS con questo: -->
+<!--
+<td>
+  <button class="btn btn-outline btn-sm" onclick="openTrackingModal(${o.id},'${o.numero_spedizione||''}','${o.corriere||''}')">🚚</button>
+  <label class="btn btn-outline btn-sm" style="cursor:pointer">📎<input type="file" multiple style="display:none" onchange="uploadAllegatiOrdine(${o.id},this.files)"></label>
+</td>
+-->
+
+
+<!-- 4. SCRIPT DA AGGIUNGERE prima di </body> -->
+<!--
+<script src="/js/patches.js"></script>
+-->

@@ -1,0 +1,176 @@
+<!-- SEZIONE MEPA DA AGGIUNGERE IN index.html dentro #main-content -->
+<!-- Aggiungi anche nella nav:
+<a class="nav-item" data-section="mepa"><span class="nav-icon">📊</span> Analisi MEPA</a>
+-->
+
+<section id="section-mepa" class="section">
+  <div class="page-header">
+    <h1>📊 Analisi MEPA & Trend CPV</h1>
+    <div class="header-actions">
+      <span id="mepa-last-sync" style="font-size:12px;color:var(--text-muted)">—</span>
+      <button class="btn btn-outline btn-sm" onclick="openModal('modal-import-anac')">↑ Import CSV ANAC</button>
+      <button class="btn btn-accent btn-sm" id="btn-sync-anac" onclick="syncAnac()">🔄 Sincronizza ANAC</button>
+    </div>
+  </div>
+
+  <!-- KPI MEPA -->
+  <div class="kpi-grid" id="mepa-kpi" style="grid-template-columns:repeat(5,1fr)">
+    <div class="kpi-card"><div class="kpi-val" id="mk-gare">—</div><div class="kpi-label">Gare totali</div></div>
+    <div class="kpi-card"><div class="kpi-val" id="mk-importo">—</div><div class="kpi-label">Valore totale</div></div>
+    <div class="kpi-card"><div class="kpi-val" id="mk-cpv">—</div><div class="kpi-label">CPV monitorati</div></div>
+    <div class="kpi-card"><div class="kpi-val" id="mk-trend">—</div><div class="kpi-label">Trend mercato</div></div>
+    <div class="kpi-card"><div class="kpi-val" id="mk-r2">—</div><div class="kpi-label">Affidabilità pred.</div></div>
+  </div>
+
+  <!-- NO DATA STATE -->
+  <div id="mepa-no-data" style="display:none">
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:48px;text-align:center">
+      <div style="font-size:56px;margin-bottom:16px">📦</div>
+      <h2 style="margin-bottom:12px">Nessun dato ANAC disponibile</h2>
+      <p style="color:var(--text-muted);margin-bottom:24px;max-width:500px;margin-left:auto;margin-right:auto">
+        Per popolare la dashboard scarica i dataset CSV da <strong>dati.anticorruzione.it</strong> 
+        e importali, oppure usa la sincronizzazione automatica.
+      </p>
+      <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+        <button class="btn btn-accent" onclick="syncAnac()">🔄 Sincronizza automaticamente</button>
+        <button class="btn btn-outline" onclick="openModal('modal-import-anac')">↑ Import CSV manuale</button>
+        <a href="https://dati.anticorruzione.it/opendata/dataset/bandecig" target="_blank" class="btn btn-outline">
+          📥 Scarica da ANAC →
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- DASHBOARD DATA -->
+  <div id="mepa-data" style="display:none">
+
+    <!-- RIGA 1: Trend + Predizione -->
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-bottom:16px">
+
+      <!-- Trend storico + predizione -->
+      <div class="dash-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <h3 style="margin:0">📈 Trend Gare MEPA — Volume mensile</h3>
+          <div style="display:flex;gap:6px">
+            <span style="display:flex;align-items:center;gap:4px;font-size:11px"><span style="width:12px;height:3px;background:#0057ff;display:inline-block;border-radius:2px"></span>Storico</span>
+            <span style="display:flex;align-items:center;gap:4px;font-size:11px"><span style="width:12px;height:3px;background:#f59e0b;display:inline-block;border-radius:2px;border:1px dashed #f59e0b"></span>Predizione</span>
+          </div>
+        </div>
+        <canvas id="chart-trend" height="200"></canvas>
+      </div>
+
+      <!-- Box predizione -->
+      <div class="dash-card">
+        <h3>🔮 Analisi Predittiva</h3>
+        <div id="pred-box">
+          <div style="text-align:center;color:var(--text-muted);padding:40px 0">
+            Caricamento...
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGA 2: Top CPV + Importi -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+
+      <!-- Top CPV per numero gare -->
+      <div class="dash-card">
+        <h3>🏆 Top CPV per Numero Gare</h3>
+        <canvas id="chart-top-cpv" height="280"></canvas>
+      </div>
+
+      <!-- Top CPV per importo -->
+      <div class="dash-card">
+        <h3>💰 Top CPV per Valore (€)</h3>
+        <canvas id="chart-importi" height="280"></canvas>
+      </div>
+    </div>
+
+    <!-- RIGA 3: Regioni + Stagionalità -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+
+      <!-- Distribuzione regionale -->
+      <div class="dash-card">
+        <h3>🗺️ Distribuzione Regionale</h3>
+        <canvas id="chart-regioni" height="260"></canvas>
+      </div>
+
+      <!-- Stagionalità mensile -->
+      <div class="dash-card">
+        <h3>📅 Stagionalità (media per mese)</h3>
+        <canvas id="chart-stagionalita" height="260"></canvas>
+      </div>
+    </div>
+
+    <!-- RIGA 4: Tabella dettaglio CPV -->
+    <div class="dash-card" style="margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <h3 style="margin:0">📋 Dettaglio CPV Monitorati</h3>
+        <input type="text" id="search-cpv" placeholder="Filtra CPV..." oninput="filterCpvTable(this.value)"
+          style="background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 12px;color:var(--text);font-size:13px;width:200px">
+      </div>
+      <div style="overflow-x:auto">
+        <table class="data-table" id="cpv-table">
+          <thead>
+            <tr>
+              <th>CPV</th>
+              <th>Descrizione</th>
+              <th style="text-align:right">N° Gare</th>
+              <th style="text-align:right">Valore Totale</th>
+              <th style="text-align:right">Valore Medio</th>
+              <th>Mesi dati</th>
+              <th>Trend</th>
+              <th>Match Prodotti</th>
+            </tr>
+          </thead>
+          <tbody id="cpv-table-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- RIGA 5: Alert e opportunità -->
+    <div class="dash-card">
+      <h3>🎯 Opportunità Rilevate</h3>
+      <div id="opportunita-list"></div>
+    </div>
+
+  </div>
+</section>
+
+<!-- MODAL IMPORT CSV ANAC -->
+<div id="modal-import-anac" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">📥 Import Dataset CSV ANAC</div>
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px">
+      Scarica i file CSV da <a href="https://dati.anticorruzione.it/opendata/dataset/bandecig" target="_blank" style="color:var(--accent)">dati.anticorruzione.it</a>
+      e importali qui. File supportati: BandiCIG mensili.
+    </p>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Anno</label>
+        <input type="number" id="anac-anno" value="2024" min="2018" max="2026">
+      </div>
+      <div class="form-group">
+        <label>Mese</label>
+        <select id="anac-mese">
+          <option value="1">Gennaio</option><option value="2">Febbraio</option>
+          <option value="3">Marzo</option><option value="4">Aprile</option>
+          <option value="5">Maggio</option><option value="6">Giugno</option>
+          <option value="7">Luglio</option><option value="8">Agosto</option>
+          <option value="9">Settembre</option><option value="10">Ottobre</option>
+          <option value="11">Novembre</option><option value="12">Dicembre</option>
+        </select>
+      </div>
+    </div>
+    <div class="upload-zone" onclick="document.getElementById('anac-csv-input').click()">
+      <div style="font-size:32px;margin-bottom:8px">📄</div>
+      <p>Clicca per selezionare file CSV ANAC</p>
+      <p style="font-size:11px;margin-top:4px;color:var(--text-muted)">bandecig_YYYYMM.csv</p>
+    </div>
+    <input type="file" id="anac-csv-input" accept=".csv,.zip" style="display:none" onchange="importAnacCSV(this)">
+    <div id="anac-import-result" style="display:none;margin-top:12px;padding:12px;border-radius:6px;background:var(--bg-input);font-size:13px"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeAllModals()">Chiudi</button>
+    </div>
+  </div>
+</div>

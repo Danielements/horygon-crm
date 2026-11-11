@@ -1,0 +1,140 @@
+<!-- ═══════════════════════════════════════════════════
+     SEZIONE ANALISI INCROCIATA — aggiungere in index.html
+     
+     1. Nella nav (dopo Stagionalità CIG):
+     <a class="nav-item" data-section="analytics"><span class="nav-icon">🔬</span> Analisi Incrociata</a>
+     
+     2. Nel main-content (dopo section-cig)
+     
+     3. Nel navigateTo map in app.js:
+     analytics: loadAnalytics,
+     
+     4. Prima di </body>:
+     <script src="/js/analytics.js"></script>
+     
+     5. In src/index.js:
+     app.use('/api/analytics', require('./routes/analytics'));
+════════════════════════════════════════════════════ -->
+
+    <section id="section-analytics" class="section">
+      <div class="page-header">
+        <h1>🔬 Analisi Incrociata MEPA × CIG</h1>
+        <span style="font-size:12px;color:var(--text-muted)">Acquistato (MEPA) vs Bandito (CIG) — Gap, Penetrazione, Stagionalità</span>
+      </div>
+
+      <!-- NO DATA -->
+      <div id="analytics-no-data" style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:48px;text-align:center">
+        <div style="font-size:56px;margin-bottom:16px">🔬</div>
+        <h2 style="margin-bottom:12px">Dati insufficienti per l'analisi incrociata</h2>
+        <p id="analytics-missing" style="color:var(--text-muted);margin-bottom:24px;max-width:500px;margin-left:auto;margin-right:auto"></p>
+      </div>
+
+      <!-- DATI -->
+      <div id="analytics-data" style="display:none">
+
+        <!-- KPI -->
+        <div class="kpi-grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:20px">
+          <div class="kpi-card">
+            <div class="kpi-val" id="an-mepa">—</div>
+            <div class="kpi-label">MEPA acquistato</div>
+            <div style="font-size:10px;color:#0057ff;margin-top:4px">Cosa è stato comprato</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" id="an-cig">—</div>
+            <div class="kpi-label">CIG bandito</div>
+            <div style="font-size:10px;color:#f59e0b;margin-top:4px">Mercato potenziale</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" id="an-penet">—</div>
+            <div class="kpi-label">Penetrazione</div>
+            <div style="font-size:10px;color:var(--text-muted);margin-top:4px">MEPA / CIG</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" id="an-gap">—</div>
+            <div class="kpi-label">Gap opportunità</div>
+            <div style="font-size:10px;color:#10b981;margin-top:4px">Mercato non coperto</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" id="an-crescita">—</div>
+            <div class="kpi-label">Crescita CIG</div>
+            <div style="font-size:10px;color:var(--text-muted);margin-top:4px">YoY bandi</div>
+          </div>
+        </div>
+
+        <!-- Confronto annuale + Penetrazione -->
+        <div style="display:grid;grid-template-columns:3fr 2fr;gap:16px;margin-bottom:16px">
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">
+              📊 MEPA acquistato vs CIG bandito — per anno
+            </h3>
+            <canvas id="an-bar" height="200"></canvas>
+          </div>
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">
+              📈 Penetrazione MEPA su mercato CIG (%)
+            </h3>
+            <canvas id="an-penet-line" height="200"></canvas>
+          </div>
+        </div>
+
+        <!-- GAP ANALYSIS -->
+        <div class="dash-card" style="margin-bottom:16px">
+          <h3 style="font-size:14px;font-weight:600;color:#f59e0b;margin-bottom:16px">
+            🎯 Gap Analysis — Prodotti banditi ma poco su MEPA
+          </h3>
+          <div id="an-gap-list"></div>
+        </div>
+
+        <!-- Stagionalità incrociata -->
+        <div class="dash-card" style="margin-bottom:16px">
+          <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">
+            📅 Stagionalità — Bandi CIG (🟡) vs Acquisti MEPA stimati (🔵)
+          </h3>
+          <canvas id="an-stagionale" height="200"></canvas>
+        </div>
+
+        <!-- Calendario vendita -->
+        <div class="dash-card" style="margin-bottom:16px">
+          <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">
+            🗓️ Calendario Vendita — Intensità mensile
+          </h3>
+          <div id="an-calendario"></div>
+        </div>
+
+        <!-- Bubble chart CPV -->
+        <div class="dash-card" style="margin-bottom:16px">
+          <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">
+            🫧 Posizionamento prodotti — CIG vs MEPA
+            <span style="font-size:11px;font-weight:400"> · 🟢 alta penetrazione · 🟡 media · 🔴 bassa</span>
+          </h3>
+          <canvas id="an-bubble" height="280"></canvas>
+        </div>
+
+        <!-- Regioni -->
+        <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-bottom:16px">
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">🗺️ Regioni — MEPA vs CIG</h3>
+            <canvas id="an-regioni" height="300"></canvas>
+          </div>
+          <div class="dash-card">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin-bottom:16px">📋 Penetrazione per Regione</h3>
+            <div style="overflow-y:auto;max-height:320px">
+              <table class="data-table">
+                <thead><tr><th>Regione</th><th style="text-align:right">MEPA</th><th style="text-align:right">CIG</th><th style="text-align:right">%</th></tr></thead>
+                <tbody id="an-regioni-table"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Dettaglio CPV con stagionalità mensile CIG -->
+        <div class="dash-card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-muted);margin:0">📦 Stagionalità mensile CIG per prodotto</h3>
+            <select id="an-cpv-sel" style="background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 12px;color:var(--text);font-size:12px"></select>
+          </div>
+          <canvas id="an-cpv-detail" height="180"></canvas>
+        </div>
+
+      </div>
+    </section>

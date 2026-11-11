@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.horygon.myapplication.app-mergeDebugResources-51:/values-ldltr-v21/values-ldltr-v21.xml",
+            "map": [
+                {
+                    "source": "C:\\Users\\lelef\\.gradle\\caches\\8.13\\transforms\\3ad69cc615b4e335d468743e40835563\\transformed\\appcompat-1.6.1\\res\\values-ldltr-v21\\values-ldltr-v21.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "112",
+                        "endOffsets": "163"
+                    }
+                }
+            ]
+        }
+    ]
+}
